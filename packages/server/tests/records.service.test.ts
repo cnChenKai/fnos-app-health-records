@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -27,12 +28,14 @@ import {
   listUserOperationAuditLogs,
   mergeDuplicateReport,
   restoreBackup as restoreFullBackup,
+  restoreUploadedBackup,
   restoreReport,
   trashReport,
   updateReminderStatus,
   updateAppNotificationStatus,
   updateReportFields,
-  updateReportPages
+  updateReportPages,
+  validateBackup
 } from "../services/records.service.ts";
 import { createUpload } from "../services/upload.service.ts";
 
@@ -582,6 +585,23 @@ test("creates, lists, downloads and restores a full app backup", () => {
     assert.equal(existsSync(backup.path), true);
     assert.match(backup.filename, /^fnos-app-health-records-backup-\d{8}-\d{6}-\d{3}\.tar\.gz$/);
     assert.equal(listBackups(manager).some((item) => item.id === backup.id && item.reportCount === 1), true);
+    const validation = validateBackup(manager, backup.id);
+    assert.equal(validation.valid, true);
+    assert.equal(validation.checksumAvailable, true);
+    assert.ok(validation.fileCount > 0);
+    assert.equal(validation.checkedCount, validation.fileCount);
+    const extractRoot = mkdtempSync(join(tmpdir(), "health-records-backup-manifest-"));
+    try {
+      execFileSync("tar", ["-xzf", backup.path, "-C", extractRoot], { stdio: "pipe" });
+      const manifest = JSON.parse(readFileSync(join(extractRoot, "manifest.json"), "utf8")) as { files: Array<{ path: string; sha256: string }> };
+      assert.ok(manifest.files.some((item) => item.path === "db/health-records.sqlite" && /^[a-f0-9]{64}$/.test(item.sha256)));
+      writeFileSync(join(extractRoot, "db", "health-records.sqlite"), "tampered backup");
+      const tamperedArchive = join(storageDir, "tampered-backup.tar.gz");
+      execFileSync("tar", ["-czf", tamperedArchive, "-C", extractRoot, "."], { stdio: "pipe" });
+      assert.throws(() => restoreUploadedBackup(manager, tamperedArchive), /备份校验失败/);
+    } finally {
+      rmSync(extractRoot, { recursive: true, force: true });
+    }
     const download = getBackupDownload(manager, backup.id);
     assert.equal(download.filename, backup.filename);
     assert.equal(existsSync(download.path), true);

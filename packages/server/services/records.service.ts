@@ -5,6 +5,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -15,8 +16,9 @@ import {
   writeFileSync
 } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { RequestUser } from "../domain/request-user";
 import type { CursorPage, DuplicateReportCandidate, DuplicateReportGroup, Observation, ReportDetail, ReportPage, ReportSummary } from "../domain/health-record";
 import { getAppConfig } from "../utils/runtime-config";
@@ -1846,6 +1848,64 @@ export type BackupSummary = {
   memberCount: number;
   includes: string[];
   reason: "manual" | "pre_restore";
+  fileCount?: number;
+};
+
+export type BackupManifestFile = {
+  path: string;
+  sizeBytes: number;
+  sha256: string;
+};
+
+type BackupManifest = {
+  formatVersion: number;
+  id?: string;
+  appName?: string;
+  appTitle?: string;
+  appVersion?: string;
+  schemaVersion?: number;
+  appliedSchemaVersion?: number;
+  createdAt?: string;
+  reason?: "manual" | "pre_restore";
+  storageLayout?: {
+    database?: string;
+    directories?: string[];
+  };
+  counts?: {
+    reportCount?: number;
+    memberCount?: number;
+  };
+  files?: BackupManifestFile[];
+  notes?: string;
+};
+
+export type BackupValidationResult = {
+  valid: boolean;
+  checksumAvailable: boolean;
+  fileCount: number;
+  checkedCount: number;
+  missingFiles: string[];
+  mismatchedFiles: Array<{
+    path: string;
+    expectedSha256?: string;
+    actualSha256?: string;
+    expectedSizeBytes?: number;
+    actualSizeBytes?: number;
+  }>;
+  extraFiles: string[];
+  warnings: string[];
+  errors: string[];
+  manifest: {
+    id: string | null;
+    appName: string | null;
+    appTitle: string | null;
+    appVersion: string | null;
+    schemaVersion: number | null;
+    createdAt: string | null;
+    reason: string | null;
+    reportCount: number | null;
+    memberCount: number | null;
+  } | null;
 };
 
 export type BackupDownload = BackupSummary & {
@@ -1942,6 +2002,52 @@ function copyDirectoryForBackup(stagingRoot: string, directoryName: typeof backu
   }
 }
 
+function normalizeArchiveRelativePath(path: string) {
+  return path.split(sep).join("/");
+}
+
+function assertSafeArchiveRelativePath(path: string) {
+  if (!path || path.startsWith("/") || path.includes("\0")) return false;
+  const normalized = normalizeArchiveRelativePath(path);
+  return !normalized.split("/").some((part) => part === "..");
+}
+
+function listFilesForChecksum(root: string) {
+  const results: string[] = [];
+  function walk(directory: string) {
+    for (const name of readdirSync(directory).sort()) {
+      const absolutePath = join(directory, name);
+      const stats = lstatSync(absolutePath);
+      if (stats.isSymbolicLink()) continue;
+      if (stats.isDirectory()) {
+        walk(absolutePath);
+        continue;
+      }
+      if (!stats.isFile()) continue;
+      const relativePath = normalizeArchiveRelativePath(relative(root, absolutePath));
+      if (relativePath === "manifest.json") continue;
+      results.push(relativePath);
+    }
+  }
+  walk(root);
+  return results.sort();
+}
+
+function sha256File(path: string) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function createBackupFileManifest(stagingRoot: string): BackupManifestFile[] {
+  return listFilesForChecksum(stagingRoot).map((path) => {
+    const absolutePath = join(stagingRoot, path);
+    return {
+      path,
+      sizeBytes: statSync(absolutePath).size,
+      sha256: sha256File(absolutePath)
+    };
+  });
+}
+
 function copyDatabaseSnapshot(snapshotPath: string) {
   const db = getDatabase();
   checkpointDatabase();
@@ -1989,7 +2095,8 @@ export function createFullBackup(user: RequestUser, reason: "manual" | "pre_rest
     copyDatabaseSnapshot(join(stagingRoot, "db", "health-records.sqlite"));
     for (const directoryName of backupIncludedDirectories) copyDirectoryForBackup(stagingRoot, directoryName);
 
-    const manifest = {
+    const manifestFiles = createBackupFileManifest(stagingRoot);
+    const manifest: BackupManifest = {
       formatVersion: backupFormatVersion,
       id,
       appName: config.appName,
@@ -2004,6 +2111,7 @@ export function createFullBackup(user: RequestUser, reason: "manual" | "pre_rest
         directories: [...backupIncludedDirectories]
       },
       counts,
+      files: manifestFiles,
       notes: "完整备份包含健康档案数据库、报告原件、分页/缩略图、运行配置和 AI 加密密钥，请仅在可信设备保存。"
     };
     writeFileSync(join(stagingRoot, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
@@ -2020,6 +2128,7 @@ export function createFullBackup(user: RequestUser, reason: "manual" | "pre_rest
       memberCount: counts.memberCount,
       includes: ["数据库", "报告原件", "分页/缩略图", "运行配置", "AI 密钥"],
       reason,
+      fileCount: manifestFiles.length,
       path: archivePath
     };
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), { mode: 0o600 });
@@ -2118,27 +2227,151 @@ export function deleteBackup(user: RequestUser, id: string) {
   return { id, deleted: true };
 }
 
-function ensureExtractedBackupIsValid(extractRoot: string) {
+function emptyBackupValidationResult(): BackupValidationResult {
+  return {
+    valid: false,
+    checksumAvailable: false,
+    fileCount: 0,
+    checkedCount: 0,
+    missingFiles: [],
+    mismatchedFiles: [],
+    extraFiles: [],
+    warnings: [],
+    errors: [],
+    manifest: null
+  };
+}
+
+function manifestSummary(manifest: BackupManifest): BackupValidationResult["manifest"] {
+  return {
+    id: manifest.id || null,
+    appName: manifest.appName || null,
+    appTitle: manifest.appTitle || null,
+    appVersion: manifest.appVersion || null,
+    schemaVersion: manifest.appliedSchemaVersion || manifest.schemaVersion || null,
+    createdAt: manifest.createdAt || null,
+    reason: manifest.reason || null,
+    reportCount: manifest.counts?.reportCount ?? null,
+    memberCount: manifest.counts?.memberCount ?? null
+  };
+}
+
+function readExtractedBackupManifest(extractRoot: string): { manifest?: BackupManifest; result: BackupValidationResult } {
   const manifestPath = join(extractRoot, "manifest.json");
-  const databasePath = join(extractRoot, "db", "health-records.sqlite");
+  const result = emptyBackupValidationResult();
   if (!existsSync(manifestPath)) {
-    throw createError({ statusCode: 400, statusMessage: "备份清单缺失，无法恢复" });
+    result.errors.push("备份清单缺失");
+    return { result };
   }
-  let manifest: { appName?: string; formatVersion?: number };
   try {
-    manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { appName?: string; formatVersion?: number };
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as BackupManifest;
+    result.manifest = manifestSummary(manifest);
+    return { manifest, result };
   } catch {
-    throw createError({ statusCode: 400, statusMessage: "备份清单损坏，无法恢复" });
+    result.errors.push("备份清单损坏");
+    return { result };
   }
+}
+
+function validateExtractedBackup(extractRoot: string): BackupValidationResult {
+  const { manifest, result } = readExtractedBackupManifest(extractRoot);
+  const databasePath = join(extractRoot, "db", "health-records.sqlite");
+  if (!manifest) return result;
   if (manifest.appName !== getAppConfig().appName) {
-    throw createError({ statusCode: 400, statusMessage: "备份不属于当前应用，无法恢复" });
+    result.errors.push("备份不属于当前应用");
   }
   if (manifest.formatVersion !== backupFormatVersion) {
-    throw createError({ statusCode: 400, statusMessage: "备份格式版本不兼容" });
+    result.errors.push("备份格式版本不兼容");
   }
   if (!existsSync(databasePath)) {
-    throw createError({ statusCode: 400, statusMessage: "备份数据库缺失，无法恢复" });
+    result.errors.push("备份数据库缺失");
   }
+  if (!Array.isArray(manifest.files)) {
+    result.warnings.push("旧备份没有文件校验清单，仅完成基础兼容性校验");
+    result.valid = result.errors.length === 0;
+    return result;
+  }
+
+  result.checksumAvailable = true;
+  result.fileCount = manifest.files.length;
+  const expectedPaths = new Set<string>();
+  for (const file of manifest.files) {
+    if (!file || !assertSafeArchiveRelativePath(file.path)) {
+      result.errors.push(`备份清单包含非法路径：${file?.path || "空路径"}`);
+      continue;
+    }
+    expectedPaths.add(file.path);
+    const target = join(extractRoot, file.path);
+    if (!existsSync(target)) {
+      result.missingFiles.push(file.path);
+      continue;
+    }
+    const stats = lstatSync(target);
+    if (!stats.isFile()) {
+      result.mismatchedFiles.push({
+        path: file.path,
+        expectedSha256: file.sha256,
+        expectedSizeBytes: file.sizeBytes
+      });
+      continue;
+    }
+    const actualSha256 = sha256File(target);
+    result.checkedCount += 1;
+    if (stats.size !== file.sizeBytes || actualSha256 !== file.sha256) {
+      result.mismatchedFiles.push({
+        path: file.path,
+        expectedSha256: file.sha256,
+        actualSha256,
+        expectedSizeBytes: file.sizeBytes,
+        actualSizeBytes: stats.size
+      });
+    }
+  }
+  for (const actualPath of listFilesForChecksum(extractRoot)) {
+    if (!expectedPaths.has(actualPath)) result.extraFiles.push(actualPath);
+  }
+  if (result.extraFiles.length) {
+    result.errors.push(`备份包包含 ${result.extraFiles.length} 个未登记文件`);
+  }
+  if (result.missingFiles.length) {
+    result.errors.push(`备份包缺失 ${result.missingFiles.length} 个文件`);
+  }
+  if (result.mismatchedFiles.length) {
+    result.errors.push(`备份包有 ${result.mismatchedFiles.length} 个文件校验不一致`);
+  }
+  result.valid = result.errors.length === 0;
+  return result;
+}
+
+function ensureBackupValidationPassed(result: BackupValidationResult) {
+  if (result.valid) return;
+  throw createError({
+    statusCode: 400,
+    statusMessage: result.errors[0] ? `备份校验失败：${result.errors[0]}` : "备份校验失败，无法恢复"
+  });
+}
+
+function validateBackupArchivePath(archivePath: string): BackupValidationResult {
+  if (!existsSync(archivePath)) {
+    return { ...emptyBackupValidationResult(), errors: ["备份不存在"] };
+  }
+  const extractRoot = mkdtempSync(join(tmpdir(), "health-records-backup-check-"));
+  try {
+    extractTarArchive(archivePath, extractRoot);
+    return validateExtractedBackup(extractRoot);
+  } catch (error) {
+    const result = emptyBackupValidationResult();
+    result.errors.push(error instanceof Error ? `备份包无法解压：${error.message}` : "备份包无法解压");
+    return result;
+  } finally {
+    rmSync(extractRoot, { recursive: true, force: true });
+  }
+}
+
+export function validateBackup(user: RequestUser, id: string): BackupValidationResult {
+  assertGatewayAdmin(user, "校验备份");
+  const archivePath = backupArchivePath(id);
+  return validateBackupArchivePath(archivePath);
 }
 
 function replaceStorageDirectory(directoryName: typeof backupIncludedDirectories[number], extractRoot: string) {
@@ -2176,34 +2409,50 @@ function insertRestoreAudit(actorUserId: string, backupId: string, safetyBackupI
   `).run(createId("audit"), actor?.id || null, backupId, JSON.stringify({ safetyBackupId }));
 }
 
-export function restoreBackup(user: RequestUser, id: string) {
+function restoreBackupFromArchive(user: RequestUser, archivePath: string, backupId: string) {
   assertGatewayAdmin(user, "恢复备份");
-  const archivePath = backupArchivePath(id);
   if (!existsSync(archivePath)) throw createError({ statusCode: 404, statusMessage: "备份不存在" });
   const runnerStatus = getJobRunnerStatus();
   if (runnerStatus.busy) {
     throw createError({ statusCode: 409, statusMessage: "后台识别任务正在执行，请稍后再恢复备份" });
   }
-  const shouldRestartRunner = runnerStatus.started;
-  stopJobRunner();
-  const safetyBackup = createFullBackup(user, "pre_restore");
   const extractRoot = mkdtempSync(join(tmpdir(), "health-records-restore-"));
+  let shouldRestartRunner = false;
 
   try {
     extractTarArchive(archivePath, extractRoot);
-    ensureExtractedBackupIsValid(extractRoot);
+    const validation = validateExtractedBackup(extractRoot);
+    ensureBackupValidationPassed(validation);
+    shouldRestartRunner = runnerStatus.started;
+    stopJobRunner();
+    const safetyBackup = createFullBackup(user, "pre_restore");
     closeDatabase();
     for (const directoryName of backupIncludedDirectories) replaceStorageDirectory(directoryName, extractRoot);
     replaceDatabaseFromBackup(extractRoot);
     getDatabase();
-    insertRestoreAudit(user.id, id, safetyBackup.id);
+    insertRestoreAudit(user.id, backupId, safetyBackup.id);
     return {
       restored: true,
-      backupId: id,
-      safetyBackupId: safetyBackup.id
+      backupId,
+      safetyBackupId: safetyBackup.id,
+      validation
     };
   } finally {
     rmSync(extractRoot, { recursive: true, force: true });
     if (shouldRestartRunner) startJobRunner();
   }
+}
+
+export function restoreBackup(user: RequestUser, id: string) {
+  const archivePath = backupArchivePath(id);
+  return restoreBackupFromArchive(user, archivePath, id);
+}
+
+export function restoreUploadedBackup(user: RequestUser, archivePath: string) {
+  const validation = validateBackupArchivePath(archivePath);
+  ensureBackupValidationPassed(validation);
+  const manifestId = validation.manifest?.id && /^backup_[a-f0-9]{32}$/.test(validation.manifest.id)
+    ? validation.manifest.id
+    : createId("backup");
+  return restoreBackupFromArchive(user, archivePath, manifestId);
 }

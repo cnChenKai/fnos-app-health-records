@@ -1127,6 +1127,11 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .form-message, .form-error { color: var(--danger); font-size: 13px; }
 .backup-list { display: grid; }
 .backup-list > .preview-hint { margin: 12px 16px 0; }
+.backup-header-actions {
+  margin-left: auto; display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
+}
+.settings-band > header .backup-header-actions .header-action { margin-left: 0; }
+.settings-band > header .backup-header-actions .muted-action { background: var(--fill-1); color: var(--ink); }
 .backup-empty {
   min-height: 58px; padding: 16px 20px; display: flex; align-items: center; gap: 8px;
   color: var(--muted); font-size: 13px;
@@ -1139,6 +1144,8 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .backup-main { min-width: 0; display: grid; gap: 4px; }
 .backup-main strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .backup-main span, .backup-main small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.backup-main .backup-check-line { color: var(--brand-strong); }
+.backup-main .backup-check-line.invalid { color: var(--danger); }
 .backup-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .backup-actions button {
   min-height: 32px; border: 0; border-radius: 999px; padding: 0 11px;
@@ -1495,6 +1502,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .settings-page > .appearance-band { margin-bottom: 12px; }
   .subpage-header { margin-bottom: 12px; gap: 10px; }
   .settings-band > header .header-action { flex: 0 0 auto; padding-inline: 12px; }
+  .backup-header-actions { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .settings-band > header .backup-header-actions .header-action { flex: 1 1 120px; justify-content: center; }
   .duplicate-scan-card > header button { margin-left: 30px; }
   .duplicate-scan-candidate { padding: 13px 14px; }
   .duplicate-scan-candidate .row-actions { display: grid !important; grid-template-columns: 1fr 1fr; }

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, Trash2 } from "@lucide/vue";
+import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Trash2, UploadCloud } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { apiUrl, request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
 import { useToast } from "../../composables/useToast";
 import { formatDatabaseTime } from "../../utils/time";
-import type { BackupSummary } from "../../types/api";
+import type { BackupSummary, BackupValidationResult } from "../../types/api";
 
 const app = useAppContext();
 const toast = useToast();
@@ -16,6 +16,10 @@ const loadingBackups = ref(false);
 const creatingBackup = ref(false);
 const restoringId = ref("");
 const deletingId = ref("");
+const checkingId = ref("");
+const uploadingRestore = ref(false);
+const backupFileInput = ref<HTMLInputElement | null>(null);
+const validationById = ref<Record<string, BackupValidationResult>>({});
 
 function formatBytes(value?: number | null) {
   const bytes = Number(value || 0);
@@ -62,6 +66,33 @@ function downloadBackup(backup: BackupSummary) {
   window.location.href = apiUrl(`backups/${encodeURIComponent(backup.id)}/download`);
 }
 
+function validationText(result: BackupValidationResult) {
+  if (result.valid && result.checksumAvailable) return `校验通过：${result.checkedCount}/${result.fileCount} 个文件`;
+  if (result.valid) return result.warnings[0] || "基础校验通过：旧备份无校验清单";
+  const details = [
+    result.errors[0],
+    result.missingFiles.length ? `缺失 ${result.missingFiles.length}` : "",
+    result.mismatchedFiles.length ? `不一致 ${result.mismatchedFiles.length}` : "",
+    result.extraFiles.length ? `未登记 ${result.extraFiles.length}` : ""
+  ].filter(Boolean);
+  return details.length ? details.join(" · ") : "校验失败";
+}
+
+async function checkBackup(backup: BackupSummary) {
+  checkingId.value = backup.id;
+  message.value = "";
+  try {
+    const result = await request<BackupValidationResult>(`backups/${encodeURIComponent(backup.id)}/check`);
+    validationById.value = { ...validationById.value, [backup.id]: result };
+    message.value = `${backup.filename}：${validationText(result)}`;
+    toast.show(result.valid ? "备份校验完成" : "备份校验失败");
+  } catch (cause) {
+    message.value = cause instanceof Error ? cause.message : "备份校验失败";
+  } finally {
+    checkingId.value = "";
+  }
+}
+
 async function restoreBackup(backup: BackupSummary) {
   const confirmed = window.confirm(
     `确定从备份“${backup.filename}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、缩略图、配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`
@@ -74,13 +105,45 @@ async function restoreBackup(backup: BackupSummary) {
       `backups/${encodeURIComponent(backup.id)}/restore`,
       { method: "POST" }
     );
-    message.value = `恢复完成，恢复前安全备份：${result.safetyBackupId}`;
+    message.value = `恢复完成，恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
     toast.show("备份已恢复");
     await Promise.all([loadBackups(), app.load()]);
   } catch (cause) {
     message.value = cause instanceof Error ? cause.message : "备份恢复失败";
   } finally {
     restoringId.value = "";
+  }
+}
+
+function chooseExternalBackup() {
+  backupFileInput.value?.click();
+}
+
+async function restoreUploadedBackup(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const confirmed = window.confirm(
+    `确定从外部备份“${file.name}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、分页图、运行配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`
+  );
+  if (!confirmed) return;
+  uploadingRestore.value = true;
+  message.value = "";
+  try {
+    const body = new FormData();
+    body.append("backup", file);
+    const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string; filename: string }>(
+      "backups/restore-upload",
+      { method: "POST", body }
+    );
+    message.value = `外部备份已恢复：${result.filename}。恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
+    toast.show("外部备份已恢复");
+    await Promise.all([loadBackups(), app.load()]);
+  } catch (cause) {
+    message.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
+  } finally {
+    uploadingRestore.value = false;
   }
 }
 
@@ -127,17 +190,29 @@ onMounted(() => {
       <header>
         <DatabaseBackup :size="20" />
         <div><h3>完整应用备份</h3><p>包含 SQLite 快照、报告原件、分页图、运行配置和 AI 密钥；仅系统管理员可操作。</p></div>
-        <button
-          v-if="app.session.value?.isGatewayAdmin"
-          class="header-action"
-          type="button"
-          :disabled="creatingBackup"
-          @click="createBackupNow"
-        >
-          <LoaderCircle v-if="creatingBackup" class="spin-icon" :size="16" />
-          <DatabaseBackup v-else :size="16" />
-          {{ creatingBackup ? "备份中" : "创建备份" }}
-        </button>
+        <div v-if="app.session.value?.isGatewayAdmin" class="backup-header-actions">
+          <input ref="backupFileInput" type="file" accept=".tar.gz,application/gzip" hidden @change="restoreUploadedBackup" />
+          <button
+            class="header-action"
+            type="button"
+            :disabled="creatingBackup || uploadingRestore"
+            @click="createBackupNow"
+          >
+            <LoaderCircle v-if="creatingBackup" class="spin-icon" :size="16" />
+            <DatabaseBackup v-else :size="16" />
+            {{ creatingBackup ? "备份中" : "创建备份" }}
+          </button>
+          <button
+            class="header-action muted-action"
+            type="button"
+            :disabled="creatingBackup || uploadingRestore || Boolean(restoringId)"
+            @click="chooseExternalBackup"
+          >
+            <LoaderCircle v-if="uploadingRestore" class="spin-icon" :size="16" />
+            <UploadCloud v-else :size="16" />
+            {{ uploadingRestore ? "恢复中" : "上传恢复" }}
+          </button>
+        </div>
       </header>
 
       <div v-if="!app.session.value?.isGatewayAdmin" class="settings-form">
@@ -152,9 +227,24 @@ onMounted(() => {
             <strong>{{ backup.filename }}</strong>
             <span>{{ formatDatabaseTime(backup.createdAt) }} · {{ formatBytes(backup.sizeBytes) }} · v{{ backup.appVersion }} · DB v{{ backup.schemaVersion }}</span>
             <small>{{ backup.memberCount }} 位成员 · {{ backup.reportCount }} 份报告 · {{ backup.includes.join("、") }}</small>
+            <small
+              v-if="validationById[backup.id]"
+              :class="['backup-check-line', { invalid: !validationById[backup.id].valid }]"
+            >
+              {{ validationText(validationById[backup.id]) }}
+            </small>
           </div>
           <div class="backup-actions">
             <span v-if="backup.reason === 'pre_restore'" class="backup-tag">恢复前安全备份</span>
+            <button
+              type="button"
+              :disabled="Boolean(restoringId || deletingId || checkingId)"
+              @click="checkBackup(backup)"
+            >
+              <LoaderCircle v-if="checkingId === backup.id" class="spin-icon" :size="15" />
+              <ShieldCheck v-else :size="15" />
+              {{ checkingId === backup.id ? "校验中" : "校验" }}
+            </button>
             <button type="button" @click="downloadBackup(backup)"><Download :size="15" />下载</button>
             <button
               class="danger-text-button"

@@ -29,6 +29,36 @@ export type BackupSummary = {
   memberCount: number;
   includes: string[];
   reason: "manual" | "pre_restore";
+  fileCount?: number;
+};
+
+export type BackupValidationResult = {
+  valid: boolean;
+  checksumAvailable: boolean;
+  fileCount: number;
+  checkedCount: number;
+  missingFiles: string[];
+  mismatchedFiles: Array<{
+    path: string;
+    expectedSha256?: string;
+    actualSha256?: string;
+    expectedSizeBytes?: number;
+    actualSizeBytes?: number;
+  }>;
+  extraFiles: string[];
+  warnings: string[];
+  errors: string[];
+  manifest: {
+    id: string | null;
+    appName: string | null;
+    appTitle: string | null;
+    appVersion: string | null;
+    schemaVersion: number | null;
+    createdAt: string | null;
+    reason: string | null;
+    reportCount: number | null;
+    memberCount: number | null;
+  } | null;
 };
 
 export type AccessUser = {
