@@ -1,0 +1,87 @@
+import type { H3Event } from "h3";
+import { getDatabase } from "../database/client";
+import type { RequestUser } from "../domain/request-user";
+import { createId } from "./identifier";
+
+function requestAccessMode(event: H3Event) {
+  const request = event.node!.req!;
+  return (request as typeof request & { healthAccessMode?: string }).healthAccessMode;
+}
+
+function ensureUser(user: RequestUser) {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT INTO users (id, display_name, is_gateway_admin)
+    VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      is_gateway_admin = excluded.is_gateway_admin,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(user.id, user.displayName, user.isGatewayAdmin ? 1 : 0);
+  db.prepare(`
+    INSERT INTO user_identities (id, user_id, provider, subject)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(provider, subject) DO UPDATE SET user_id = excluded.user_id
+  `).run(createId("identity"), user.id, user.provider, user.id);
+
+  const existing = db.prepare(`
+    SELECT 1 FROM health_members hm
+    JOIN member_permissions mp ON mp.member_id = hm.id
+    WHERE mp.user_id = ? AND hm.relationship = 'self' AND hm.deleted_at IS NULL
+  `).get(user.id);
+  if (!existing) {
+    const memberId = createId("member");
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES (?, ?, 'self', ?)
+    `).run(memberId, user.displayName, user.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES (?, ?, 'manager', ?)
+    `).run(memberId, user.id, user.id);
+  }
+}
+
+function gatewayUser(event: H3Event): RequestUser | null {
+  if (requestAccessMode(event) !== "gateway") return null;
+  const request = event.node!.req!;
+  const uid = request.headers["x-trim-userid"];
+  if (typeof uid !== "string" || !uid.trim()) return null;
+  const username = request.headers["x-trim-username"];
+  const isAdmin = String(request.headers["x-trim-isadmin"] || "").toLowerCase() === "true";
+  return {
+    id: uid.trim(),
+    displayName: typeof username === "string" && username.trim() ? username.trim() : uid.trim(),
+    provider: "fnos_gateway",
+    authenticated: true,
+    isGatewayAdmin: isAdmin
+  };
+}
+
+export function getRequestUser(event: H3Event): RequestUser {
+  const resolved = gatewayUser(event);
+  if (resolved) {
+    ensureUser(resolved);
+    return resolved;
+  }
+
+  if (process.env.NODE_ENV === "development" || Boolean(process.env.VITE_DEV_SERVER_URL)) {
+    const developmentUser: RequestUser = {
+      id: "local-development-owner",
+      displayName: "开发管理员",
+      provider: "development",
+      authenticated: true,
+      isGatewayAdmin: true
+    };
+    ensureUser(developmentUser);
+    return developmentUser;
+  }
+
+  return {
+    id: "anonymous",
+    displayName: "未登录",
+    provider: "fnos_gateway",
+    authenticated: false,
+    isGatewayAdmin: false
+  };
+}

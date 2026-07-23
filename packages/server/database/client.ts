@@ -1,0 +1,292 @@
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { getAppConfig } from "../utils/runtime-config";
+import { databaseMigrations, tableColumnNames } from "./migrations";
+import { schemaSql, schemaVersion } from "./schema";
+
+let database: DatabaseSync | null = null;
+
+const countedTables = [
+  "users",
+  "health_members",
+  "reports",
+  "report_pages",
+  "observations",
+  "processing_jobs",
+  "processing_job_events",
+  "ocr_results",
+  "report_extractions",
+  "reminders",
+  "app_notifications",
+  "app_upgrade_history",
+  "audit_logs"
+] as const;
+
+function ensureStorageDirectories(storageDir: string) {
+  for (const directory of ["db", "reports", "thumbnails", "backups", "logs", "models", "secrets", "config"]) {
+    mkdirSync(join(storageDir, directory), { recursive: true });
+  }
+}
+
+function tableExists(db: DatabaseSync, tableName: string) {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName) as
+    | { name: string }
+    | undefined;
+  return Boolean(row);
+}
+
+function isFreshDatabase(db: DatabaseSync) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM sqlite_master
+    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+  `).get() as { count: number };
+  return row.count === 0;
+}
+
+function ensureMigrationMetadataColumns(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "schema_migrations");
+  if (!columns.has("name")) db.exec("ALTER TABLE schema_migrations ADD COLUMN name TEXT NOT NULL DEFAULT ''");
+  if (!columns.has("checksum")) db.exec("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT ''");
+  if (!columns.has("elapsed_ms")) db.exec("ALTER TABLE schema_migrations ADD COLUMN elapsed_ms INTEGER NOT NULL DEFAULT 0");
+}
+
+function appliedSchemaVersion(db: DatabaseSync) {
+  const current = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
+    | { version: number | null }
+    | undefined;
+  return current?.version ?? 0;
+}
+
+function recordMigration(db: DatabaseSync, version: number, elapsedMs: number) {
+  const migration = databaseMigrations.find((item) => item.version === version);
+  if (!migration) throw new Error(`Missing database migration metadata for schema v${version}.`);
+  db.prepare(`
+    INSERT INTO schema_migrations (version, name, checksum, elapsed_ms)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(version) DO UPDATE SET
+      name = excluded.name,
+      checksum = excluded.checksum
+  `).run(migration.version, migration.name, migration.checksum, elapsedMs);
+}
+
+function backfillAppliedMigrationRows(db: DatabaseSync, currentVersion: number) {
+  for (const migration of databaseMigrations.filter((item) => item.version <= currentVersion)) {
+    recordMigration(db, migration.version, 0);
+  }
+}
+
+function sqlString(value: string) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function backupDatabaseBeforeMigration(db: DatabaseSync, storageDir: string, databasePath: string, fromVersion: number, toVersion: number) {
+  if (!existsSync(databasePath)) return null;
+  const backupDir = join(storageDir, "backups", "db");
+  mkdirSync(backupDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+  const backupPath = join(backupDir, `pre-migration-v${fromVersion}-to-v${toVersion}-${stamp}.sqlite`);
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  try {
+    db.exec(`VACUUM INTO ${sqlString(backupPath)}`);
+  } catch {
+    copyFileSync(databasePath, backupPath);
+  }
+  return backupPath;
+}
+
+function readJsonSetting<T>(db: DatabaseSync, key: string): T | null {
+  if (!tableExists(db, "app_settings")) return null;
+  const row = db.prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?").get(key) as
+    | { valueJson: string }
+    | undefined;
+  if (!row) return null;
+  try {
+    return JSON.parse(row.valueJson) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeJsonSetting(db: DatabaseSync, key: string, value: unknown) {
+  db.prepare(`
+    INSERT INTO app_settings (setting_key, value_json, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(setting_key) DO UPDATE SET
+      value_json = excluded.value_json,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(key, JSON.stringify(value));
+}
+
+function beginUpgradeHistory(db: DatabaseSync, fromAppVersion: string | null, toAppVersion: string, fromSchemaVersion: number) {
+  const id = randomUUID();
+  db.prepare(`
+    INSERT INTO app_upgrade_history (
+      id, from_app_version, to_app_version, from_schema_version, to_schema_version, status
+    ) VALUES (?, ?, ?, ?, ?, 'started')
+  `).run(id, fromAppVersion, toAppVersion, fromSchemaVersion, schemaVersion);
+  return id;
+}
+
+function completeUpgradeHistory(db: DatabaseSync, id: string) {
+  db.prepare(`
+    UPDATE app_upgrade_history
+    SET status = 'completed', finished_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(id);
+}
+
+function failUpgradeHistory(db: DatabaseSync, id: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  db.prepare(`
+    UPDATE app_upgrade_history
+    SET status = 'failed', message = ?, finished_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(message.slice(0, 1000), id);
+}
+
+function runInTransaction(db: DatabaseSync, action: () => void) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    action();
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // The original migration error is more useful to the caller.
+    }
+    throw error;
+  }
+}
+
+function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
+  const { appVersion } = getAppConfig();
+  if (isFreshDatabase(db)) {
+    db.exec(schemaSql);
+    ensureMigrationMetadataColumns(db);
+    const upgradeId = beginUpgradeHistory(db, null, appVersion, 0);
+    for (const migration of databaseMigrations) recordMigration(db, migration.version, 0);
+    writeJsonSetting(db, "system.last_app_version", appVersion);
+    completeUpgradeHistory(db, upgradeId);
+    return;
+  }
+
+  const hasMigrationTable = tableExists(db, "schema_migrations");
+  let currentVersion = hasMigrationTable ? appliedSchemaVersion(db) : 0;
+  if (currentVersion === 0 && tableExists(db, "reports")) {
+    currentVersion = 1;
+  }
+  if (currentVersion > schemaVersion) {
+    throw new Error(`Database schema v${currentVersion} is newer than this app supports (v${schemaVersion}).`);
+  }
+
+  const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
+  if (pendingMigrations.length) {
+    backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
+  }
+
+  if (!hasMigrationTable) {
+    db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+  }
+  ensureMigrationMetadataColumns(db);
+  backfillAppliedMigrationRows(db, currentVersion);
+
+  const lastAppVersion = readJsonSetting<string>(db, "system.last_app_version");
+  const needsUpgradeRecord = pendingMigrations.length > 0 || lastAppVersion !== appVersion;
+  let upgradeId = needsUpgradeRecord && tableExists(db, "app_upgrade_history")
+    ? beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion)
+    : null;
+
+  try {
+    for (const migration of pendingMigrations) {
+      const started = Date.now();
+      runInTransaction(db, () => {
+        migration.up(db);
+        recordMigration(db, migration.version, Date.now() - started);
+      });
+    }
+    db.exec(schemaSql);
+    ensureMigrationMetadataColumns(db);
+    if (needsUpgradeRecord && !upgradeId && tableExists(db, "app_upgrade_history")) {
+      upgradeId = beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion);
+    }
+    writeJsonSetting(db, "system.last_app_version", appVersion);
+    if (upgradeId) completeUpgradeHistory(db, upgradeId);
+  } catch (error) {
+    if (upgradeId) failUpgradeHistory(db, upgradeId, error);
+    throw error;
+  }
+}
+
+export function getDatabase() {
+  if (database) return database;
+  const { storageDir } = getAppConfig();
+  ensureStorageDirectories(storageDir);
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(dirname(databasePath), { recursive: true });
+  database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA foreign_keys = ON");
+  database.exec("PRAGMA journal_mode = WAL");
+  database.exec("PRAGMA busy_timeout = 5000");
+  migrate(database, storageDir, databasePath);
+  return database;
+}
+
+export function getDatabasePath() {
+  return join(getAppConfig().storageDir, "db", "health-records.sqlite");
+}
+
+export function checkpointDatabase() {
+  getDatabase().exec("PRAGMA wal_checkpoint(TRUNCATE)");
+}
+
+export function getDatabaseStatus() {
+  const databasePath = getDatabasePath();
+  const db = getDatabase();
+  const integrity = db.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+  const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
+  const pageSize = db.prepare("PRAGMA page_size").get() as { page_size: number };
+  const pageCount = db.prepare("PRAGMA page_count").get() as { page_count: number };
+  const freelistCount = db.prepare("PRAGMA freelist_count").get() as { freelist_count: number };
+  const migration = db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as
+    | { version: number | null }
+    | undefined;
+  const rowCounts = Object.fromEntries(countedTables.map((table) => {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number };
+    return [table, row.count];
+  }));
+  const databaseSizeBytes = existsSync(databasePath) ? statSync(databasePath).size : 0;
+  const walPath = `${databasePath}-wal`;
+  const shmPath = `${databasePath}-shm`;
+  const walSizeBytes = existsSync(walPath) ? statSync(walPath).size : 0;
+  const shmSizeBytes = existsSync(shmPath) ? statSync(shmPath).size : 0;
+  return {
+    driver: "node:sqlite",
+    path: databasePath,
+    integrity: integrity.integrity_check,
+    schemaVersion,
+    appliedSchemaVersion: migration?.version ?? 0,
+    journalMode: journal.journal_mode,
+    pageSize: pageSize.page_size,
+    pageCount: pageCount.page_count,
+    freelistCount: freelistCount.freelist_count,
+    usedPageCount: Math.max(0, pageCount.page_count - freelistCount.freelist_count),
+    databaseSizeBytes,
+    walSizeBytes,
+    shmSizeBytes,
+    totalSizeBytes: databaseSizeBytes + walSizeBytes + shmSizeBytes,
+    rowCounts
+  };
+}
+
+export function closeDatabase() {
+  database?.close();
+  database = null;
+}
+
+export function closeDatabaseForTests() {
+  closeDatabase();
+}

@@ -1,0 +1,321 @@
+import { latestSchemaVersion } from "./migrations";
+
+export const schemaVersion = latestSchemaVersion;
+
+export const schemaSql = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  checksum TEXT NOT NULL DEFAULT '',
+  elapsed_ms INTEGER NOT NULL DEFAULT 0,
+  applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  is_gateway_admin INTEGER NOT NULL DEFAULT 0 CHECK (is_gateway_admin IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_identities (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL CHECK (provider IN ('fnos_gateway', 'local', 'development')),
+  subject TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(provider, subject)
+);
+
+CREATE TABLE IF NOT EXISTS health_members (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  relationship TEXT NOT NULL DEFAULT 'self',
+  birth_date TEXT,
+  sex TEXT CHECK (sex IS NULL OR sex IN ('male', 'female', 'unknown')),
+  avatar_path TEXT,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS member_permissions (
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  permission TEXT NOT NULL CHECK (permission IN ('viewer', 'manager')),
+  granted_by TEXT NOT NULL REFERENCES users(id),
+  granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(member_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS medical_organizations (
+  id TEXT PRIMARY KEY,
+  canonical_name TEXT NOT NULL,
+  branch_name TEXT,
+  city TEXT,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES health_members(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  report_type TEXT NOT NULL,
+  report_subtype TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'uploading' CHECK (
+    status IN ('uploading', 'queued', 'processing', 'needs_review', 'ready', 'failed', 'trashed')
+  ),
+  hospital_name_raw TEXT,
+  organization_id TEXT REFERENCES medical_organizations(id),
+  hospital_branch TEXT,
+  city TEXT,
+  visit_type TEXT,
+  visit_department TEXT,
+  ordering_department TEXT,
+  performing_department TEXT,
+  reporting_department TEXT,
+  inpatient_ward TEXT,
+  body_parts_json TEXT NOT NULL DEFAULT '[]',
+  identifiers_json TEXT NOT NULL DEFAULT '{}',
+  report_issued_at TEXT,
+  examined_at TEXT,
+  ordered_at TEXT,
+  sampled_at TEXT,
+  received_at TEXT,
+  reviewed_at TEXT,
+  admitted_at TEXT,
+  discharged_at TEXT,
+  clinicians_json TEXT NOT NULL DEFAULT '{}',
+  clinical_diagnosis TEXT,
+  purpose TEXT,
+  chief_complaint TEXT,
+  findings TEXT,
+  impression TEXT,
+  summary TEXT,
+  recommendation TEXT,
+  source_version INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  deleted_at TEXT,
+  purge_after TEXT
+);
+
+CREATE INDEX IF NOT EXISTS reports_timeline_idx
+  ON reports(member_id, report_issued_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS report_pages (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  page_number INTEGER NOT NULL,
+  original_name TEXT NOT NULL,
+  storage_path TEXT NOT NULL,
+  thumbnail_path TEXT,
+  mime_type TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  rotation INTEGER NOT NULL DEFAULT 0,
+  source_page_number INTEGER,
+  source_page_count INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(report_id, page_number)
+);
+
+CREATE TABLE IF NOT EXISTS observations (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_name TEXT,
+  item_code TEXT,
+  item_name TEXT NOT NULL,
+  normalized_name TEXT,
+  result_text TEXT NOT NULL,
+  numeric_value REAL,
+  unit TEXT,
+  reference_low REAL,
+  reference_high REAL,
+  reference_text TEXT,
+  abnormal_flag TEXT CHECK (
+    abnormal_flag IS NULL OR abnormal_flag IN ('high', 'low', 'abnormal', 'normal')
+  ),
+  method TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS observations_trend_idx
+  ON observations(normalized_name, unit, report_id);
+
+CREATE TABLE IF NOT EXISTS processing_jobs (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  page_id TEXT REFERENCES report_pages(id) ON DELETE CASCADE,
+  job_type TEXT NOT NULL CHECK (job_type IN ('pdf_extract', 'thumbnail', 'ocr', 'ai_extract')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (
+    status IN ('queued', 'processing', 'completed', 'failed', 'cancelled')
+  ),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  pipeline_version TEXT NOT NULL,
+  deduplication_key TEXT NOT NULL UNIQUE,
+  locked_at TEXT,
+  lease_expires_at TEXT,
+  next_retry_at TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  finished_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS processing_job_events (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL CHECK (
+    event_type IN ('queued', 'started', 'completed', 'retry_scheduled', 'failed', 'manual_retry', 'cancelled')
+  ),
+  status TEXT NOT NULL,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  message TEXT,
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS processing_job_events_job_idx
+  ON processing_job_events(job_id, created_at, id);
+CREATE INDEX IF NOT EXISTS processing_job_events_report_idx
+  ON processing_job_events(report_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ocr_results (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  page_id TEXT NOT NULL REFERENCES report_pages(id) ON DELETE CASCADE,
+  engine TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  lines_json TEXT NOT NULL,
+  elapsed_ms INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS report_extractions (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL UNIQUE REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  fields_json TEXT NOT NULL,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  confidence_json TEXT NOT NULL DEFAULT '{}',
+  raw_response_json TEXT NOT NULL,
+  input_characters INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  elapsed_ms INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_extractions_report_idx
+  ON report_extractions(report_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reminders (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+  title TEXT NOT NULL,
+  due_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'dismissed')),
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual', 'report_suggestion')),
+  confirmed_at TEXT,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_notifications (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+  type TEXT NOT NULL CHECK (type IN ('report_processed', 'report_failed')),
+  title TEXT NOT NULL,
+  message TEXT,
+  severity TEXT NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'success', 'warning', 'error')),
+  status TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'read', 'archived')),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  read_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS app_notifications_member_idx
+  ON app_notifications(member_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS app_notifications_report_idx
+  ON app_notifications(report_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_upgrade_history (
+  id TEXT PRIMARY KEY,
+  from_app_version TEXT,
+  to_app_version TEXT NOT NULL,
+  from_schema_version INTEGER NOT NULL,
+  to_schema_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+  message TEXT,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS app_upgrade_history_started_idx
+  ON app_upgrade_history(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS local_accounts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  disabled_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  ip_address TEXT NOT NULL,
+  succeeded INTEGER NOT NULL DEFAULT 0 CHECK (succeeded IN (0, 1)),
+  attempted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS login_attempts_limit_idx
+  ON login_attempts(username, ip_address, attempted_at DESC);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  ip_address TEXT,
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`;

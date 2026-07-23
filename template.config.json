@@ -1,0 +1,30 @@
+{
+  "appName": "fnos-app-health-records",
+  "appTitle": "健康档案",
+  "displayName": "健康档案",
+  "appDescription": "健康档案用于集中管理家庭成员的体检、门诊检查、住院单据及其他个人健康报告。支持拍照、多图和 PDF 上传，保留报告原件与单页高清图，通过本地 OCR 和可配置 AI 整理医院、日期、科室、部位、结论、指标和复查建议，并按报告生成日期形成时间轴、趋势与提醒。开源仓库：https://github.com/timor-m/fnos-app-health-records",
+  "desktopLaunchName": "fnos-app-health-records.main",
+  "gatewayPrefix": "/app/fnos-app-health-records",
+  "gatewaySocket": "app.sock",
+  "uiAllUsers": true,
+  "localDevPort": 3334,
+  "runtimeDependency": "nodejs_v22",
+  "osMinVersion": "1.1.3100",
+  "maintainer": "timor-m",
+  "maintainerUrl": "https://github.com/timor-m/fnos-app-health-records.git",
+  "distributor": "timor-m",
+  "distributorUrl": "https://github.com/timor-m/fnos-app-health-records.git",
+  "source": "thirdparty",
+  "platform": "all",
+  "runAs": "package",
+  "logLevel": "info",
+  "releaseNotes": {
+    "summary": "健康档案核心功能闭环、AI 识别、提醒、审计和备份恢复能力更新。",
+    "highlights": [
+      "拍照、多图和 PDF 上传，支持 OCR、AI 整理和报告校对",
+      "按报告日期展示档案时间轴，支持趋势、提醒、重复检测和回收站",
+      "完整应用备份创建、下载、恢复、恢复前安全备份和备份删除",
+      "运行状态、用户操作日志、AI 审计和 fnOS 系统管理员权限"
+    ]
+  }
+}

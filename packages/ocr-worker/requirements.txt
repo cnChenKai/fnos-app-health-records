@@ -1,0 +1,5 @@
+rapidocr-openvino==1.4.4
+openvino>=2022.2,<=2024.0
+PyMuPDF>=1.24,<2
+Pillow>=10,<12
+pillow-heif>=0.16,<1

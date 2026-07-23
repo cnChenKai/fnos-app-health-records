@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate, test and package release
+        run: npm run release:ci
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          INFO="$(node scripts/release-info.mjs --json)"
+          VERSION="$(node -e 'const info = JSON.parse(process.argv[1]); console.log(info.version)' "$INFO")"
+          APP_TITLE="$(node -e 'const info = JSON.parse(process.argv[1]); console.log(info.appTitle)' "$INFO")"
+          APP_NAME="$(node -e 'const info = JSON.parse(process.argv[1]); console.log(info.appName)' "$INFO")"
+          SCHEMA_VERSION="$(node -e 'const info = JSON.parse(process.argv[1]); console.log(info.schemaVersion)' "$INFO")"
+          SUMMARY="$(node -e 'const info = JSON.parse(process.argv[1]); console.log(info.releaseSummary)' "$INFO")"
+          {
+            echo "# ${APP_TITLE} v${VERSION}"
+            echo
+            echo "## Summary"
+            echo
+            echo "- ${SUMMARY}"
+            echo "- App ID: \`${APP_NAME}\`"
+            echo "- Target database schema: \`v${SCHEMA_VERSION}\`"
+            echo
+            echo "## Release Artifacts"
+            echo
+            echo "- \`dist/app.tgz\`: fnOS app payload archive"
+            echo "- \`dist/*.fpk\`: installable fnOS package"
+            echo
+            echo "## Highlights"
+            echo
+            node -e 'const info = JSON.parse(process.argv[1]); for (const item of info.releaseHighlights) console.log(`- ${item}`)' "$INFO"
+            echo
+            echo "## Database Upgrade"
+            echo
+            echo "- Database migrations are executed on first server start after install or upgrade."
+            echo "- SQLite is backed up automatically before pending schema migrations."
+            echo "- Cross-version upgrades are based on \`schema_migrations\`, not intermediate app versions."
+            echo
+            echo "## Notes"
+            echo
+            echo "- Generated from GitHub Actions"
+            echo "- Version source: \`package.json\`"
+            echo "- Template config source: \`template.config.json\`"
+            echo "- Migration registry: \`packages/server/database/migrations.ts\`"
+          } > RELEASE_NOTES.md
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          name: 健康档案 ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/app.tgz
+            dist/*.fpk

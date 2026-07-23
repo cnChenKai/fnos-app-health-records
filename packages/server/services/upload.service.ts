@@ -1,0 +1,207 @@
+import { createHash } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createError } from "h3";
+import { getDatabase } from "../database/client";
+import type { RequestUser } from "../domain/request-user";
+import { createId } from "../utils/identifier";
+import { getAppConfig } from "../utils/runtime-config";
+import { assertMemberAccess, assertMemberManage } from "./member.service";
+
+const maxFileCount = 24;
+const maxFileBytes = 40 * 1024 * 1024;
+const maxTotalBytes = 200 * 1024 * 1024;
+const pipelineVersion = "upload-v1";
+
+export type UploadInputFile = {
+  originalName: string;
+  declaredType?: string;
+  data: Uint8Array;
+  rotation?: number;
+};
+
+type DetectedType = { mimeType: string; extension: string; kind: "image" | "pdf" };
+
+function startsWith(data: Uint8Array, bytes: number[]) {
+  return bytes.every((byte, index) => data[index] === byte);
+}
+
+function ascii(data: Uint8Array, start: number, length: number) {
+  return Buffer.from(data.subarray(start, start + length)).toString("ascii");
+}
+
+export function detectUploadType(data: Uint8Array): DetectedType | null {
+  if (startsWith(data, [0xff, 0xd8, 0xff])) return { mimeType: "image/jpeg", extension: ".jpg", kind: "image" };
+  if (startsWith(data, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+    return { mimeType: "image/png", extension: ".png", kind: "image" };
+  }
+  if (ascii(data, 0, 4) === "RIFF" && ascii(data, 8, 4) === "WEBP") {
+    return { mimeType: "image/webp", extension: ".webp", kind: "image" };
+  }
+  if (ascii(data, 0, 5) === "%PDF-") return { mimeType: "application/pdf", extension: ".pdf", kind: "pdf" };
+  const heifBrand = ascii(data, 8, 4);
+  if (ascii(data, 4, 4) === "ftyp" && ["heic", "heix", "hevc", "hevx", "mif1", "msf1"].includes(heifBrand)) {
+    return { mimeType: "image/heic", extension: ".heic", kind: "image" };
+  }
+  return null;
+}
+
+function cleanOriginalName(value: string, index: number) {
+  const name = value.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+  return (name || `第 ${index + 1} 页`).slice(0, 180);
+}
+
+function cleanRotation(value: number | undefined) {
+  const rotation = Number(value || 0);
+  if (![0, 90, 180, 270].includes(rotation)) {
+    throw createError({ statusCode: 400, statusMessage: "页面旋转角度无效" });
+  }
+  return rotation;
+}
+
+function validateFiles(files: UploadInputFile[]) {
+  if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  if (files.length > maxFileCount) {
+    throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
+  }
+  let totalBytes = 0;
+  return files.map((file, index) => {
+    if (!file.data.byteLength) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
+    if (file.data.byteLength > maxFileBytes) {
+      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+    }
+    totalBytes += file.data.byteLength;
+    if (totalBytes > maxTotalBytes) {
+      throw createError({ statusCode: 413, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
+    }
+    const detected = detectUploadType(file.data);
+    if (!detected) {
+      throw createError({ statusCode: 415, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
+    }
+    return {
+      ...file,
+      originalName: cleanOriginalName(file.originalName, index),
+      rotation: cleanRotation(file.rotation),
+      detected
+    };
+  });
+}
+
+export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[]) {
+  assertMemberManage(user, memberId);
+  const validated = validateFiles(files);
+  const reportTitle = "待识别报告";
+  const reportId = createId("report");
+  const relativeDirectory = join("reports", memberId, reportId);
+  const absoluteDirectory = join(getAppConfig().storageDir, relativeDirectory);
+  mkdirSync(absoluteDirectory, { recursive: true });
+
+  const db = getDatabase();
+  try {
+    const prepared = validated.map((file, index) => {
+      const pageId = createId("page");
+      const relativePath = join(relativeDirectory, `${pageId}${file.detected.extension}`);
+      writeFileSync(join(getAppConfig().storageDir, relativePath), file.data, { flag: "wx", mode: 0o600 });
+      return {
+        id: pageId,
+        pageNumber: index + 1,
+        originalName: file.originalName,
+        storagePath: relativePath,
+        mimeType: file.detected.mimeType,
+        fileSize: file.data.byteLength,
+        sha256: createHash("sha256").update(file.data).digest("hex"),
+        rotation: file.rotation,
+        kind: file.detected.kind
+      };
+    });
+
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status)
+      VALUES (?, ?, ?, 'other', ?, 'queued')
+    `).run(reportId, memberId, user.id, reportTitle);
+    const insertPage = db.prepare(`
+      INSERT INTO report_pages (
+        id, report_id, page_number, original_name, storage_path, mime_type, file_size, sha256, rotation,
+        source_page_number
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertJob = db.prepare(`
+      INSERT INTO processing_jobs (
+        id, report_id, page_id, job_type, pipeline_version, deduplication_key
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const insertJobEvent = db.prepare(`
+      INSERT INTO processing_job_events (
+        id, job_id, report_id, event_type, status, attempt, detail_json
+      ) VALUES (?, ?, ?, 'queued', 'queued', 0, ?)
+    `);
+    for (const page of prepared) {
+      insertPage.run(
+        page.id, reportId, page.pageNumber, page.originalName, page.storagePath,
+        page.mimeType, page.fileSize, page.sha256, page.rotation, page.kind === "pdf" ? 1 : null
+      );
+      const jobTypes = page.kind === "pdf" ? ["pdf_extract", "thumbnail"] : ["thumbnail", "ocr"];
+      for (const jobType of jobTypes) {
+        const jobId = createId("job");
+        insertJob.run(
+          jobId, reportId, page.id, jobType, pipelineVersion,
+          `${reportId}:${page.id}:${jobType}:${pipelineVersion}`
+        );
+        insertJobEvent.run(createId("event"), jobId, reportId, JSON.stringify({
+          jobType,
+          pageId: page.id,
+          pageNumber: page.pageNumber,
+          source: "upload"
+        }));
+      }
+    }
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'report.upload', 'report', ?, ?)
+    `).run(createId("audit"), user.id, reportId, JSON.stringify({
+      memberId,
+      fileCount: prepared.length,
+      totalBytes: prepared.reduce((sum, page) => sum + page.fileSize, 0)
+    }));
+    db.exec("COMMIT");
+    return {
+      reportId,
+      memberId,
+      status: "queued" as const,
+      title: reportTitle,
+      pageCount: prepared.length,
+      jobCount: prepared.length * 2,
+      pages: prepared.map(({ id, pageNumber, originalName, mimeType, fileSize, rotation }) => ({
+        id, pageNumber, originalName, mimeType, fileSize, rotation
+      }))
+    };
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* Transaction may not have started yet. */ }
+    rmSync(absoluteDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+export function listProcessingJobs(user: RequestUser, reportId: string) {
+  const report = getDatabase().prepare("SELECT member_id AS memberId FROM reports WHERE id = ?").get(reportId) as
+    | { memberId: string }
+    | undefined;
+  if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+  assertMemberAccess(user, report.memberId);
+  return getDatabase().prepare(`
+    SELECT j.id, j.page_id AS pageId, p.page_number AS pageNumber, p.original_name AS originalName,
+      j.job_type AS jobType, j.status, j.attempts,
+      j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
+      j.started_at AS startedAt, j.finished_at AS finishedAt,
+      o.engine AS ocrEngine, o.model_version AS ocrModelVersion, o.elapsed_ms AS ocrElapsedMs,
+      e.provider AS aiProvider, e.model AS aiModel, e.elapsed_ms AS aiElapsedMs,
+      e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens
+    FROM processing_jobs j
+    LEFT JOIN report_pages p ON p.id = j.page_id
+    LEFT JOIN ocr_results o ON o.job_id = j.id
+    LEFT JOIN report_extractions e ON e.job_id = j.id
+    WHERE j.report_id = ?
+    ORDER BY COALESCE(p.page_number, 999999), j.created_at, j.id
+  `).all(reportId);
+}

@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node", "vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["packages/ui/src/*"]
+    }
+  },
+  "include": [
+    "nitro.config.ts",
+    "packages/server/**/*.ts",
+    "packages/ui/src/**/*.ts",
+    "packages/ui/src/**/*.vue",
+    "packages/ui/vite.config.ts"
+  ],
+  "exclude": ["node_modules", ".server-dist", ".ui-dist", ".fnos-build", "dist"]
+}
