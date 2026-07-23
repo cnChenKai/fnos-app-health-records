@@ -7,10 +7,12 @@ import ReportDetailModal from "../../components/ReportDetailModal.vue";
 import { request } from "../../utils/api";
 import type { DuplicateReportCandidate, DuplicateReportGroup, ReportSummary } from "../../types/api";
 import { useAppContext } from "../../composables/useAppContext";
+import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
 
 const app = useAppContext();
 const toast = useToast();
+const confirmDialog = useConfirm();
 const loading = ref(false);
 const groups = ref<DuplicateReportGroup[]>([]);
 const error = ref("");
@@ -41,19 +43,33 @@ function openReport(reportId: string) {
 }
 
 async function trash(report: ReportSummary) {
-  if (!window.confirm(`确认将「${report.title}」移入回收站？`)) return;
-  await request(`reports/${encodeURIComponent(report.id)}`, { method: "DELETE" });
-  await scan();
+  confirmDialog.ask({
+    title: "移入回收站",
+    message: `确认将「${report.title}」移入回收站？原件会保留 30 天，不会立刻删除。`,
+    confirmText: "移入回收站",
+    danger: true,
+    run: async () => {
+      await request(`reports/${encodeURIComponent(report.id)}`, { method: "DELETE" });
+      await scan();
+    }
+  });
 }
 
 async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCandidate) {
-  if (!window.confirm(`把「${source.title}」的原件页合并到「${target.title}」，并将当前报告移入回收站？结构化字段以目标报告为准。`)) return;
-  await request(`reports/${encodeURIComponent(source.id)}/merge`, {
-    method: "POST",
-    body: JSON.stringify({ targetReportId: target.id })
+  confirmDialog.ask({
+    title: "合并报告",
+    message: `把「${source.title}」的原件页合并到「${target.title}」，并将当前报告移入回收站？结构化字段以目标报告为准。`,
+    confirmText: "合并",
+    danger: true,
+    run: async () => {
+      await request(`reports/${encodeURIComponent(source.id)}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ targetReportId: target.id })
+      });
+      toast.show("已合并原件页，源报告已移入回收站");
+      await scan();
+    }
   });
-  toast.show("已合并原件页，源报告已移入回收站");
-  await scan();
 }
 </script>
 

@@ -12,6 +12,11 @@ import {
   buildAiExtractionInput, isAiExtractionConfigured, persistAiExtraction, requestAiExtraction,
   type AiExecutor
 } from "./ai-extraction.service";
+import {
+  normalizeReportObservationsWithAiFallback,
+  requestAiIndicatorNormalization,
+  type AiIndicatorExecutor
+} from "./indicator-normalization.service";
 
 type JobRow = {
   id: string;
@@ -240,6 +245,44 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
   }
 }
 
+function scoreOcrQuality(lines: Array<Record<string, unknown>>) {
+  const texts = lines.map((line) => typeof line.text === "string" ? line.text.trim() : "").filter(Boolean);
+  const text = texts.join("\n");
+  const textLength = text.length;
+  const digitCount = (text.match(/\d/g) || []).length;
+  const cjkCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+  const latinCount = (text.match(/[A-Za-z]/g) || []).length;
+  const usefulRatio = textLength ? (digitCount + cjkCount + latinCount) / textLength : 0;
+  const confidences = lines
+    .map((line) => Number(line.confidence))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 1);
+  const avgConfidence = confidences.length
+    ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+    : 0;
+  let score = 0;
+  if (texts.length >= 20) score += 30;
+  else if (texts.length >= 8) score += 20;
+  else if (texts.length >= 3) score += 10;
+  if (textLength >= 800) score += 30;
+  else if (textLength >= 300) score += 22;
+  else if (textLength >= 80) score += 12;
+  if (digitCount >= 20) score += 15;
+  else if (digitCount >= 6) score += 8;
+  if (usefulRatio >= 0.65) score += 15;
+  else if (usefulRatio >= 0.45) score += 8;
+  if (avgConfidence >= 0.85) score += 10;
+  else if (avgConfidence >= 0.65) score += 6;
+  const bounded = Math.max(0, Math.min(100, Math.round(score)));
+  const level = bounded >= 70 ? "good" : bounded >= 40 ? "weak" : "poor";
+  const reason = [
+    `文本${textLength}字`,
+    `${texts.length}行`,
+    digitCount ? `数字${digitCount}个` : "数字少",
+    confidences.length ? `均值置信度${Math.round(avgConfidence * 100)}%` : "无置信度"
+  ].join(" · ");
+  return { score: bounded, level, reason, textLength };
+}
+
 function completeJob(job: JobRow, response: WorkerResponse) {
   if (!job.pageId) throw new Error("页面任务缺少页面 ID");
   const db = getDatabase();
@@ -251,15 +294,24 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       UPDATE report_pages SET thumbnail_path = ?, width = ?, height = ? WHERE id = ?
     `).run(relativeThumbnail, Number(response.width || 0) || null, Number(response.height || 0) || null, job.pageId);
   } else if (job.jobType === "ocr") {
+    const quality = scoreOcrQuality(response.lines || []);
     db.prepare(`
-      INSERT INTO ocr_results (id, job_id, page_id, engine, model_version, lines_json, elapsed_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ocr_results (
+        id, job_id, page_id, engine, model_version, lines_json,
+        quality_score, quality_level, quality_reason, text_length, elapsed_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(job_id) DO UPDATE SET
         engine = excluded.engine, model_version = excluded.model_version,
-        lines_json = excluded.lines_json, elapsed_ms = excluded.elapsed_ms
+        lines_json = excluded.lines_json,
+        quality_score = excluded.quality_score,
+        quality_level = excluded.quality_level,
+        quality_reason = excluded.quality_reason,
+        text_length = excluded.text_length,
+        elapsed_ms = excluded.elapsed_ms
     `).run(
       createId("ocr"), job.id, job.pageId, response.engine || "rapidocr-openvino",
-      response.modelVersion || "unknown", JSON.stringify(response.lines || []), response.elapsedMs || null
+      response.modelVersion || "unknown", JSON.stringify(response.lines || []),
+      quality.score, quality.level, quality.reason, quality.textLength, response.elapsedMs || null
     );
   }
   db.prepare(`
@@ -361,7 +413,11 @@ function failJob(job: JobRow, error: unknown) {
   });
 }
 
-export async function processNextJob(executor: WorkerExecutor = requestWorker, aiExecutor: AiExecutor = requestAiExtraction) {
+export async function processNextJob(
+  executor: WorkerExecutor = requestWorker,
+  aiExecutor: AiExecutor = requestAiExtraction,
+  indicatorAiExecutor: AiIndicatorExecutor = requestAiIndicatorNormalization
+) {
   const job = claimNextJob();
   if (!job) return false;
   try {
@@ -372,6 +428,16 @@ export async function processNextJob(executor: WorkerExecutor = requestWorker, a
         const input = buildAiExtractionInput(job.reportId);
         const extraction = await aiExecutor(input);
         persistAiExtraction(job.reportId, job.id, extraction, input.inputCharacters);
+        let indicatorNormalization: Record<string, unknown> | null = null;
+        try {
+          const fallback = await normalizeReportObservationsWithAiFallback(job.reportId, job.id, indicatorAiExecutor);
+          indicatorNormalization = fallback.ai;
+        } catch (error) {
+          indicatorNormalization = {
+            skipped: true,
+            error: error instanceof Error ? error.message : "AI 指标兜底失败"
+          };
+        }
         appendJobEvent({
           jobId: job.id,
           reportId: job.reportId,
@@ -386,7 +452,8 @@ export async function processNextJob(executor: WorkerExecutor = requestWorker, a
             inputCharacters: input.inputCharacters,
             promptTokens: extraction.promptTokens,
             completionTokens: extraction.completionTokens,
-            elapsedMs: extraction.elapsedMs
+            elapsedMs: extraction.elapsedMs,
+            indicatorNormalization
           }
         });
       }

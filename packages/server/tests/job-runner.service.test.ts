@@ -264,6 +264,16 @@ test("queues AI extraction after OCR, redacts identity data, and persists valida
       { itemName: observation.itemName, numericValue: observation.numericValue, unit: observation.unit, abnormalFlag: observation.abnormalFlag },
       { itemName: "空腹血糖", numericValue: 5.2, unit: "mmol/L", abnormalFlag: "normal" }
     );
+    const normalization = getDatabase().prepare(`
+      SELECT canonical_name AS canonicalName, quality, canonical_value AS canonicalValue, canonical_unit AS canonicalUnit
+      FROM observation_normalizations WHERE observation_id = (
+        SELECT id FROM observations WHERE report_id = ? LIMIT 1
+      )
+    `).get(upload.reportId) as { canonicalName: string; quality: string; canonicalValue: number; canonicalUnit: string };
+    assert.deepEqual(
+      { canonicalName: normalization.canonicalName, quality: normalization.quality, canonicalValue: normalization.canonicalValue, canonicalUnit: normalization.canonicalUnit },
+      { canonicalName: "空腹血糖", quality: "high", canonicalValue: 5.2, canonicalUnit: "mmol/L" }
+    );
     const extraction = getDatabase().prepare(`
       SELECT model, input_characters AS inputCharacters, prompt_tokens AS promptTokens,
         completion_tokens AS completionTokens, raw_response_json AS rawResponseJson

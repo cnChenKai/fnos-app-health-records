@@ -1,6 +1,7 @@
 import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import { getAiSettings } from "./ai-settings.service";
+import { normalizeReportObservations } from "./indicator-normalization.service";
 
 const promptVersion = "health-record-v2";
 const maxInputCharacters = 80_000;
@@ -529,4 +530,5 @@ export function persistAiExtraction(reportId: string, jobId: string, result: AiE
     db.exec("ROLLBACK");
     throw error;
   }
+  normalizeReportObservations(reportId);
 }

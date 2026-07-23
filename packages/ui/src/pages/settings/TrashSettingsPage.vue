@@ -6,10 +6,12 @@ import EmptyState from "../../components/EmptyState.vue";
 import { request } from "../../utils/api";
 import type { CursorPage, ReportSummary } from "../../types/api";
 import { useAppContext } from "../../composables/useAppContext";
+import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
 
 const app = useAppContext();
 const toast = useToast();
+const confirmDialog = useConfirm();
 const loading = ref(true);
 const reports = ref<ReportSummary[]>([]);
 const error = ref("");
@@ -34,11 +36,18 @@ async function restore(report: ReportSummary) {
 }
 
 async function purge(report: ReportSummary) {
-  if (!window.confirm(`永久删除「${report.title}」？此操作不可恢复。`)) return;
-  await request(`reports/${encodeURIComponent(report.id)}?permanent=1`, { method: "DELETE" });
-  const memberId = app.selectedMemberId.value;
-  if (memberId) await load(memberId);
-  toast.show("报告已永久删除");
+  confirmDialog.ask({
+    title: "永久删除报告",
+    message: `永久删除「${report.title}」？此操作不可恢复。`,
+    confirmText: "永久删除",
+    danger: true,
+    run: async () => {
+      await request(`reports/${encodeURIComponent(report.id)}?permanent=1`, { method: "DELETE" });
+      const memberId = app.selectedMemberId.value;
+      if (memberId) await load(memberId);
+      toast.show("报告已永久删除");
+    }
+  });
 }
 
 watch(() => app.selectedMemberId.value, (memberId) => { if (memberId) void load(memberId); }, { immediate: true });

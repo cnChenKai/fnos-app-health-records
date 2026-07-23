@@ -4,12 +4,14 @@ import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Tr
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { apiUrl, request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
+import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
 import { formatDatabaseTime } from "../../utils/time";
 import type { BackupSummary, BackupValidationResult } from "../../types/api";
 
 const app = useAppContext();
 const toast = useToast();
+const confirmDialog = useConfirm();
 const message = ref("");
 const backups = ref<BackupSummary[]>([]);
 const loadingBackups = ref(false);
@@ -94,25 +96,29 @@ async function checkBackup(backup: BackupSummary) {
 }
 
 async function restoreBackup(backup: BackupSummary) {
-  const confirmed = window.confirm(
-    `确定从备份“${backup.filename}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、缩略图、配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`
-  );
-  if (!confirmed) return;
-  restoringId.value = backup.id;
-  message.value = "";
-  try {
-    const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string }>(
-      `backups/${encodeURIComponent(backup.id)}/restore`,
-      { method: "POST" }
-    );
-    message.value = `恢复完成，恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
-    toast.show("备份已恢复");
-    await Promise.all([loadBackups(), app.load()]);
-  } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "备份恢复失败";
-  } finally {
-    restoringId.value = "";
-  }
+  confirmDialog.ask({
+    title: "从备份恢复",
+    message: `确定从备份“${backup.filename}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、缩略图、配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`,
+    confirmText: "恢复",
+    danger: true,
+    run: async () => {
+      restoringId.value = backup.id;
+      message.value = "";
+      try {
+        const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string }>(
+          `backups/${encodeURIComponent(backup.id)}/restore`,
+          { method: "POST" }
+        );
+        message.value = `恢复完成，恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
+        toast.show("备份已恢复");
+        await Promise.all([loadBackups(), app.load()]);
+      } catch (cause) {
+        message.value = cause instanceof Error ? cause.message : "备份恢复失败";
+      } finally {
+        restoringId.value = "";
+      }
+    }
+  });
 }
 
 function chooseExternalBackup() {
@@ -124,45 +130,55 @@ async function restoreUploadedBackup(event: Event) {
   const file = input.files?.[0];
   input.value = "";
   if (!file) return;
-  const confirmed = window.confirm(
-    `确定从外部备份“${file.name}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、分页图、运行配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`
-  );
-  if (!confirmed) return;
-  uploadingRestore.value = true;
-  message.value = "";
-  try {
-    const body = new FormData();
-    body.append("backup", file);
-    const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string; filename: string }>(
-      "backups/restore-upload",
-      { method: "POST", body }
-    );
-    message.value = `外部备份已恢复：${result.filename}。恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
-    toast.show("外部备份已恢复");
-    await Promise.all([loadBackups(), app.load()]);
-  } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
-  } finally {
-    uploadingRestore.value = false;
-  }
+  confirmDialog.ask({
+    title: "从外部备份恢复",
+    message: `确定从外部备份“${file.name}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、分页图、运行配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。`,
+    confirmText: "恢复",
+    danger: true,
+    run: async () => {
+      uploadingRestore.value = true;
+      message.value = "";
+      try {
+        const body = new FormData();
+        body.append("backup", file);
+        const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string; filename: string }>(
+          "backups/restore-upload",
+          { method: "POST", body }
+        );
+        message.value = `外部备份已恢复：${result.filename}。恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
+        toast.show("外部备份已恢复");
+        await Promise.all([loadBackups(), app.load()]);
+      } catch (cause) {
+        message.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
+      } finally {
+        uploadingRestore.value = false;
+      }
+    }
+  });
 }
 
 async function deleteBackup(backup: BackupSummary) {
   const label = backup.reason === "pre_restore" ? "恢复前安全备份" : "完整备份";
-  const confirmed = window.confirm(`确认删除这份${label}？\n\n${backup.filename}\n\n删除备份不会影响当前档案数据，但删除后无法再用它恢复。`);
-  if (!confirmed) return;
-  deletingId.value = backup.id;
-  message.value = "";
-  try {
-    await request(`backups/${encodeURIComponent(backup.id)}`, { method: "DELETE" });
-    message.value = `备份已删除：${backup.filename}`;
-    toast.show("备份已删除");
-    await loadBackups();
-  } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "备份删除失败";
-  } finally {
-    deletingId.value = "";
-  }
+  confirmDialog.ask({
+    title: "删除备份",
+    message: `确认删除这份${label}？\n\n${backup.filename}\n\n删除备份不会影响当前档案数据，但删除后无法再用它恢复。`,
+    confirmText: "删除",
+    danger: true,
+    run: async () => {
+      deletingId.value = backup.id;
+      message.value = "";
+      try {
+        await request(`backups/${encodeURIComponent(backup.id)}`, { method: "DELETE" });
+        message.value = `备份已删除：${backup.filename}`;
+        toast.show("备份已删除");
+        await loadBackups();
+      } catch (cause) {
+        message.value = cause instanceof Error ? cause.message : "备份删除失败";
+      } finally {
+        deletingId.value = "";
+      }
+    }
+  });
 }
 
 onMounted(() => {

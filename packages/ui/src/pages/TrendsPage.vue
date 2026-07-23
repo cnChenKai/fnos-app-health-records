@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Activity, ChartNoAxesCombined, ChevronRight, FileText } from "@lucide/vue";
+import { Activity, ChartNoAxesCombined, ChevronRight, FileText, Search } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import FormSelect from "../components/FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
@@ -9,14 +10,17 @@ import { apiUrl, request } from "../utils/api";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
 import { useToast } from "../composables/useToast";
-import type { TrendPoint, TrendSeries } from "../types/api";
+import type { TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
 
 const app = useAppContext();
 const loading = ref(true);
 const series = ref<TrendSeries[]>([]);
+const query = ref("");
+const groupFilter = ref("all");
 const previewReportId = ref<string | null>(null);
+const activeDetailKey = ref<string | null>(null);
 const sourcePreview = ref<{
-  point: TrendPoint;
+  point: TrendPoint | TrendExcludedPoint;
   seriesName: string;
   unit: string | null;
 } | null>(null);
@@ -37,8 +41,41 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
   }];
 });
 
+const groupOptions = [
+  { value: "all", label: "全部分组" },
+  { value: "blood", label: "血常规" },
+  { value: "liver", label: "肝功能" },
+  { value: "renal", label: "肾功能" },
+  { value: "lipid", label: "血脂" },
+  { value: "glucose", label: "血糖" },
+  { value: "urine", label: "尿常规" },
+  { value: "thyroid", label: "甲状腺" },
+  { value: "ultrasound", label: "超声/影像" },
+  { value: "infectious", label: "感染筛查" },
+  { value: "other", label: "其他" }
+];
+
+const groupLabels = Object.fromEntries(groupOptions.map((item) => [item.value, item.label]));
+const filteredSeries = computed(() => {
+  const keyword = query.value.trim().toLocaleLowerCase();
+  return series.value.filter((item) => {
+    const group = trendGroup(item);
+    if (groupFilter.value !== "all" && group !== groupFilter.value) return false;
+    if (!keyword) return true;
+    return [item.name, item.sectionName, item.unit, ...item.sourceNames]
+      .some((value) => value?.toLocaleLowerCase().includes(keyword));
+  });
+});
+const filterSummary = computed(() => {
+  if (!series.value.length) return "";
+  const group = groupFilter.value === "all" ? "" : ` · ${groupLabels[groupFilter.value] || "当前分组"}`;
+  const keyword = query.value.trim() ? ` · “${query.value.trim()}”` : "";
+  return `显示 ${filteredSeries.value.length} / ${series.value.length} 项${group}${keyword}`;
+});
+
 async function load(memberId: string, silent = false) {
   if (!silent) loading.value = true;
+  activeDetailKey.value = null;
   try { series.value = await request(`trends?memberId=${encodeURIComponent(memberId)}`); }
   finally { if (!silent) loading.value = false; }
 }
@@ -77,6 +114,30 @@ function flagClass(value: TrendPoint["abnormalFlag"]) {
   return "plain";
 }
 
+function qualityLabel(value: TrendSeries["quality"]) {
+  return {
+    high: "高可信",
+    medium: "中可信",
+    low: "低可信",
+    excluded: "未纳入",
+    raw: "原始展示"
+  }[value] || "原始展示";
+}
+
+function trendGroup(item: TrendSeries) {
+  const text = [item.sectionName, item.name, ...item.sourceNames].filter(Boolean).join(" ").toLocaleLowerCase();
+  if (/血常规|血液常规|全血|白细胞|红细胞|血红蛋白|血小板|中性粒|淋巴|单核|嗜酸|嗜碱|cbc/.test(text)) return "blood";
+  if (/肝功能|谷丙|谷草|转氨酶|胆红素|白蛋白|球蛋白|总蛋白|碱性磷酸酶|谷氨酰|肝/.test(text)) return "liver";
+  if (/肾功能|肌酐|尿素|尿酸|胱抑素|肾小球|肾/.test(text)) return "renal";
+  if (/血脂|胆固醇|甘油三酯|低密度|高密度|载脂蛋白|脂蛋白/.test(text)) return "lipid";
+  if (/血糖|葡萄糖|糖化血红蛋白|胰岛素|c肽|glu|hba1c/.test(text)) return "glucose";
+  if (/尿常规|尿液|尿蛋白|尿糖|尿酮|尿胆|尿潜血|尿比重|尿ph|白细胞酯酶/.test(text)) return "urine";
+  if (/甲状腺|tsh|游离三碘|游离甲状腺素|甲状腺素|促甲状腺|甲功/.test(text)) return "thyroid";
+  if (/超声|影像|彩超|ct|磁共振|mri|dr|x线|结节|斑块|脂肪肝|钙化灶|内膜|卵巢|子宫/.test(text)) return "ultrasound";
+  if (/乙肝|丙肝|梅毒|艾滋|hiv|hbsag|抗体|抗原|病毒|dna|rna|感染/.test(text)) return "infectious";
+  return "other";
+}
+
 function deltaText(item: TrendSeries) {
   if (item.delta === null) return "基线";
   if (item.delta === 0) return "持平";
@@ -105,11 +166,26 @@ function recentPoints(item: TrendSeries) {
   return [...item.points].reverse().slice(0, 6);
 }
 
+function seriesKey(item: TrendSeries) {
+  return `${item.name}\u0000${item.unit || ""}`;
+}
+
+function detailsOpen(item: TrendSeries) {
+  return activeDetailKey.value === seriesKey(item);
+}
+
+function toggleDetails(item: TrendSeries) {
+  const key = seriesKey(item);
+  activeDetailKey.value = activeDetailKey.value === key ? null : key;
+}
+
 function openReport(reportId: string) {
+  activeDetailKey.value = null;
   previewReportId.value = reportId;
 }
 
-function openSourcePage(point: TrendPoint, item: TrendSeries) {
+function openSourcePage(point: TrendPoint | TrendExcludedPoint, item: TrendSeries) {
+  activeDetailKey.value = null;
   if (!point.sourcePage) {
     openReport(point.reportId);
     return;
@@ -145,6 +221,10 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   if (!memberId) return;
   load(memberId).catch(() => toast.show("加载失败，请稍后重试"));
 }, { immediate: true });
+
+watch([query, groupFilter], () => {
+  activeDetailKey.value = null;
+});
 </script>
 
 <template>
@@ -153,46 +233,103 @@ watch(() => app.selectedMemberId.value, (memberId) => {
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
     <EmptyState v-else-if="!series.length" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
-    <div v-else class="trend-list">
-      <article v-for="item in series" :key="`${item.name}-${item.unit}`" class="trend-card">
-        <header class="trend-card-header">
-          <span class="item-icon"><Activity :size="19" /></span>
-          <div>
-            <strong>{{ item.name }}</strong>
-            <span>{{ item.sectionName || "未分组" }} · {{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }}</span>
-          </div>
-          <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
-        </header>
-        <div class="trend-main">
-          <div class="trend-latest">
-            <span>最新值</span>
-            <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
-            <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
-          </div>
-          <svg class="trend-sparkline" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
-            <line x1="0" y1="42" x2="100" y2="42" />
-            <polyline :points="sparklinePoints(item)" />
-          </svg>
-        </div>
-        <div class="trend-range">
-          <span>范围 {{ formatNumber(item.minValue) }} - {{ formatNumber(item.maxValue) }}{{ item.unit || "" }}</span>
-          <span>{{ formatDate(item.firstDate) }} 至 {{ formatDate(item.lastDate) }}</span>
-        </div>
-        <div class="trend-points">
-          <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
+    <template v-else>
+      <div class="trend-filter-row">
+        <label class="search-field trend-search-field">
+          <Search :size="18" />
+          <input v-model="query" placeholder="搜索指标名" />
+        </label>
+        <FormSelect v-model="groupFilter" class="trend-group-select records-filter-select" :options="groupOptions" aria-label="类型分组" />
+      </div>
+      <p class="trend-filter-summary">{{ filterSummary }}</p>
+      <EmptyState
+        v-if="!filteredSeries.length"
+        title="没有符合条件的指标"
+        description="换个指标名或类型分组试试，也可以等待更多报告完成整理。"
+      />
+      <div v-else class="trend-list">
+        <article v-for="item in filteredSeries" :key="`${item.name}-${item.unit}`" class="trend-card">
+          <header class="trend-card-header">
+            <span class="item-icon"><Activity :size="19" /></span>
             <div>
-              <strong>{{ pointValue(point, item.unit) }}<em class="trend-flag" :class="flagClass(point.abnormalFlag)">{{ abnormalLabel(point.abnormalFlag) }}</em></strong>
-              <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
-              <small v-if="point.referenceText">参考 {{ point.referenceText }}</small>
+              <div class="trend-title-row">
+                <strong>{{ item.name }}</strong>
+                <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
+              </div>
+              <span>{{ item.sectionName || "未分组" }} · {{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
             </div>
-            <button v-if="point.sourcePage" class="trend-source-button" type="button" title="查看指标所在页高清图" @click="openSourcePage(point, item)">原图</button>
-            <button type="button" title="打开来源报告" @click="openReport(point.reportId)">
-              <ChevronRight :size="18" />
-            </button>
-          </article>
-        </div>
-      </article>
-    </div>
+          </header>
+          <div class="trend-main">
+            <div class="trend-latest">
+              <span>最新值</span>
+              <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
+              <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
+            </div>
+            <svg class="trend-sparkline" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
+              <line x1="0" y1="42" x2="100" y2="42" />
+              <polyline :points="sparklinePoints(item)" />
+            </svg>
+          </div>
+          <div class="trend-range">
+            <div class="trend-range-copy">
+              <span>范围 {{ formatNumber(item.minValue) }} - {{ formatNumber(item.maxValue) }}{{ item.unit || "" }}</span>
+              <span>{{ formatDate(item.firstDate) }} 至 {{ formatDate(item.lastDate) }}</span>
+            </div>
+            <div class="trend-detail-popover-wrap">
+              <button
+                class="trend-detail-toggle"
+                type="button"
+                :aria-expanded="detailsOpen(item)"
+                @click="toggleDetails(item)"
+              >
+                整理详情
+                <template v-if="item.excludedPoints.length"> · {{ item.excludedPoints.length }}</template>
+              </button>
+              <section v-if="detailsOpen(item)" class="trend-normalization-popover">
+                <div v-if="item.explanation">
+                  <span>指标说明</span>
+                  <p>{{ item.explanation }}</p>
+                </div>
+                <div>
+                  <span>整理依据</span>
+                  <p v-if="item.matchReasons.length">{{ item.matchReasons.join("；") }}</p>
+                  <p v-else>按原始名称和单位展示。</p>
+                </div>
+                <div>
+                  <span>已纳入名称</span>
+                  <p>{{ item.sourceNames.length ? item.sourceNames.join("、") : "暂无" }}</p>
+                </div>
+                <div v-if="item.excludedPoints.length">
+                  <span>相似但未纳入</span>
+                  <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
+                    <div>
+                      <strong>{{ point.itemName }} · {{ point.resultText }}<template v-if="point.unit"> {{ point.unit }}</template></strong>
+                      <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
+                    </div>
+                    <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
+                    <button type="button" @click="openReport(point.reportId)">报告</button>
+                  </article>
+                </div>
+                <p v-else class="preview-hint">暂无被系统保守排除的相似指标。</p>
+              </section>
+            </div>
+          </div>
+          <div class="trend-points">
+            <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
+              <div>
+                <strong>{{ pointValue(point, item.unit) }}<em class="trend-flag" :class="flagClass(point.abnormalFlag)">{{ abnormalLabel(point.abnormalFlag) }}</em></strong>
+                <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
+                <small v-if="point.referenceText">参考 {{ point.referenceText }}</small>
+              </div>
+              <button v-if="point.sourcePage" class="trend-source-button" type="button" title="查看指标所在页高清图" @click="openSourcePage(point, item)">原图</button>
+              <button type="button" title="打开来源报告" @click="openReport(point.reportId)">
+                <ChevronRight :size="18" />
+              </button>
+            </article>
+          </div>
+        </article>
+      </div>
+    </template>
     <ReportDetailModal :open="Boolean(previewReportId)" :report-id="previewReportId" @close="previewReportId = null" @updated="reloadTrends" />
     <ImageViewer v-if="sourcePreview" :pages="sourceViewerPages" @close="closeSourcePage">
       <template #actions>

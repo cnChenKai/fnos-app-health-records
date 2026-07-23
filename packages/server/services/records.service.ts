@@ -587,11 +587,19 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
     FROM report_pages WHERE report_id = ? ORDER BY page_number
   `).all(reportId) as unknown as ReportPage[];
   const observations = getDatabase().prepare(`
-    SELECT id, report_id AS reportId, section_name AS sectionName, item_code AS itemCode,
-      item_name AS itemName, normalized_name AS normalizedName, result_text AS resultText,
-      numeric_value AS numericValue, unit, reference_text AS referenceText,
-      abnormal_flag AS abnormalFlag, evidence_json AS evidenceJson
-    FROM observations WHERE report_id = ? ORDER BY section_name, id LIMIT 200
+    SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
+      o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.unit, o.reference_text AS referenceText,
+      o.abnormal_flag AS abnormalFlag, o.evidence_json AS evidenceJson,
+      n.canonical_name AS canonicalName, n.canonical_value AS canonicalValue,
+      n.canonical_unit AS canonicalUnit, n.quality AS normalizationQuality,
+      n.confidence AS normalizationConfidence, n.match_reason AS normalizationReason,
+      n.excluded_reason AS normalizationExcludedReason,
+      c.explanation AS canonicalExplanation
+    FROM observations o
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    LEFT JOIN indicator_catalog c ON c.id = n.indicator_id
+    WHERE o.report_id = ? ORDER BY o.section_name, o.id LIMIT 200
   `).all(reportId).map((item) => {
     const row = item as Observation & { evidenceJson: string };
     return { ...row, evidence: parseJson(row.evidenceJson, null), evidenceJson: undefined };
@@ -701,7 +709,8 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
   assertMemberAccess(user, report.memberId);
   return getDatabase().prepare(`
     SELECT p.id AS pageId, p.page_number AS pageNumber, p.original_name AS originalName,
-      o.engine, o.model_version AS modelVersion, o.elapsed_ms AS elapsedMs, o.lines_json AS linesJson
+      o.engine, o.model_version AS modelVersion, o.elapsed_ms AS elapsedMs, o.lines_json AS linesJson,
+      o.quality_score AS qualityScore, o.quality_level AS qualityLevel, o.quality_reason AS qualityReason
     FROM report_pages p
     LEFT JOIN ocr_results o ON o.page_id = p.id
     WHERE p.report_id = ?
@@ -715,6 +724,9 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
       modelVersion: string | null;
       elapsedMs: number | null;
       linesJson: string | null;
+      qualityScore: number | null;
+      qualityLevel: "good" | "weak" | "poor" | null;
+      qualityReason: string | null;
     };
     const lines = parseJson<Array<Record<string, unknown>>>(item.linesJson, [])
       .map((line) => typeof line.text === "string" ? redactSensitiveText(line.text).trim() : "")
@@ -726,6 +738,9 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
       engine: item.engine,
       modelVersion: item.modelVersion,
       elapsedMs: item.elapsedMs,
+      qualityScore: item.qualityScore,
+      qualityLevel: item.qualityLevel,
+      qualityReason: item.qualityReason,
       lineCount: lines.length,
       text: lines.join("\n")
     };
@@ -1190,6 +1205,15 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       o.reference_text AS referenceText,
       o.abnormal_flag AS abnormalFlag,
       o.evidence_json AS evidenceJson,
+      n.canonical_key AS canonicalKey,
+      n.canonical_name AS canonicalName,
+      n.canonical_value AS canonicalValue,
+      n.canonical_unit AS canonicalUnit,
+      n.quality AS normalizationQuality,
+      n.confidence AS normalizationConfidence,
+      n.match_reason AS normalizationReason,
+      n.excluded_reason AS normalizationExcludedReason,
+      c.explanation AS canonicalExplanation,
       r.id AS reportId,
       r.title AS reportTitle,
       r.status AS reportStatus,
@@ -1197,6 +1221,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       COALESCE(r.report_issued_at, r.created_at) AS sortDate,
       r.hospital_name_raw AS hospitalName
     FROM observations o
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    LEFT JOIN indicator_catalog c ON c.id = n.indicator_id
     JOIN reports r ON r.id = o.report_id
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
     WHERE COALESCE(NULLIF(TRIM(o.normalized_name), ''), NULLIF(TRIM(o.item_name), '')) IS NOT NULL
@@ -1214,6 +1240,15 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     referenceText: string | null;
     abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
     evidenceJson: string;
+    canonicalKey: string | null;
+    canonicalName: string | null;
+    canonicalValue: number | null;
+    canonicalUnit: string | null;
+    normalizationQuality: "high" | "medium" | "low" | "excluded" | null;
+    normalizationConfidence: number | null;
+    normalizationReason: string | null;
+    normalizationExcludedReason: string | null;
+    canonicalExplanation: string | null;
     reportId: string;
     reportTitle: string;
     reportStatus: string;
@@ -1222,29 +1257,111 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     hospitalName: string | null;
   }>;
 
-  const pointsWithEvidence = rows.flatMap((row) => {
+  const enrichedRows = rows.map((row) => {
     const numericValue = row.numericValue ?? parseNumericResultText(row.resultText);
-    if (numericValue === null) return [];
+    const usesCanonical = Boolean(row.canonicalKey && row.normalizationQuality && ["high", "medium"].includes(row.normalizationQuality));
     const evidence = firstObservationEvidence(row.evidenceJson);
-    return [{
+    return {
       ...row,
-      numericValue,
-      trendName: normalizeTrendName(row.name),
-      trendUnit: normalizeTrendUnit(row.unit),
+      parsedNumericValue: numericValue,
+      trendNumericValue: numericValue === null ? null : usesCanonical ? (row.canonicalValue ?? numericValue) : numericValue,
+      trendName: usesCanonical ? row.canonicalName! : normalizeTrendName(row.name),
+      trendUnit: usesCanonical ? row.canonicalUnit : normalizeTrendUnit(row.unit),
+      trendKey: usesCanonical ? row.canonicalKey! : normalizeTrendName(row.name),
+      trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
+      trendConfidence: usesCanonical ? row.normalizationConfidence : null,
+      trendReason: usesCanonical ? row.normalizationReason : "未归一化，按原始名称和单位保守展示",
+      trendExplanation: usesCanonical ? row.canonicalExplanation : null,
       evidencePageNumber: evidence?.pageNumber || null,
       evidenceQuote: evidence?.quote || null
-    }];
+    };
   });
+  const pointsWithEvidence = enrichedRows.filter((row) => {
+    if (row.trendNumericValue === null) return false;
+    return !(row.canonicalKey && row.normalizationQuality && ["low", "excluded"].includes(row.normalizationQuality));
+  });
+  const excludedRows = enrichedRows.filter((row) =>
+    Boolean(row.canonicalKey && row.canonicalName && row.normalizationQuality && ["low", "excluded"].includes(row.normalizationQuality))
+  );
   const pageKeys = new Set(
-    pointsWithEvidence
+    [...pointsWithEvidence, ...excludedRows]
       .filter((row) => row.evidencePageNumber)
       .map((row) => `${row.reportId}:${row.evidencePageNumber}`)
   );
   const sourcePages = sourcePagesForTrendPoints(pageKeys);
+  const excludedByKey = new Map<string, Array<{
+    observationId: string;
+    reportId: string;
+    reportTitle: string;
+    reportIssuedAt: string | null;
+    hospitalName: string | null;
+    itemName: string;
+    resultText: string;
+    numericValue: number | null;
+    unit: string | null;
+    reason: string;
+    quality: "low" | "excluded";
+    evidenceQuote: string | null;
+    sourcePage: {
+      id: string;
+      pageNumber: number;
+      originalName: string;
+      mimeType: string;
+      sourcePageNumber: number | null;
+    } | null;
+  }>>();
+  for (const row of excludedRows) {
+    const key = `${row.canonicalKey}\u0000${row.canonicalUnit || normalizeTrendUnit(row.unit) || ""}`;
+    const sourcePage = row.evidencePageNumber
+      ? sourcePages.get(`${row.reportId}:${row.evidencePageNumber}`) || null
+      : null;
+    if (!excludedByKey.has(key)) excludedByKey.set(key, []);
+    excludedByKey.get(key)!.push({
+      observationId: row.observationId,
+      reportId: row.reportId,
+      reportTitle: row.reportTitle,
+      reportIssuedAt: row.reportIssuedAt,
+      hospitalName: row.hospitalName,
+      itemName: row.itemName,
+      resultText: row.resultText,
+      numericValue: row.parsedNumericValue,
+      unit: row.unit,
+      reason: row.normalizationExcludedReason || row.normalizationReason || "趋势质量不足，未纳入默认趋势",
+      quality: row.normalizationQuality as "low" | "excluded",
+      evidenceQuote: row.evidenceQuote,
+      sourcePage
+    });
+  }
   const groups = new Map<string, {
     name: string;
     unit: string | null;
     sectionName: string | null;
+    quality: string;
+    confidence: number | null;
+    explanation: string | null;
+    matchReasons: Set<string>;
+    rawNames: Set<string>;
+    excludedPoints: Array<{
+      observationId: string;
+      reportId: string;
+      reportTitle: string;
+      reportIssuedAt: string | null;
+      hospitalName: string | null;
+      itemName: string;
+      resultText: string;
+      numericValue: number | null;
+      unit: string | null;
+      reason: string;
+      quality: "low" | "excluded";
+      evidenceQuote: string | null;
+      sourcePage: {
+        id: string;
+        pageNumber: number;
+        originalName: string;
+        mimeType: string;
+        sourcePageNumber: number | null;
+      } | null;
+    }>;
     points: Array<{
       observationId: string;
       reportId: string;
@@ -1259,6 +1376,9 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       referenceText: string | null;
       abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
       evidenceQuote: string | null;
+      normalizationQuality: string | null;
+      normalizationConfidence: number | null;
+      normalizationReason: string | null;
       sourcePage: {
         id: string;
         pageNumber: number;
@@ -1269,14 +1389,28 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     }>;
   }>();
   for (const row of pointsWithEvidence) {
-    const key = `${row.trendName}\u0000${row.trendUnit || ""}`;
+    const key = `${row.trendKey}\u0000${row.trendUnit || ""}`;
     if (!groups.has(key)) {
-      groups.set(key, { name: row.trendName, unit: row.trendUnit, sectionName: row.sectionName, points: [] });
+      groups.set(key, {
+        name: row.trendName,
+        unit: row.trendUnit,
+        sectionName: row.sectionName,
+        quality: row.trendQuality,
+        confidence: row.trendConfidence,
+        explanation: row.trendExplanation,
+        matchReasons: new Set(),
+        rawNames: new Set(),
+        excludedPoints: excludedByKey.get(key) || [],
+        points: []
+      });
     }
+    const group = groups.get(key)!;
+    if (row.trendReason) group.matchReasons.add(row.trendReason);
+    group.rawNames.add(row.itemName);
     const sourcePage = row.evidencePageNumber
       ? sourcePages.get(`${row.reportId}:${row.evidencePageNumber}`) || null
       : null;
-    groups.get(key)!.points.push({
+    group.points.push({
       observationId: row.observationId,
       reportId: row.reportId,
       reportTitle: row.reportTitle,
@@ -1286,10 +1420,13 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       hospitalName: row.hospitalName,
       itemName: row.itemName,
       resultText: row.resultText,
-      numericValue: row.numericValue,
+      numericValue: row.trendNumericValue!,
       referenceText: row.referenceText,
       abnormalFlag: row.abnormalFlag,
       evidenceQuote: row.evidenceQuote,
+      normalizationQuality: row.normalizationQuality,
+      normalizationConfidence: row.normalizationConfidence,
+      normalizationReason: row.trendReason,
       sourcePage
     });
   }
@@ -1307,6 +1444,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       name: group.name,
       unit: group.unit,
       sectionName: group.sectionName,
+      quality: group.quality,
+      confidence: group.confidence,
+      explanation: group.explanation,
+      matchReasons: [...group.matchReasons].slice(0, 3),
+      sourceNames: [...group.rawNames].slice(0, 8),
+      excludedPoints: group.excludedPoints
+        .sort((left, right) => String(right.reportIssuedAt || "").localeCompare(String(left.reportIssuedAt || "")))
+        .slice(0, 8),
       pointCount: points.length,
       firstDate: points[0]?.reportIssuedAt || null,
       lastDate: latest?.reportIssuedAt || null,
@@ -1497,7 +1642,8 @@ const auditActionTitles: Record<string, string> = {
   "backup.restore": "恢复完整备份",
   "backup.delete": "删除完整备份",
   "maintenance.regenerate_report_titles": "批量清理报告标题",
-  "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图"
+  "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图",
+  "maintenance.normalize_indicators": "重新归一化历史指标",
 };
 
 const auditTargetLabels: Record<string, string> = {
@@ -1506,7 +1652,8 @@ const auditTargetLabels: Record<string, string> = {
   reminder: "提醒",
   health_member: "家庭成员",
   member: "家庭成员",
-  backup: "备份"
+  backup: "备份",
+  observation: "指标",
 };
 
 function shortAuditId(value: string) {
@@ -1675,43 +1822,63 @@ export function getAiAuditSummary(user: RequestUser, limit = 30, cursorValue?: s
   const safeLimit = Math.min(50, Math.max(1, Math.round(limit)));
   const cursor = decodeAuditCursor(cursorValue);
   const summary = getDatabase().prepare(`
+    WITH ai_rows AS (
+      SELECT j.id, 'report_extraction' AS source, j.status, j.attempts,
+        e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens, e.elapsed_ms AS elapsedMs
+      FROM processing_jobs j
+      LEFT JOIN report_extractions e ON e.job_id = j.id
+      WHERE j.job_type = 'ai_extract'
+      UNION ALL
+      SELECT a.id, a.source, a.status, a.attempts,
+        a.prompt_tokens AS promptTokens, a.completion_tokens AS completionTokens, a.elapsed_ms AS elapsedMs
+      FROM ai_audit_events a
+    )
     SELECT
       COUNT(*) AS jobCount,
-      COALESCE(SUM(j.attempts), 0) AS callCount,
-      SUM(j.status = 'completed') AS successJobs,
-      SUM(j.status = 'failed') AS failedJobs,
-      SUM(j.status = 'queued') AS queuedJobs,
-      SUM(j.status = 'processing') AS processingJobs,
-      COALESCE(SUM(e.prompt_tokens), 0) AS promptTokens,
-      COALESCE(SUM(e.completion_tokens), 0) AS completionTokens,
-      COALESCE(AVG(e.elapsed_ms), 0) AS avgElapsedMs
-    FROM processing_jobs j
-    LEFT JOIN report_extractions e ON e.job_id = j.id
-    WHERE j.job_type = 'ai_extract'
+      COALESCE(SUM(attempts), 0) AS callCount,
+      SUM(status = 'completed') AS successJobs,
+      SUM(status = 'failed') AS failedJobs,
+      SUM(status = 'queued') AS queuedJobs,
+      SUM(status = 'processing') AS processingJobs,
+      COALESCE(SUM(promptTokens), 0) AS promptTokens,
+      COALESCE(SUM(completionTokens), 0) AS completionTokens,
+      COALESCE(AVG(elapsedMs), 0) AS avgElapsedMs
+    FROM ai_rows
   `).get() as {
     jobCount: number; callCount: number; successJobs: number | null; failedJobs: number | null;
     queuedJobs: number | null; processingJobs: number | null; promptTokens: number; completionTokens: number;
     avgElapsedMs: number;
   };
   const rows = getDatabase().prepare(`
-    SELECT j.id, j.report_id AS reportId, r.title AS reportTitle, r.member_id AS memberId,
-      j.status, j.attempts, j.error_code AS errorCode, j.error_message AS errorMessage,
-      j.created_at AS createdAt, j.started_at AS startedAt, j.finished_at AS finishedAt,
-      e.provider, e.model, e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens,
-      e.elapsed_ms AS elapsedMs, e.input_characters AS inputCharacters
-    FROM processing_jobs j
-    JOIN reports r ON r.id = j.report_id
-    LEFT JOIN report_extractions e ON e.job_id = j.id
-    WHERE j.job_type = 'ai_extract'
-      AND (
-        ? IS NULL
-        OR j.created_at < ?
-        OR (j.created_at = ? AND j.id < ?)
-      )
-    ORDER BY j.created_at DESC, j.id DESC
+    WITH ai_rows AS (
+      SELECT j.id, 'report_extraction' AS source, j.report_id AS reportId, r.title AS reportTitle, r.member_id AS memberId,
+        j.status, j.attempts, j.error_code AS errorCode, j.error_message AS errorMessage,
+        j.created_at AS createdAt, j.started_at AS startedAt, j.finished_at AS finishedAt,
+        e.provider, e.model, e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens,
+        e.elapsed_ms AS elapsedMs, e.input_characters AS inputCharacters
+      FROM processing_jobs j
+      JOIN reports r ON r.id = j.report_id
+      LEFT JOIN report_extractions e ON e.job_id = j.id
+      WHERE j.job_type = 'ai_extract'
+      UNION ALL
+      SELECT a.id, a.source, a.report_id AS reportId, COALESCE(r.title, a.target_title) AS reportTitle, r.member_id AS memberId,
+        a.status, a.attempts, a.error_code AS errorCode, a.error_message AS errorMessage,
+        a.created_at AS createdAt, a.created_at AS startedAt, a.created_at AS finishedAt,
+        a.provider, a.model, a.prompt_tokens AS promptTokens, a.completion_tokens AS completionTokens,
+        a.elapsed_ms AS elapsedMs, a.input_characters AS inputCharacters
+      FROM ai_audit_events a
+      LEFT JOIN reports r ON r.id = a.report_id
+    )
+    SELECT * FROM ai_rows
+    WHERE (
+      ? IS NULL
+      OR createdAt < ?
+      OR (createdAt = ? AND id < ?)
+    )
+    ORDER BY createdAt DESC, id DESC
     LIMIT ?
   `).all(cursor?.id ?? null, cursor?.createdAt ?? null, cursor?.createdAt ?? null, cursor?.id ?? null, safeLimit + 1) as Array<{
-    id: string; reportId: string; reportTitle: string; memberId: string; status: string; attempts: number;
+    id: string; source: string; reportId: string | null; reportTitle: string; memberId: string | null; status: string; attempts: number;
     errorCode: string | null; errorMessage: string | null; createdAt: string; startedAt: string | null;
     finishedAt: string | null; provider: string | null; model: string | null; promptTokens: number | null;
     completionTokens: number | null; elapsedMs: number | null; inputCharacters: number | null;

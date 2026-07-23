@@ -177,6 +177,9 @@ export type OcrPageText = {
   engine: string | null;
   modelVersion: string | null;
   elapsedMs: number | null;
+  qualityScore: number | null;
+  qualityLevel: "good" | "weak" | "poor" | null;
+  qualityReason: string | null;
   lineCount: number;
   text: string;
 };
@@ -193,6 +196,36 @@ export type Observation = {
   unit: string | null;
   referenceText: string | null;
   abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+  canonicalName: string | null;
+  canonicalValue: number | null;
+  canonicalUnit: string | null;
+  canonicalExplanation: string | null;
+  normalizationQuality: "high" | "medium" | "low" | "excluded" | null;
+  normalizationConfidence: number | null;
+  normalizationReason: string | null;
+  normalizationExcludedReason: string | null;
+};
+
+export type TrendExcludedPoint = {
+  observationId: string;
+  reportId: string;
+  reportTitle: string;
+  reportIssuedAt: string | null;
+  hospitalName: string | null;
+  itemName: string;
+  resultText: string;
+  numericValue: number | null;
+  unit: string | null;
+  reason: string;
+  quality: "low" | "excluded";
+  evidenceQuote: string | null;
+  sourcePage: {
+    id: string;
+    pageNumber: number;
+    originalName: string;
+    mimeType: string;
+    sourcePageNumber: number | null;
+  } | null;
 };
 
 export type TrendPoint = {
@@ -208,6 +241,9 @@ export type TrendPoint = {
   referenceText: string | null;
   abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
   evidenceQuote: string | null;
+  normalizationQuality: "high" | "medium" | "low" | "excluded" | null;
+  normalizationConfidence: number | null;
+  normalizationReason: string | null;
   sourcePage: {
     id: string;
     pageNumber: number;
@@ -221,6 +257,12 @@ export type TrendSeries = {
   name: string;
   unit: string | null;
   sectionName: string | null;
+  quality: "high" | "medium" | "low" | "excluded" | "raw";
+  confidence: number | null;
+  explanation: string | null;
+  matchReasons: string[];
+  sourceNames: string[];
+  excludedPoints: TrendExcludedPoint[];
   pointCount: number;
   firstDate: string | null;
   lastDate: string | null;
@@ -230,6 +272,18 @@ export type TrendSeries = {
   minValue: number | null;
   maxValue: number | null;
   points: TrendPoint[];
+};
+
+export type IndicatorNormalizationIssue = {
+  rawName: string;
+  normalizedName: string | null;
+  unit: string | null;
+  sectionName: string | null;
+  hospitalName: string | null;
+  status: "unknown" | "low" | "excluded";
+  reason: string;
+  count: number;
+  latestReportIssuedAt: string | null;
 };
 
 export type ReportDetail = ReportSummary & {
@@ -328,9 +382,10 @@ export type AiAuditSummary = {
   };
   recent: Array<{
     id: string;
-    reportId: string;
+    source: "report_extraction" | "indicator_normalization" | string;
+    reportId: string | null;
     reportTitle: string;
-    memberId: string;
+    memberId: string | null;
     status: string;
     attempts: number;
     errorCode: string | null;

@@ -11,6 +11,7 @@ import { request, apiUrl } from "../utils/api";
 import { formatDatabaseTime } from "../utils/time";
 import type { OcrPageText, ProcessingJob, ProcessingJobEvent, ReportDetail, ReportPage, ReportSummary } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
+import { useConfirm } from "../composables/useConfirm";
 import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
 
@@ -29,6 +30,7 @@ const emit = defineEmits<{
 
 const app = useAppContext();
 const toast = useToast();
+const confirmDialog = useConfirm();
 const detail = ref<ReportDetail | null>(null);
 const detailLoading = ref(false);
 const detailError = ref("");
@@ -252,6 +254,22 @@ function observationLine(item: ReportDetail["observations"][number]) {
   return [item.resultText, item.unit, item.referenceText ? `参考 ${item.referenceText}` : ""].filter(Boolean).join(" ");
 }
 
+function observationNormalizationLine(item: ReportDetail["observations"][number]) {
+  if (item.canonicalName) {
+    const quality = {
+      high: "高可信",
+      medium: "中可信",
+      low: "低可信",
+      excluded: "已识别"
+    }[String(item.normalizationQuality)] || "已识别";
+    const value = item.canonicalValue !== null && item.canonicalValue !== undefined
+      ? ` · 趋势值 ${item.canonicalValue}${item.canonicalUnit ? ` ${item.canonicalUnit}` : ""}`
+      : "";
+    return `已整理为：${item.canonicalName} · ${quality}${value}`;
+  }
+  return "";
+}
+
 function openEditReport() {
   const current = source.value;
   if (!current) return;
@@ -329,17 +347,24 @@ async function moveSavedPage(page: ReportPage, direction: -1 | 1) {
 }
 
 async function deleteSavedPage(page: ReportPage) {
-  if (!window.confirm(`确认删除第 ${page.pageNumber} 页？原文件不会立即物理清理。`)) return;
-  savingPages.value = true;
-  try {
-    detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" });
-    emit("updated");
-    toast.show("页面已删除");
-  } catch (cause) {
-    detailError.value = cause instanceof Error ? cause.message : "页面删除失败";
-  } finally {
-    savingPages.value = false;
-  }
+  confirmDialog.ask({
+    title: "删除单页",
+    message: `确认删除第 ${page.pageNumber} 页？原文件不会立即物理清理。`,
+    confirmText: "删除",
+    danger: true,
+    run: async () => {
+      savingPages.value = true;
+      try {
+        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" });
+        emit("updated");
+        toast.show("页面已删除");
+      } catch (cause) {
+        detailError.value = cause instanceof Error ? cause.message : "页面删除失败";
+      } finally {
+        savingPages.value = false;
+      }
+    }
+  });
 }
 
 async function openOcrText() {
@@ -371,10 +396,18 @@ async function confirmReady() {
   }
 }
 
+function askTrash() {
+  confirmDialog.ask({
+    title: "移入回收站",
+    message: `确认将「${source.value?.title || "当前报告"}」移入回收站？原件会保留 30 天，不会立刻删除。`,
+    confirmText: "移入回收站",
+    danger: true,
+    run: trashCurrentReport
+  });
+}
+
 async function trashCurrentReport() {
   if (trashingReport.value) return;
-  const title = source.value?.title || "当前报告";
-  if (!window.confirm(`确认将「${title}」移入回收站？原件会保留 30 天，不会立刻删除。`)) return;
   trashingReport.value = true;
   jobsError.value = "";
   try {
@@ -409,28 +442,32 @@ async function triggerAiExtraction() {
 async function reprocessCurrentReport() {
   if (reprocessingReport.value) return;
   const title = source.value?.title || "当前报告";
-  if (!window.confirm(
-    `确认重新识别「${title}」？\n\n会清空这份报告当前的 OCR 文本、AI 整理结果、指标和结构化字段，然后重新 OCR；原件不会删除。若已手工校对过字段，也会被重置。`
-  )) return;
-  reprocessingReport.value = true;
-  jobsError.value = "";
-  try {
-    const result = await request<{ queuedOcr: number; aiWillRun: boolean }>(
-      `reports/${encodeURIComponent(props.reportId)}/reprocess`,
-      { method: "POST" }
-    );
-    processingExpanded.value = true;
-    await refreshJobs();
-    await loadDetail(props.reportId, true);
-    emit("updated");
-    toast.show(result.aiWillRun
-      ? `已重新排队 OCR ${result.queuedOcr} 页，完成后会自动 AI 整理`
-      : `已重新排队 OCR ${result.queuedOcr} 页，AI 未配置时需稍后手动整理`);
-  } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "重新识别失败";
-  } finally {
-    reprocessingReport.value = false;
-  }
+  confirmDialog.ask({
+    title: "重新识别",
+    message: `确认重新识别「${title}」？\n\n会清空这份报告当前的 OCR 文本、AI 整理结果、指标和结构化字段，然后重新 OCR；原件不会删除。若已手工校对过字段，也会被重置。`,
+    confirmText: "重新识别",
+    run: async () => {
+      reprocessingReport.value = true;
+      jobsError.value = "";
+      try {
+        const result = await request<{ queuedOcr: number; aiWillRun: boolean }>(
+          `reports/${encodeURIComponent(props.reportId)}/reprocess`,
+          { method: "POST" }
+        );
+        processingExpanded.value = true;
+        await refreshJobs();
+        await loadDetail(props.reportId, true);
+        emit("updated");
+        toast.show(result.aiWillRun
+          ? `已重新排队 OCR ${result.queuedOcr} 页，完成后会自动 AI 整理`
+          : `已重新排队 OCR ${result.queuedOcr} 页，AI 未配置时需稍后手动整理`);
+      } catch (cause) {
+        jobsError.value = cause instanceof Error ? cause.message : "重新识别失败";
+      } finally {
+        reprocessingReport.value = false;
+      }
+    }
+  });
 }
 
 function handleViewerKeydown(event: KeyboardEvent) {
@@ -558,6 +595,10 @@ onBeforeUnmount(() => {
         <span v-if="statusMeta[source.status]" class="chip" :class="statusMeta[source.status].chip">
           {{ statusMeta[source.status].label }}
         </span>
+        <button class="preview-trash-button" type="button" title="移入回收站" :disabled="trashingReport" @click="askTrash">
+          <LoaderCircle v-if="trashingReport" class="spin-icon" :size="16" />
+          <Trash2 v-else :size="16" />
+        </button>
       </div>
       <h3>{{ source.title }}</h3>
       <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
@@ -579,17 +620,6 @@ onBeforeUnmount(() => {
         <button class="soft-action-button" type="button" @click="openEditReport"><Pencil :size="17" />校对字段</button>
         <button class="soft-action-button" type="button" @click="openOcrText"><ScrollText :size="17" />查看 OCR</button>
         <button v-if="firstPdfPage" class="soft-action-button" type="button" @click="openPdfOriginalViewer(firstPdfPage)"><FileText :size="17" />查看 PDF</button>
-        <button
-          v-if="source.status !== 'trashed'"
-          class="soft-action-button danger-action-button"
-          type="button"
-          :disabled="trashingReport"
-          @click="trashCurrentReport"
-        >
-          <LoaderCircle v-if="trashingReport" class="spin-icon" :size="17" />
-          <Trash2 v-else :size="17" />
-          {{ trashingReport ? "移动中" : "移入回收站" }}
-        </button>
       </div>
       <section v-if="duplicateCandidates.length" class="duplicate-warning">
         <CircleAlert :size="18" />
@@ -609,11 +639,6 @@ onBeforeUnmount(() => {
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">
             <button class="duplicate-confirm-button" type="button" :disabled="confirming" @click="confirmReady">
               <CheckCircle2 :size="15" />仍然确认归档
-            </button>
-            <button class="duplicate-trash-button" type="button" :disabled="trashingReport" @click="trashCurrentReport">
-              <LoaderCircle v-if="trashingReport" class="spin-icon" :size="15" />
-              <Trash2 v-else :size="15" />
-              {{ trashingReport ? "移动中" : "移入回收站" }}
             </button>
           </div>
         </div>
@@ -653,6 +678,8 @@ onBeforeUnmount(() => {
             <article v-for="item in visibleObservations" :key="item.id">
               <div><strong>{{ item.itemName }}</strong><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
               <p>{{ observationLine(item) }}</p>
+              <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
+              <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
               <em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em>
             </article>
           </div>
@@ -812,8 +839,12 @@ onBeforeUnmount(() => {
             <article v-for="page in ocrPages" :key="page.pageId" class="ocr-page-text">
               <header>
                 <strong>第 {{ page.pageNumber }} 页</strong>
-                <span>{{ page.engine || "未识别" }}<template v-if="page.elapsedMs"> · {{ formatMs(page.elapsedMs) }}</template> · {{ page.lineCount }} 行</span>
+                <span>
+                  {{ page.engine || "未识别" }}<template v-if="page.elapsedMs"> · {{ formatMs(page.elapsedMs) }}</template> · {{ page.lineCount }} 行
+                  <template v-if="page.qualityLevel"> · 质量{{ page.qualityLevel === "good" ? "良好" : page.qualityLevel === "weak" ? "偏弱" : "较差" }} {{ page.qualityScore ?? "—" }}</template>
+                </span>
               </header>
+              <p v-if="page.qualityLevel && page.qualityLevel !== 'good'" class="preview-hint">{{ page.qualityReason || "OCR 文本质量不足，AI 整理可能不完整，可尝试重新 OCR 或启用视觉模型兜底。" }}</p>
               <pre v-if="page.text">{{ page.text }}</pre>
               <p v-else class="preview-hint">这一页还没有 OCR 文本，可能仍在处理或识别失败。</p>
             </article>

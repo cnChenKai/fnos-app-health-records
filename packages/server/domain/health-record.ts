@@ -42,6 +42,14 @@ export type Observation = {
   referenceText: string | null;
   abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
   evidence: EvidenceRef | null;
+  canonicalName: string | null;
+  canonicalValue: number | null;
+  canonicalUnit: string | null;
+  canonicalExplanation: string | null;
+  normalizationQuality: "high" | "medium" | "low" | "excluded" | null;
+  normalizationConfidence: number | null;
+  normalizationReason: string | null;
+  normalizationExcludedReason: string | null;
 };
 
 export type ReportPage = {

@@ -152,6 +152,61 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS observations_trend_idx
   ON observations(normalized_name, unit, report_id);
 
+CREATE TABLE IF NOT EXISTS indicator_catalog (
+  id TEXT PRIMARY KEY,
+  canonical_key TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  specimen TEXT,
+  default_unit TEXT,
+  value_type TEXT NOT NULL DEFAULT 'numeric' CHECK (value_type IN ('numeric', 'text', 'positive_negative')),
+  trend_enabled INTEGER NOT NULL DEFAULT 1 CHECK (trend_enabled IN (0, 1)),
+  explanation TEXT,
+  source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'user')),
+  builtin_version TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS indicator_aliases (
+  id TEXT PRIMARY KEY,
+  indicator_id TEXT NOT NULL REFERENCES indicator_catalog(id) ON DELETE CASCADE,
+  alias_name TEXT NOT NULL,
+  normalized_alias TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global' CHECK (scope IN ('global', 'hospital', 'department', 'report_type')),
+  hospital_name TEXT,
+  department_name TEXT,
+  report_type TEXT,
+  source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'user', 'ai_suggestion')),
+  confidence REAL NOT NULL DEFAULT 1,
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS indicator_aliases_lookup_idx
+  ON indicator_aliases(normalized_alias, enabled, scope);
+
+CREATE TABLE IF NOT EXISTS observation_normalizations (
+  observation_id TEXT PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
+  indicator_id TEXT REFERENCES indicator_catalog(id) ON DELETE SET NULL,
+  canonical_key TEXT,
+  canonical_name TEXT,
+  canonical_value REAL,
+  canonical_unit TEXT,
+  confidence REAL NOT NULL DEFAULT 0,
+  quality TEXT NOT NULL CHECK (quality IN ('high', 'medium', 'low', 'excluded')),
+  matched_by TEXT NOT NULL,
+  match_reason TEXT NOT NULL,
+  excluded_reason TEXT,
+  version TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS observation_normalizations_trend_idx
+  ON observation_normalizations(canonical_key, canonical_unit, quality);
+
 CREATE TABLE IF NOT EXISTS processing_jobs (
   id TEXT PRIMARY KEY,
   report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
@@ -199,6 +254,10 @@ CREATE TABLE IF NOT EXISTS ocr_results (
   engine TEXT NOT NULL,
   model_version TEXT NOT NULL,
   lines_json TEXT NOT NULL,
+  quality_score INTEGER,
+  quality_level TEXT CHECK (quality_level IS NULL OR quality_level IN ('good', 'weak', 'poor')),
+  quality_reason TEXT,
+  text_length INTEGER,
   elapsed_ms INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -223,6 +282,32 @@ CREATE TABLE IF NOT EXISTS report_extractions (
 
 CREATE INDEX IF NOT EXISTS report_extractions_report_idx
   ON report_extractions(report_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS ai_audit_events (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL CHECK (source IN ('indicator_normalization')),
+  actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+  target_title TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+  attempts INTEGER NOT NULL DEFAULT 1,
+  provider TEXT,
+  model TEXT,
+  prompt_version TEXT NOT NULL,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  elapsed_ms INTEGER,
+  input_characters INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT,
+  error_message TEXT,
+  detail_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ai_audit_events_created_idx
+  ON ai_audit_events(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS ai_audit_events_report_idx
+  ON ai_audit_events(report_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS reminders (
   id TEXT PRIMARY KEY,

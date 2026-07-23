@@ -2,7 +2,7 @@
   "appName": "fnos-app-health-records",
   "appTitle": "健康档案",
   "displayName": "健康档案",
-  "appDescription": "健康档案用于集中管理家庭成员的体检、门诊检查、住院单据及其他个人健康报告。支持拍照、多图和 PDF 上传，保留报告原件与单页高清图，通过本地 OCR 和可配置 AI 整理医院、日期、科室、部位、结论、指标和复查建议，并按报告生成日期形成时间轴、趋势与提醒。开源仓库：https://github.com/timor-m/fnos-app-health-records",
+  "appDescription": "健康档案用于集中管理家庭成员的体检、门诊检查、住院单据及其他个人健康报告。支持拍照、多图和 PDF 上传，保留报告原件与单页高清图，通过本地 OCR 和可配置 AI 整理医院、日期、科室、部位、结论、指标和复查建议；内置常见检验指标字典，可按名称、单位和报告上下文生成可信趋势，非预设指标可调用已配置 AI 生成保守归一化建议，并支持来源原图反向定位和管理员问题池维护。应用还提供提醒、重复检测、回收站、完整备份恢复、用户操作日志、AI 审计和 SQLite 按需迁移。开源仓库：https://github.com/timor-m/fnos-app-health-records",
   "desktopLaunchName": "fnos-app-health-records.main",
   "gatewayPrefix": "/app/fnos-app-health-records",
   "gatewaySocket": "app.sock",
@@ -19,10 +19,14 @@
   "runAs": "package",
   "logLevel": "info",
   "releaseNotes": {
-    "summary": "健康档案核心功能闭环、AI 识别、提醒、审计和备份恢复能力更新。",
+    "summary": "健康档案核心功能闭环、AI 识别、指标归一化趋势、非预设指标 AI 兜底、审计、提醒和备份恢复能力更新。",
     "highlights": [
       "拍照、多图和 PDF 上传，支持 OCR、AI 整理和报告校对",
-      "按报告日期展示档案时间轴，支持趋势、提醒、重复检测和回收站",
+      "按报告日期展示档案时间轴，支持指标归一化趋势和来源原图定位",
+      "非预设指标可调用已配置文本模型生成保守归一化建议",
+      "管理员可查看指标理解问题池，并重新归一化历史指标",
+      "扩展 BMI、血清尿酸、妇科超声、乙肝/感染筛查和常见体检阳性发现识别",
+      "支持提醒、重复检测、回收站和 SQLite schema v7 按需迁移",
       "完整应用备份创建、下载、恢复、恢复前安全备份和备份删除",
       "运行状态、用户操作日志、AI 审计和 fnOS 系统管理员权限"
     ]

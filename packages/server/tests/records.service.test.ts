@@ -37,6 +37,13 @@ import {
   updateReportPages,
   validateBackup
 } from "../services/records.service.ts";
+import {
+  listIndicatorNormalizationIssues,
+  normalizeAllObservationsWithAiFallback,
+  normalizeAllObservations,
+  normalizeReportObservationsWithAiFallback,
+  type AiIndicatorExecutor
+} from "../services/indicator-normalization.service.ts";
 import { createUpload } from "../services/upload.service.ts";
 
 const manager: RequestUser = {
@@ -695,6 +702,7 @@ test("returns concrete trend values from reviewed and archived reports", () => {
 
     const first = createUpload(manager, "records-member", [{ originalName: "first.png", data: pngBytes() }]);
     const second = createUpload(manager, "records-member", [{ originalName: "second.png", data: pngBytes() }]);
+    const urine = createUpload(manager, "records-member", [{ originalName: "urine.png", data: pngBytes() }]);
     db.prepare(`
       UPDATE reports SET title = ?, report_type = 'laboratory', status = ?, hospital_name_raw = '示例医院', report_issued_at = ?
       WHERE id = ?
@@ -703,42 +711,368 @@ test("returns concrete trend values from reviewed and archived reports", () => {
       UPDATE reports SET title = ?, report_type = 'laboratory', status = ?, hospital_name_raw = '示例医院', report_issued_at = ?
       WHERE id = ?
     `).run("第二次血糖", "needs_review", "2026-07-21", second.reportId);
-	    const insertObservation = db.prepare(`
-	      INSERT INTO observations (
-	        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit,
-	        reference_text, abnormal_flag, evidence_json
-	      ) VALUES (?, ?, '生化检验', ?, ?, ?, ?, ?, '3.9-6.1', ?, ?)
-	    `);
-	    insertObservation.run("obs-first", first.reportId, "空腹血糖", "空腹血糖", "5.2 mmol/L", null, "MMOL/L", "normal", JSON.stringify([{ pageNumber: 1, quote: "空腹血糖 5.2 mmol/L" }]));
-	    insertObservation.run("obs-second", second.reportId, "血糖", "血糖", "6.8", 6.8, "mmol/L", "high", JSON.stringify([{ pageNumber: 1, quote: "血糖 6.8 mmol/L" }]));
+    db.prepare(`
+      UPDATE reports SET title = ?, report_type = 'laboratory', status = ?, hospital_name_raw = '示例医院', report_issued_at = ?
+      WHERE id = ?
+    `).run("尿常规", "ready", "2026-07-22", urine.reportId);
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit,
+        reference_text, abnormal_flag, evidence_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertObservation.run("obs-first", first.reportId, "生化检验", "空腹血糖", "空腹血糖", "5.2 mmol/L", null, "MMOL/L", "3.9-6.1", "normal", JSON.stringify([{ pageNumber: 1, quote: "空腹血糖 5.2 mmol/L" }]));
+    insertObservation.run("obs-second", second.reportId, "生化检验", "血糖", "血糖", "6.8", 6.8, "mmol/L", "3.9-6.1", "high", JSON.stringify([{ pageNumber: 1, quote: "血糖 6.8 mmol/L" }]));
+    insertObservation.run("obs-urine-glu", urine.reportId, "尿常规", "GLU", "GLU", "阴性", null, null, "阴性", "normal", JSON.stringify([{ pageNumber: 1, quote: "GLU 阴性" }]));
+    const normalized = normalizeAllObservations(manager);
+    assert.equal(normalized.normalized, 2);
 
-	    const trends = listTrendSeries(manager, "records-member") as Array<{
-	      name: string;
-	      unit: string;
-	      pointCount: number;
-	      latestValue: number;
-	      delta: number;
-	      points: Array<{
-	        reportId: string;
-	        numericValue: number;
-	        reportStatus: string;
-	        abnormalFlag: string;
-	        evidenceQuote: string | null;
-	        sourcePage: { id: string; pageNumber: number; originalName: string } | null;
-	      }>;
-	    }>;
-	    assert.equal(trends.length, 1);
-	    assert.equal(trends[0].name, "空腹血糖");
-	    assert.equal(trends[0].unit, "mmol/L");
-	    assert.equal(trends[0].pointCount, 2);
-	    assert.equal(trends[0].latestValue, 6.8);
-	    assert.equal(Number(trends[0].delta.toFixed(1)), 1.6);
+    const trends = listTrendSeries(manager, "records-member") as Array<{
+      name: string;
+      unit: string;
+      quality: string;
+      sourceNames: string[];
+      excludedPoints: Array<{ itemName: string; resultText: string; reason: string; sourcePage: { id: string } | null }>;
+      pointCount: number;
+      latestValue: number;
+      delta: number;
+      points: Array<{
+        observationId: string;
+        reportId: string;
+        numericValue: number;
+        reportStatus: string;
+        abnormalFlag: string;
+        evidenceQuote: string | null;
+        sourcePage: { id: string; pageNumber: number; originalName: string } | null;
+      }>;
+    }>;
+    assert.equal(trends.length, 1);
+    assert.equal(trends[0].name, "空腹血糖");
+    assert.equal(trends[0].unit, "mmol/L");
+    assert.equal(trends[0].quality, "high");
+    assert.deepEqual(new Set(trends[0].sourceNames), new Set(["空腹血糖", "血糖"]));
+    assert.equal(trends[0].excludedPoints.length, 1);
+    assert.equal(trends[0].excludedPoints[0].itemName, "GLU");
+    assert.equal(trends[0].excludedPoints[0].resultText, "阴性");
+    assert.match(trends[0].excludedPoints[0].reason, /尿液|没有可靠数值|不归入血糖趋势/);
+    assert.equal(trends[0].pointCount, 2);
+    assert.equal(trends[0].latestValue, 6.8);
+    assert.equal(Number(trends[0].delta.toFixed(1)), 1.6);
 	    assert.deepEqual(trends[0].points.map((point) => point.numericValue), [5.2, 6.8]);
 	    assert.equal(trends[0].points[1].reportStatus, "needs_review");
-	    assert.equal(trends[0].points[1].abnormalFlag, "high");
-	    assert.equal(trends[0].points[1].evidenceQuote, "血糖 6.8 mmol/L");
-	    assert.equal(trends[0].points[1].sourcePage?.pageNumber, 1);
-	    assert.equal(trends[0].points[1].sourcePage?.originalName, "second.png");
+    assert.equal(trends[0].points[1].abnormalFlag, "high");
+    assert.equal(trends[0].points[1].evidenceQuote, "血糖 6.8 mmol/L");
+    assert.equal(trends[0].points[1].sourcePage?.pageNumber, 1);
+    assert.equal(trends[0].points[1].sourcePage?.originalName, "second.png");
+
+    const issues = listIndicatorNormalizationIssues(manager);
+    assert.equal(issues.some((item) => item.rawName === "GLU" && item.status === "excluded"), true);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("normalizes common health checkup issue-pool indicators", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-issues-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "checkup.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '年度体检', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '深圳瑞慈瑞新健康体检中心', report_issued_at = '2026-06-15'
+      WHERE id = ?
+    `).run(report.reportId);
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, abnormal_flag
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertObservation.run("issue-bmi", report.reportId, "一般检查", "体重指数BMI", "体重指数", "23.4", 23.4, null, "normal");
+    insertObservation.run("issue-uric", report.reportId, "肾脏功能", "血清尿酸", "血清尿酸", "450", 450, "μmol/L", "high");
+    insertObservation.run("issue-endo", report.reportId, "检查所见", "内膜厚度", "子宫内膜厚度", "0.8", 0.8, "cm", "normal");
+    insertObservation.run("issue-thyroid", report.reportId, "超声成像检查", "左叶甲状腺结节，C-TIRADS 3类", "甲状腺结节", "左叶甲状腺结节，C-TIRADS 3类", null, null, "abnormal");
+    insertObservation.run("issue-hbv-dna", report.reportId, "乙型肝炎病毒核酸定量", "乙型肝炎病毒核酸定量", "乙型肝炎病毒核酸定量", "1200", 1200, "IU/ML", "abnormal");
+    insertObservation.run("issue-hbsag", report.reportId, "乙肝两对半", "乙型肝炎表面抗原（定性）", "乙型肝炎表面抗原", "阴性", null, null, "normal");
+
+    normalizeAllObservations(manager);
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey, canonical_name AS canonicalName,
+        canonical_value AS canonicalValue, canonical_unit AS canonicalUnit, quality, excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'issue-%'
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      canonicalName: string | null;
+      canonicalValue: number | null;
+      canonicalUnit: string | null;
+      quality: string;
+      excludedReason: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+
+    assert.equal(byId.get("issue-bmi")?.canonicalKey, "body_bmi");
+    assert.equal(byId.get("issue-bmi")?.quality, "medium");
+    assert.equal(byId.get("issue-uric")?.canonicalKey, "renal_uric_acid");
+    assert.equal(byId.get("issue-uric")?.quality, "high");
+    assert.equal(byId.get("issue-endo")?.canonicalKey, "gyn_endometrium_thickness");
+    assert.equal(byId.get("issue-endo")?.canonicalUnit, "mm");
+    assert.equal(byId.get("issue-endo")?.canonicalValue, 8);
+    assert.equal(byId.get("issue-thyroid")?.canonicalKey, "finding_thyroid_nodule");
+    assert.equal(byId.get("issue-thyroid")?.quality, "excluded");
+    assert.match(byId.get("issue-thyroid")?.excludedReason || "", /不默认进入折线趋势|不是数值型/);
+    assert.equal(byId.get("issue-hbv-dna")?.canonicalKey, "infectious_hbv_dna");
+    assert.equal(byId.get("issue-hbv-dna")?.canonicalUnit, "IU/mL");
+    assert.equal(byId.get("issue-hbsag")?.canonicalKey, "infectious_hbsag");
+    assert.equal(byId.get("issue-hbsag")?.quality, "excluded");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("uses AI fallback for indicators that are not in the builtin catalog", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-ai-fallback-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "unknown.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '未知指标报告', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '示例体检中心', report_issued_at = '2026-07-21'
+      WHERE id = ?
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, reference_text, abnormal_flag
+      ) VALUES
+        ('ai-fallback-numeric', ?, '特殊检查', '示例新数值指标A', '示例新数值指标A', '12.5 ng/mL', 12.5, 'ng/mL', '0-20', 'normal'),
+        ('ai-fallback-text', ?, '特殊检查', '示例新影像发现B', '示例新影像发现B', '可见局灶性描述', NULL, NULL, NULL, 'abnormal')
+    `).run(report.reportId, report.reportId);
+
+    const fakeExecutor: AiIndicatorExecutor = async (input) => {
+      assert.deepEqual(input.items.map((item) => item.observationId).sort(), ["ai-fallback-numeric", "ai-fallback-text"]);
+      return {
+        provider: "test-ai",
+        model: "test-model",
+        promptVersion: "test-indicator-ai",
+        candidates: [
+          {
+            observationId: "ai-fallback-numeric",
+            canonicalName: "示例新数值指标",
+            category: "特殊检查",
+            valueType: "numeric",
+            trendEnabled: true,
+            canonicalUnit: "ng/mL",
+            canonicalValue: 12.5,
+            confidence: 0.93,
+            reason: "AI 根据名称、单位和数值结果判断为单一数值指标"
+          },
+          {
+            observationId: "ai-fallback-text",
+            canonicalName: "示例新影像发现",
+            category: "影像所见",
+            valueType: "text",
+            trendEnabled: false,
+            canonicalUnit: null,
+            canonicalValue: null,
+            confidence: 0.9,
+            reason: "AI 判断为文字性发现，不适合趋势"
+          }
+        ],
+        rawResponseJson: "{}",
+        promptTokens: 40,
+        completionTokens: 20,
+        elapsedMs: 120
+      };
+    };
+
+    const result = await normalizeReportObservationsWithAiFallback(report.reportId, null, fakeExecutor);
+    assert.equal(result.ai.skipped, false);
+    assert.equal(result.ai.applied, 2);
+
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey, canonical_name AS canonicalName,
+        canonical_value AS canonicalValue, canonical_unit AS canonicalUnit, quality, matched_by AS matchedBy,
+        excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'ai-fallback-%'
+      ORDER BY observation_id
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      canonicalName: string | null;
+      canonicalValue: number | null;
+      canonicalUnit: string | null;
+      quality: string;
+      matchedBy: string;
+      excludedReason: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+    assert.equal(byId.get("ai-fallback-numeric")?.canonicalName, "示例新数值指标");
+    assert.equal(byId.get("ai-fallback-numeric")?.quality, "high");
+    assert.equal(byId.get("ai-fallback-numeric")?.matchedBy, "ai_suggestion");
+    assert.equal(byId.get("ai-fallback-text")?.canonicalName, "示例新影像发现");
+    assert.equal(byId.get("ai-fallback-text")?.quality, "excluded");
+    assert.match(byId.get("ai-fallback-text")?.excludedReason || "", /不适合进入折线趋势/);
+
+    const trends = listTrendSeries(manager, "records-member") as Array<{ name: string; pointCount: number; excludedPoints: Array<{ itemName: string }> }>;
+    assert.equal(trends.some((item) => item.name === "示例新数值指标" && item.pointCount === 1), true);
+    const series = trends.find((item) => item.name === "示例新数值指标");
+    assert.equal(series?.excludedPoints.some((point) => point.itemName === "示例新影像发现B"), false);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("maintenance indicator normalization only fills uncategorized observations", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-incremental-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "normalized.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '已整理指标报告', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '示例体检中心', report_issued_at = '2026-07-21'
+      WHERE id = ?
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, reference_text, abnormal_flag
+      ) VALUES
+        ('already-ai-normalized', ?, '特殊检查', '示例新数值指标A', '示例新数值指标A', '12.5 ng/mL', 12.5, 'ng/mL', '0-20', 'normal')
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, indicator_id, canonical_key, canonical_name, canonical_value, canonical_unit,
+        confidence, quality, matched_by, match_reason, excluded_reason, version
+      ) VALUES (
+        'already-ai-normalized', NULL, 'ai:custom_metric', 'AI 自定义指标',
+        12.5, 'ng/mL', 0.93, 'high', 'ai_suggestion', '历史 AI 归一化结果', NULL, 'indicator-normalization-old'
+      )
+    `).run();
+
+    let aiCalls = 0;
+    const result = await normalizeAllObservationsWithAiFallback(manager, async () => {
+      aiCalls += 1;
+      throw new Error("maintenance should not reprocess already normalized observations");
+    });
+
+    assert.equal(result.scanned, 0);
+    assert.equal(result.ai?.reports, 0);
+    assert.equal(aiCalls, 0);
+    const row = db.prepare(`
+      SELECT canonical_name AS canonicalName, matched_by AS matchedBy
+      FROM observation_normalizations
+      WHERE observation_id = 'already-ai-normalized'
+    `).get() as { canonicalName: string; matchedBy: string };
+    assert.equal(row.canonicalName, "AI 自定义指标");
+    assert.equal(row.matchedBy, "ai_suggestion");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("maintenance indicator AI fallback is included in AI audit", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-ai-audit-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "audit.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '指标审计报告', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '示例体检中心', report_issued_at = '2026-07-21'
+      WHERE id = ?
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, reference_text, abnormal_flag
+      ) VALUES
+        ('ai-audit-indicator', ?, '特殊检查', 'AI审计新指标', 'AI审计新指标', '7.2 U/L', 7.2, 'U/L', '0-10', 'normal')
+    `).run(report.reportId);
+
+    const result = await normalizeAllObservationsWithAiFallback(manager, async (input) => ({
+      provider: "test-ai",
+      model: "indicator-model",
+      promptVersion: "test-indicator-ai",
+      candidates: [{
+        observationId: input.items[0].observationId,
+        canonicalName: "AI 审计指标",
+        category: "特殊检查",
+        valueType: "numeric",
+        trendEnabled: true,
+        canonicalUnit: "U/L",
+        canonicalValue: 7.2,
+        confidence: 0.94,
+        reason: "测试 AI 指标归一化审计"
+      }],
+      rawResponseJson: "{}",
+      promptTokens: 21,
+      completionTokens: 9,
+      elapsedMs: 88
+    }));
+    assert.equal(result.ai?.applied, 1);
+
+    const audit = getAiAuditSummary(manager);
+    assert.equal(audit.summary.jobCount, 1);
+    assert.equal(audit.summary.callCount, 1);
+    assert.equal(audit.summary.successJobs, 1);
+    assert.equal(audit.summary.totalTokens, 30);
+    assert.equal(audit.recent[0].source, "indicator_normalization");
+    assert.equal(audit.recent[0].reportTitle, "指标审计报告");
+    assert.equal(audit.recent[0].model, "indicator-model");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

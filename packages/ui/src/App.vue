@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import AppShell from "./layouts/AppShell.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
 import LoginView from "./pages/LoginView.vue";
 import { useAppContext } from "./composables/useAppContext";
 import { useTheme } from "./composables/useTheme";
@@ -29,5 +30,6 @@ onMounted(() => {
   </div>
   <LoginView v-else-if="!app.session.value?.authenticated" @authenticated="app.load" />
   <AppShell v-else />
+  <ConfirmDialog />
   <div class="toast" :class="{ show: toast.visible.value }" role="status">{{ toast.message.value }}</div>
 </template>

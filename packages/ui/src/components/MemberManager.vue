@@ -2,12 +2,14 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Pencil, Plus, ShieldCheck, Trash2, UserRound, UsersRound, X } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
+import { useConfirm } from "../composables/useConfirm";
 import { useScrollLock } from "../composables/useScrollLock";
 import FormSelect from "./FormSelect.vue";
 import type { AccessUser, HealthMember, MemberAccess } from "../types/api";
 import { request } from "../utils/api";
 
 const app = useAppContext();
+const confirmDialog = useConfirm();
 const relationshipLabels: Record<string, string> = {
   self: "本人", spouse: "配偶", child: "子女", parent: "父母", sibling: "兄弟姐妹", other: "其他"
 };
@@ -75,13 +77,20 @@ async function saveMember() {
 }
 
 async function removeMember(member: HealthMember) {
-  if (!window.confirm(`确认删除 ${member.displayName} 的家庭成员档案？已有数据会保留但不再显示。`)) return;
-  try {
-    await request(`members/${member.id}`, { method: "DELETE" });
-    await app.refreshMembers();
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "删除失败";
-  }
+  confirmDialog.ask({
+    title: "删除家庭成员",
+    message: `确认删除 ${member.displayName} 的家庭成员档案？已有数据会保留但不再显示。`,
+    confirmText: "删除",
+    danger: true,
+    run: async () => {
+      try {
+        await request(`members/${member.id}`, { method: "DELETE" });
+        await app.refreshMembers();
+      } catch (cause) {
+        error.value = cause instanceof Error ? cause.message : "删除失败";
+      }
+    }
+  });
 }
 
 async function openAccess(member: HealthMember) {

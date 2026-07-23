@@ -20,7 +20,8 @@ test("initializes the health records schema with WAL", () => {
       "users", "user_identities", "health_members", "member_permissions", "reports",
       "report_pages", "observations", "processing_jobs", "reminders", "local_accounts",
       "auth_sessions", "audit_logs", "report_extractions", "processing_job_events", "app_notifications",
-      "app_upgrade_history"
+      "app_upgrade_history", "indicator_catalog", "indicator_aliases", "observation_normalizations",
+      "ai_audit_events"
     ]) {
       assert.equal(names.has(expected), true, `missing table ${expected}`);
     }
@@ -75,6 +76,10 @@ test("migrates an existing v1 database to PDF source page columns", () => {
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_upgrade_history'
     `).get() as { name: string } | undefined;
     assert.equal(upgradeTable?.name, "app_upgrade_history");
+    const aiAuditTable = getDatabase().prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_audit_events'
+    `).get() as { name: string } | undefined;
+    assert.equal(aiAuditTable?.name, "ai_audit_events");
     const upgrades = getDatabase().prepare("SELECT COUNT(*) AS count FROM app_upgrade_history WHERE status = 'completed'").get() as
       { count: number };
     assert.equal(upgrades.count, 1);

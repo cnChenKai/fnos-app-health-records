@@ -12,6 +12,7 @@ import TrashSettingsPage from "./pages/settings/TrashSettingsPage.vue";
 import DataAuditSettingsPage from "./pages/settings/DataAuditSettingsPage.vue";
 import DuplicatesSettingsPage from "./pages/settings/DuplicatesSettingsPage.vue";
 import MaintenanceSettingsPage from "./pages/settings/MaintenanceSettingsPage.vue";
+import IndicatorIssuesSettingsPage from "./pages/settings/IndicatorIssuesSettingsPage.vue";
 import UserAuditSettingsPage from "./pages/settings/UserAuditSettingsPage.vue";
 import AiAuditSettingsPage from "./pages/settings/AiAuditSettingsPage.vue";
 import AboutSettingsPage from "./pages/settings/AboutSettingsPage.vue";
@@ -36,6 +37,7 @@ const router = createRouter({
     { path: "/me/audit", component: UserAuditSettingsPage, meta: { title: "用户操作日志", requiresAdmin: true } },
     { path: "/me/ai-audit", component: AiAuditSettingsPage, meta: { title: "AI 审计", requiresAdmin: true } },
     { path: "/me/maintenance", component: MaintenanceSettingsPage, meta: { title: "维护工具", requiresAdmin: true } },
+    { path: "/me/maintenance/indicator-issues", component: IndicatorIssuesSettingsPage, meta: { title: "指标问题池", requiresAdmin: true } },
     { path: "/me/runtime", component: RuntimeSettingsPage, meta: { title: "运行与识别", requiresAdmin: true } },
     { path: "/me/ai", component: AiSettingsPage, meta: { title: "AI 解析模型", requiresAdmin: true } },
     { path: "/me/about", component: AboutSettingsPage, meta: { title: "关于" } },

@@ -57,6 +57,10 @@ function statusText(value: string) {
   return { queued: "排队", processing: "处理中", completed: "成功", failed: "失败", cancelled: "取消" }[value] || value;
 }
 
+function sourceText(value: string) {
+  return value === "indicator_normalization" ? "指标归一化" : "报告整理";
+}
+
 async function load(reset = true) {
   let current = seq;
   if (reset) {
@@ -128,7 +132,7 @@ onBeforeUnmount(() => observer?.disconnect());
     <section class="settings-band">
       <header>
         <Bot :size="20" />
-        <div><h3>调用概览</h3><p>按 AI 整理任务统计，Token 来自已成功返回的结构化结果。</p></div>
+        <div><h3>调用概览</h3><p>统计报告整理和指标归一化的 AI 调用，Token 来自已返回的模型用量。</p></div>
         <button class="plain-icon-button" type="button" :disabled="loading || refreshing" title="刷新" @click="refresh">
           <RefreshCw :size="17" :class="{ 'spin-icon': loading || refreshing }" />
         </button>
@@ -158,7 +162,7 @@ onBeforeUnmount(() => observer?.disconnect());
         <article v-for="item in data.recent" :key="item.id" :class="{ failed: item.status === 'failed' }">
           <div>
             <strong>{{ item.reportTitle }}</strong>
-            <span>{{ formatDatabaseTime(item.createdAt) }} · {{ item.model || "未返回模型" }}</span>
+            <span>{{ sourceText(item.source) }} · {{ formatDatabaseTime(item.createdAt) }} · {{ item.model || "未返回模型" }}</span>
           </div>
           <em>{{ statusText(item.status) }}</em>
           <small :title="tokenTitle((item.promptTokens || 0) + (item.completionTokens || 0))">

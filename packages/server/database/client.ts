@@ -16,6 +16,7 @@ const countedTables = [
   "observations",
   "processing_jobs",
   "processing_job_events",
+  "ai_audit_events",
   "ocr_results",
   "report_extractions",
   "reminders",

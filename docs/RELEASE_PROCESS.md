@@ -12,7 +12,7 @@
 | 应用版本 | `0.1.6` | `package.json` |
 | fnOS manifest 版本 | `0.1.6` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
 | fnOS sub_version | `0.1.6.0` | `scripts/prepare-package.mjs` 生成 |
-| 数据库 schema | `v6` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
+| 数据库 schema | `v7` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
@@ -80,7 +80,7 @@ schema 仍为 v6
 ```text
 应用 0.1.2
 schema v6 -> v7
-新增 reports.content_fingerprint
+新增 indicator_catalog、indicator_aliases、observation_normalizations
 升级前自动备份 SQLite
 ```
 
