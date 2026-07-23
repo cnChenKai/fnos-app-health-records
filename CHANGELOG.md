@@ -2,7 +2,7 @@
 
 本项目遵循语义化版本。
 
-## 0.1.6 - Unreleased
+## 0.1.7 - Unreleased
 
 ### Added
 
