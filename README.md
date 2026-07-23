@@ -132,4 +132,4 @@ ocr-venv/      OCR Python 虚拟环境
 
 开源仓库：[https://github.com/timor-m/fnos-app-health-records](https://github.com/timor-m/fnos-app-health-records)
 
-项目基于 [fnos-app-template](https://github.com/timor-m/fnos-app-template) 初始化，主要领域架构参考 [fnos-app-family-stock](https://github.com/timor-m/fnos-app-family-stock)。
+项目基于 [fnos-app-template](https://github.com/timor-m/fnos-app-template) 初始化。

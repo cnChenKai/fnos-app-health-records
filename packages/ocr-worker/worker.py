@@ -160,7 +160,7 @@ def recognize_image(engine: Any, image_path: Path, image_role: str | None) -> tu
 
     all_lines: list[dict[str, Any]] = []
     elapsed_parts: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="family-stock-ocr-") as temp_name:
+    with tempfile.TemporaryDirectory(prefix="health-records-ocr-") as temp_name:
         variants = date_image_variants(image_path, Path(temp_name))
         for label, variant_path in variants:
             started = time.perf_counter()
