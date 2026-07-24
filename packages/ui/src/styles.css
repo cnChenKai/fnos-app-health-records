@@ -1049,7 +1049,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .runtime-detail header { display: grid; gap: 4px; min-width: 0; }
 .runtime-detail h4 { margin: 0; font-size: 15px; }
 .runtime-detail header p {
-  color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: 12px; line-height: 1.55;
 }
 .usage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .usage-grid > div {
@@ -1098,6 +1098,19 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 }
 .table-counts strong { font-size: 14px; }
 .runtime-message { padding: 11px 20px; border-top: 1px solid var(--line); color: var(--brand-strong); font-size: 13px; }
+.runtime-install-log {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+}
 .maintenance-result {
   padding: 14px 16px 16px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
 }

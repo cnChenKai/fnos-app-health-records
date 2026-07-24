@@ -191,6 +191,29 @@ ocr-venv/      OCR Python 虚拟环境
 - 账号体系完全使用 fnOS 提供的用户身份，fnOS 系统管理员即应用管理员。
 - 非 fnOS 网关请求不会信任外部提供的 `X-Trim-*` 头，也不提供独立账号登录。
 
+## OCR 安装失败排查
+
+OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前需要管理员在“我的 → 运行与识别”中安装。安装过程会在设备本地创建 `ocr-venv`，并下载 RapidOCR/OpenVINO、PyMuPDF、Pillow 等 Python 依赖。安装完成后会加载 OCR 引擎，生成一张本地测试图片并执行 OCR 识别；只有测试通过后才会写入就绪标记并显示为可用。默认优先使用 OpenVINO 后端；如果当前平台 OpenVINO 动态库加载失败，会自动安装并验证 ONNXRuntime 备用后端。
+
+如果安装失败，可以在“运行与识别 → OCR 安装诊断”查看：
+
+- 安装状态、退出码、开始/结束时间。
+- Python 路径和安装脚本路径。
+- OCR 就绪标记路径。
+- 最近安装日志尾部。
+- 完整日志文件路径：`/var/apps/fnos-app-health-records/var/log/ocr-install.log`。
+
+常见失败原因：
+
+- 设备上没有可用的 Python 3.9–3.12。
+- Python 安装缺少 `venv` 或 `pip`。
+- 设备无法访问 PyPI，或需要配置可用的 pip 镜像。
+- 当前 CPU 架构没有 rapidocr-openvino/openvino 对应 wheel。
+- 数据目录不可写或磁盘空间不足。
+- macOS arm64 仅作为开发环境参考，OpenVINO macOS wheel 可能出现动态库加载兼容问题；fnOS OCR 验收应以 Linux 真机日志为准。
+
+报告原件会先安全保存；OCR 安装成功后，可在报告详情中重试失败任务或重新执行 OCR+AI。
+
 ## 隐私边界
 
 原件默认保存在 NAS 应用私有目录。AI 默认只接收 OCR 文本；只有 fnOS 系统管理员显式启用视觉增强后才会发送处理后的页面副本。身份证、电话和住址不会进入结构化字段、全文索引、日志或 AI 摘要。

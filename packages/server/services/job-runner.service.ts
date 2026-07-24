@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
@@ -49,6 +49,19 @@ function safeDetailJson(detail?: Record<string, unknown>) {
     if (typeof value === "string") return value.slice(0, 500);
     return value;
   });
+}
+
+function hasOcrRuntime(config = getAppConfig()) {
+  if (!existsSync(config.ocrPythonBin) || !existsSync(config.ocrWorkerScript)) return false;
+  if (!existsSync(join(dirname(dirname(config.ocrPythonBin)), ".health-records-ocr-ready"))) return false;
+  const statusPath = join(config.storageDir, "config", "ocr-install-status.json");
+  if (!existsSync(statusPath)) return true;
+  try {
+    const status = JSON.parse(readFileSync(statusPath, "utf8")) as { state?: string };
+    return status.state !== "failed";
+  } catch {
+    return false;
+  }
 }
 
 function appendJobEvent(input: {
@@ -492,7 +505,7 @@ export async function processNextJob(
 async function tick() {
   if (busy) return;
   const config = getAppConfig();
-  if (!existsSync(config.ocrPythonBin) || !existsSync(config.ocrWorkerScript)) return;
+  if (!hasOcrRuntime(config)) return;
   busy = true;
   try {
     lastRunAt = new Date().toISOString();
@@ -535,7 +548,7 @@ export function getJobRunnerStatus() {
   return {
     started,
     busy,
-    runtimeAvailable: existsSync(config.ocrPythonBin) && existsSync(config.ocrWorkerScript),
+    runtimeAvailable: hasOcrRuntime(config),
     lastRunAt,
     lastError,
     queued: Number(counts.queued || 0),

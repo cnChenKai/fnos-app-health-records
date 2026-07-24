@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import sys
 import time
 import traceback
@@ -16,8 +18,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-ENGINE_NAME = "rapidocr-openvino"
+ENGINE_NAME = "rapidocr"
 MODEL_VERSION = "PP-OCRv4-mobile"
+CURRENT_ENGINE_NAME = "rapidocr-uninitialized"
+CURRENT_ENGINE_VERSION = "unknown"
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -25,30 +29,122 @@ def emit(payload: dict[str, Any]) -> None:
 
 
 def load_engine():
-    from rapidocr_openvino import RapidOCR
+    requested = str(os.environ.get("OCR_BACKEND", "auto")).strip().lower()
+    candidates = ["openvino", "onnxruntime"] if requested in {"", "auto"} else [requested]
+    errors: list[str] = []
 
-    return RapidOCR()
+    for candidate in candidates:
+        try:
+            if candidate == "openvino":
+                from rapidocr_openvino import RapidOCR
+                import rapidocr_openvino
+
+                return {
+                    "name": "rapidocr-openvino",
+                    "version": getattr(rapidocr_openvino, "__version__", "unknown"),
+                    "engine": RapidOCR(),
+                }
+            if candidate in {"onnx", "onnxruntime"}:
+                from rapidocr_onnxruntime import RapidOCR
+                import rapidocr_onnxruntime
+
+                return {
+                    "name": "rapidocr-onnxruntime",
+                    "version": getattr(rapidocr_onnxruntime, "__version__", "unknown"),
+                    "engine": RapidOCR(),
+                }
+            errors.append(f"Unsupported OCR backend: {candidate}")
+        except Exception as error:
+            errors.append(f"{candidate}: {error}")
+
+    raise RuntimeError("No OCR backend is available. " + " | ".join(errors))
+
+
+
+def find_smoke_test_font() -> str | None:
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ]
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def create_smoke_test_image(path: Path) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+
+    font_path = find_smoke_test_font()
+    if font_path:
+        image = Image.new("RGB", (960, 260), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.truetype(font_path, 76)
+        small_font = ImageFont.truetype(font_path, 30)
+        draw.text((44, 56), "OCR TEST 2026", fill=(0, 0, 0), font=font)
+        draw.text((48, 165), "health records smoke check", fill=(0, 0, 0), font=small_font)
+    else:
+        image = Image.new("RGB", (240, 80), "white")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+        draw.text((8, 16), "OCR TEST 2026", fill=(0, 0, 0), font=font)
+        draw.text((8, 42), "health records", fill=(0, 0, 0), font=font)
+        image = image.resize((960, 320), Image.Resampling.NEAREST)
+    image.save(path)
+
+
+def run_smoke_test() -> dict[str, Any]:
+    started = time.perf_counter()
+    backend = load_engine()
+    engine = backend["engine"]
+    load_elapsed_ms = round((time.perf_counter() - started) * 1000)
+
+    with tempfile.TemporaryDirectory(prefix="health-records-ocr-check-") as temp_name:
+        image_path = Path(temp_name) / "ocr-smoke-test.png"
+        create_smoke_test_image(image_path)
+        recognize_started = time.perf_counter()
+        lines, engine_elapsed = recognize_image(engine, image_path, None)
+        recognize_elapsed_ms = round((time.perf_counter() - recognize_started) * 1000)
+
+    texts = [str(line.get("text", "")) for line in lines]
+    joined = " ".join(texts).upper()
+    if "OCR" not in joined or "2026" not in joined:
+        raise RuntimeError(f"OCR smoke test did not recognize expected text. recognized={texts[:8]}")
+
+    return {
+        "backend": backend["name"],
+        "backendVersion": backend["version"],
+        "engineLoadMs": load_elapsed_ms,
+        "recognizeMs": recognize_elapsed_ms,
+        "engineElapsed": engine_elapsed,
+        "recognizedText": texts[:8],
+    }
 
 
 def runtime_check() -> int:
     try:
-        import openvino
-        import rapidocr_openvino
         import fitz
         import PIL
         import pillow_heif
 
+        smoke = run_smoke_test()
+
         emit(
             {
                 "ok": True,
-                "engine": ENGINE_NAME,
+                "engine": smoke["backend"],
                 "modelVersion": MODEL_VERSION,
-                "rapidocrVersion": getattr(rapidocr_openvino, "__version__", "unknown"),
-                "openvinoVersion": getattr(openvino, "__version__", "unknown"),
+                "rapidocrVersion": smoke["backendVersion"],
                 "pymupdfVersion": getattr(fitz, "version", ("unknown",))[0],
                 "pillowVersion": getattr(PIL, "__version__", "unknown"),
                 "pillowHeifVersion": getattr(pillow_heif, "__version__", "unknown"),
                 "pythonVersion": sys.version.split()[0],
+                "platform": platform.platform(),
+                "machine": platform.machine(),
+                "smokeTest": smoke,
             }
         )
         return 0
@@ -59,6 +155,8 @@ def runtime_check() -> int:
                 "errorCode": "OCR_RUNTIME_UNAVAILABLE",
                 "errorMessage": str(error),
                 "pythonVersion": sys.version.split()[0],
+                "platform": platform.platform(),
+                "machine": platform.machine(),
             }
         )
         return 2
@@ -284,6 +382,7 @@ def run_daemon() -> int:
             "capabilities": ["inspect_pdf", "thumbnail", "ocr"],
         }
     )
+    backend = None
     engine = None
 
     for raw_line in sys.stdin:
@@ -316,7 +415,8 @@ def run_daemon() -> int:
                 )
             elif action == "ocr":
                 if engine is None:
-                    engine = load_engine()
+                    backend = load_engine()
+                    engine = backend["engine"]
                 lines, engine_elapsed = recognize_input(
                     engine,
                     image_path,
@@ -324,7 +424,7 @@ def run_daemon() -> int:
                     int(page_number) if page_number is not None else None,
                 )
                 result = {
-                    "engine": ENGINE_NAME,
+                    "engine": backend["name"] if backend else ENGINE_NAME,
                     "modelVersion": MODEL_VERSION,
                     "lines": lines,
                     "engineElapsed": engine_elapsed,

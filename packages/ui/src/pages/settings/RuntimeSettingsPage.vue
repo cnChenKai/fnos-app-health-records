@@ -8,6 +8,32 @@ import { useAppContext } from "../../composables/useAppContext";
 type OcrStatus = {
   available: boolean;
   installing: boolean;
+  runtime?: {
+    createdAt?: string;
+    python?: string;
+    pythonVersion?: string;
+    backend?: string;
+    engine?: string;
+    modelVersion?: string;
+    rapidocrVersion?: string;
+    pymupdfVersion?: string;
+    pillowVersion?: string;
+    pillowHeifVersion?: string;
+    platform?: string;
+    machine?: string;
+  } | null;
+  lastInstall?: {
+    state: "idle" | "installing" | "success" | "failed";
+    startedAt?: string;
+    finishedAt?: string;
+    exitCode?: number | null;
+    error?: string;
+    warning?: string;
+    runtimeReady?: boolean;
+    missing?: string[];
+    logPath?: string;
+    logTail?: string[];
+  };
   runner: { started: boolean; busy: boolean; queued: number; processing: number; failed: number };
 };
 type DatabaseStatus = {
@@ -53,6 +79,20 @@ const databaseSummaryRows = computed(() => [
   { label: "任务", value: system.value?.database?.rowCounts?.processing_jobs || 0 },
   { label: "日志", value: system.value?.database?.rowCounts?.processing_job_events || 0 }
 ]);
+const ocrRuntimeRows = computed(() => {
+  const runtime = ocr.value?.runtime;
+  const rows = [
+    { label: "Python", value: runtime?.pythonVersion || "—" },
+    { label: "识别后端", value: runtime?.engine || runtime?.backend || (ocr.value?.available ? "已安装" : "—") },
+    { label: "识别模型", value: runtime?.modelVersion || "—" },
+    { label: "RapidOCR", value: runtime?.rapidocrVersion && runtime.rapidocrVersion !== "unknown" ? runtime.rapidocrVersion : "已安装" },
+    { label: "PyMuPDF", value: runtime?.pymupdfVersion || "—" },
+    { label: "Pillow", value: runtime?.pillowVersion || "—" },
+    { label: "HEIF", value: runtime?.pillowHeifVersion || "—" },
+    { label: "平台", value: runtime?.machine ? `${runtime.platform || "—"} · ${runtime.machine}` : runtime?.platform || "—" }
+  ];
+  return rows.filter((row) => row.value !== "—" || !ocr.value?.available);
+});
 
 function formatBytes(value?: number | null) {
   const bytes = Number(value || 0);
@@ -66,12 +106,27 @@ function integrityLabel(value?: string | null) {
   if (!value) return "检查中";
   return value === "ok" ? "正常" : value;
 }
+function stopStatusPolling() {
+  if (!statusTimer) return;
+  clearInterval(statusTimer);
+  statusTimer = null;
+}
+function startStatusPolling() {
+  if (statusTimer) return;
+  statusTimer = setInterval(() => { void refreshOcr(); }, 3000);
+}
+function syncStatusPolling() {
+  if (ocr.value?.installing) startStatusPolling();
+  else stopStatusPolling();
+}
 
 async function refreshOcr() {
   try {
     ocr.value = await request<OcrStatus>("ocr/status");
+    syncStatusPolling();
   } catch (error) {
     runtimeMessage.value = error instanceof Error ? error.message : "无法获取 OCR 状态";
+    stopStatusPolling();
   }
 }
 async function installOcr() {
@@ -79,15 +134,17 @@ async function installOcr() {
   try {
     ocr.value = await request<OcrStatus>("ocr/install", { method: "POST" });
     runtimeMessage.value = "OCR 环境正在后台安装，完成后队列会自动开始处理";
+    syncStatusPolling();
   } catch (error) {
     runtimeMessage.value = error instanceof Error ? error.message : "OCR 环境安装启动失败";
+    stopStatusPolling();
   }
 }
 onMounted(async () => {
   [system.value, ocr.value] = await Promise.all([request<SystemSummary>("system"), request<OcrStatus>("ocr/status")]);
-  statusTimer = setInterval(() => { void refreshOcr(); }, 3000);
+  syncStatusPolling();
 });
-onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer); });
+onBeforeUnmount(stopStatusPolling);
 </script>
 
 <template>
@@ -133,6 +190,20 @@ onBeforeUnmount(() => { if (statusTimer) clearInterval(statusTimer); });
           <div><span>OCR 模型</span><strong>{{ formatBytes(system?.storage?.modelsBytes) }}</strong></div>
           <div><span>已统计合计</span><strong>{{ formatBytes(system?.storage?.totalKnownBytes) }}</strong></div>
         </div>
+      </section>
+      <section v-if="!ocr?.available || ocr?.lastInstall?.state" class="runtime-detail">
+        <header>
+          <h4>OCR 安装诊断</h4>
+          <p>安装完成后会执行一次真实 OCR 测试，通过后记录当前可用的运行环境版本。</p>
+        </header>
+        <div class="usage-grid usage-grid--compact">
+          <div v-for="row in ocrRuntimeRows" :key="row.label"><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div>
+        </div>
+        <p v-if="ocr?.lastInstall?.error" class="inline-panel-error">{{ ocr.lastInstall.error }}</p>
+        <p v-if="ocr?.lastInstall?.warning" class="preview-hint">{{ ocr.lastInstall.warning }}</p>
+        <p v-if="ocr?.lastInstall?.missing?.length" class="preview-hint">缺失路径：{{ ocr.lastInstall.missing.join("；") }}</p>
+        <p v-if="ocr?.lastInstall?.logPath" class="preview-hint">安装日志：{{ ocr.lastInstall.logPath }}</p>
+        <pre v-if="ocr?.lastInstall?.logTail?.length" class="runtime-install-log">{{ ocr.lastInstall.logTail.join('\n') }}</pre>
       </section>
       <p v-if="runtimeMessage" class="runtime-message">{{ runtimeMessage }}</p>
     </section>
