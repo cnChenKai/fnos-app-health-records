@@ -195,7 +195,26 @@ ocr-venv/      OCR Python 虚拟环境
 
 OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前需要管理员在“我的 → 运行与识别”中安装。安装过程会在设备本地创建 `ocr-venv`，并下载 RapidOCR、PyMuPDF、Pillow 等 Python 依赖。安装完成后会加载 OCR 引擎，生成一张本地测试图片并执行 OCR 识别；只有测试通过后才会写入就绪标记并显示为可用。
 
-默认策略是 Python 3.9–3.11 优先使用 OpenVINO 后端，OpenVINO 依赖安装或动态库加载失败时自动切换到 ONNXRuntime 备用后端。Python 3.12 环境会直接使用 ONNXRuntime，因为当前锁定的 OpenVINO 版本范围没有 Python 3.12 可用 wheel。
+默认策略会先检查设备现有环境，不覆盖系统 Python：
+
+1. 已安装的应用私有 Python 3.11。
+2. 系统 Python 3.11、3.10、3.9，优先使用 OpenVINO 后端。
+3. 如果没有 3.9–3.11，会尝试安装应用私有 Python 3.11 到应用数据目录。
+4. 如果没有配置私有 Python 安装包，最后才回退到系统 Python 3.12，并使用 ONNXRuntime 兼容后端。
+
+OpenVINO 依赖安装或动态库加载失败时会自动切换到 ONNXRuntime 备用后端。Python 3.12 环境会直接使用 ONNXRuntime，因为当前锁定的 OpenVINO 版本范围没有 Python 3.12 可用 wheel。
+
+应用私有 Python 不会写入 `/usr/bin`、`/usr/local/bin` 等系统路径，默认安装在：
+
+```text
+/var/apps/fnos-app-health-records/var/data/runtime/python-3.11
+```
+
+可通过以下方式提供应用私有 Python 包：
+
+- 包内预置：`ocr-worker/python-runtimes/python-3.11-linux-x86_64.tar.gz`。
+- 环境变量指定本地包：`OCR_PRIVATE_PYTHON_ARCHIVE=/path/to/python-3.11.tar.gz`。
+- 环境变量指定下载地址：`OCR_PRIVATE_PYTHON_URL=https://.../python-3.11.tar.gz`。
 
 如果安装失败，可以在“运行与识别 → OCR 安装诊断”查看：
 
@@ -204,11 +223,14 @@ OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前�
 - 最近安装日志尾部。
 - 完整日志文件路径：`/var/apps/fnos-app-health-records/var/log/ocr-install.log`。
 
+Python 3.12 使用 ONNXRuntime 后端时，首次安装会下载 rapidocr、onnxruntime、opencv、numpy、PyMuPDF、Pillow 等多个 wheel。低速网络下可能需要 10–30 分钟；安装期间服务端会每 30 秒写入一条心跳日志，看到 `still running` 不代表卡死。pip 版本满足要求时会跳过升级，减少慢网下载耗时；如需强制升级可设置 `OCR_UPGRADE_PIP=1`。
+
 常见失败原因：
 
 - 设备上没有可用的 Python 3.9–3.12。
 - Python 安装缺少 `venv` 或 `pip`。
 - 设备无法访问 PyPI，或需要配置可用的 pip 镜像。
+- 未配置应用私有 Python 包，且设备上只有 Python 3.12 时，会自动回退 ONNXRuntime，不会继续强装 OpenVINO。
 - 当前 CPU 架构或 Python 版本没有 rapidocr-openvino/openvino 对应 wheel；应用会尽量自动切换到 ONNXRuntime 后端。
 - 数据目录不可写或磁盘空间不足。
 - macOS arm64 仅作为开发环境参考，OpenVINO macOS wheel 可能出现动态库加载兼容问题；fnOS OCR 验收应以 Linux 真机日志为准。

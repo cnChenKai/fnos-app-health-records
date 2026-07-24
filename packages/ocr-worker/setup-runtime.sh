@@ -7,6 +7,12 @@ VENV_DIR="${OCR_VENV_DIR:-${DATA_DIR}/ocr-venv}"
 READY_MARKER="${VENV_DIR}/.health-records-ocr-ready"
 PYTHON_BIN="${PYTHON_BIN:-}"
 FORCE_REINSTALL="${OCR_FORCE_REINSTALL:-0}"
+PRIVATE_PYTHON_DIR="${OCR_PRIVATE_PYTHON_DIR:-${DATA_DIR}/runtime/python-3.11}"
+PRIVATE_PYTHON_BIN="${OCR_PRIVATE_PYTHON_BIN:-}"
+PRIVATE_PYTHON_ARCHIVE="${OCR_PRIVATE_PYTHON_ARCHIVE:-}"
+PRIVATE_PYTHON_URL="${OCR_PRIVATE_PYTHON_URL:-}"
+SELECTED_PYTHON_BIN=""
+INSTALLED_PRIVATE_PYTHON_BIN=""
 
 log() {
   printf '%s\n' "$*"
@@ -19,6 +25,166 @@ fail() {
 
 log_section() {
   printf '\n== %s ==\n' "$*"
+}
+
+python_executable() {
+  if [ -n "$1" ] && [ -x "$1" ]; then
+    printf '%s\n' "$1"
+    return 0
+  fi
+  if [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; then
+    command -v "$1"
+    return 0
+  fi
+  return 1
+}
+
+python_version_minor() {
+  "$1" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null
+}
+
+python_is_supported() {
+  "$1" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if (3, 9) <= sys.version_info[:2] < (3, 13) else 1)
+PY
+}
+
+python_is_openvino_preferred() {
+  "$1" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if (3, 9) <= sys.version_info[:2] < (3, 12) else 1)
+PY
+}
+
+python_has_required_stdlib() {
+  "$1" - <<'PY' >/dev/null 2>&1
+import ensurepip
+import ssl
+import venv
+PY
+}
+
+find_existing_private_python() {
+  if [ -n "${PRIVATE_PYTHON_BIN}" ]; then
+    python_executable "${PRIVATE_PYTHON_BIN}" && return 0
+  fi
+  if [ -d "${PRIVATE_PYTHON_DIR}" ]; then
+    found="$(find "${PRIVATE_PYTHON_DIR}" -type f \( -name python3.11 -o -name python3 -o -name python \) -path '*/bin/*' 2>/dev/null | head -n 1 || true)"
+    if [ -n "${found}" ]; then
+      python_executable "${found}" && return 0
+    fi
+  fi
+  return 1
+}
+
+download_private_python_archive() {
+  target="$1"
+  [ -n "${PRIVATE_PYTHON_URL}" ] || return 1
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL --connect-timeout 20 --retry 2 -o "${target}" "${PRIVATE_PYTHON_URL}"
+    return $?
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -O "${target}" "${PRIVATE_PYTHON_URL}"
+    return $?
+  fi
+  return 1
+}
+
+install_private_python() {
+  os_key="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]' || printf unknown)"
+  arch_key="$(uname -m 2>/dev/null || printf unknown)"
+  case "${arch_key}" in
+    amd64) arch_key="x86_64" ;;
+    arm64) arch_key="aarch64" ;;
+  esac
+  bundled_archive="${SCRIPT_DIR}/python-runtimes/python-3.11-${os_key}-${arch_key}.tar.gz"
+  archive="${PRIVATE_PYTHON_ARCHIVE}"
+  if [ -z "${archive}" ] && [ -f "${bundled_archive}" ]; then
+    archive="${bundled_archive}"
+  fi
+  if [ -z "${archive}" ] || [ ! -f "${archive}" ]; then
+    if [ -n "${PRIVATE_PYTHON_URL}" ]; then
+      mkdir -p "${DATA_DIR}/runtime" || return 1
+      archive="${DATA_DIR}/runtime/python-3.11-${os_key}-${arch_key}.tar.gz"
+      log "未发现包内私有 Python，开始下载应用私有 Python 3.11：${PRIVATE_PYTHON_URL}"
+      download_private_python_archive "${archive}" || {
+        log "应用私有 Python 下载失败，将继续尝试系统 Python 兜底。"
+        return 1
+      }
+    else
+      log "未发现可用的应用私有 Python 安装包；如需启用，可提供 ${bundled_archive} 或设置 OCR_PRIVATE_PYTHON_URL/OCR_PRIVATE_PYTHON_ARCHIVE。"
+      return 1
+    fi
+  fi
+
+  install_dir="${PRIVATE_PYTHON_DIR}.installing.$$"
+  rm -rf "${install_dir}" 2>/dev/null || true
+  mkdir -p "${install_dir}" || return 1
+  log "安装应用私有 Python 3.11 到：${PRIVATE_PYTHON_DIR}"
+  tar -xzf "${archive}" -C "${install_dir}" || {
+    rm -rf "${install_dir}" 2>/dev/null || true
+    return 1
+  }
+  found="$(find "${install_dir}" -type f \( -name python3.11 -o -name python3 -o -name python \) -path '*/bin/*' 2>/dev/null | head -n 1 || true)"
+  if [ -z "${found}" ]; then
+    rm -rf "${install_dir}" 2>/dev/null || true
+    log "应用私有 Python 安装包中未找到 bin/python。"
+    return 1
+  fi
+  if ! python_is_openvino_preferred "${found}" || ! python_has_required_stdlib "${found}"; then
+    rm -rf "${install_dir}" 2>/dev/null || true
+    log "应用私有 Python 未通过版本或标准库验证。"
+    return 1
+  fi
+  rm -rf "${PRIVATE_PYTHON_DIR}" 2>/dev/null || true
+  mv "${install_dir}" "${PRIVATE_PYTHON_DIR}" || return 1
+  INSTALLED_PRIVATE_PYTHON_BIN="$(find_existing_private_python || true)"
+  [ -n "${INSTALLED_PRIVATE_PYTHON_BIN}" ]
+}
+
+select_python() {
+  if [ -n "${PYTHON_BIN}" ]; then
+    SELECTED_PYTHON_BIN="$(python_executable "${PYTHON_BIN}" || true)"
+    [ -n "${SELECTED_PYTHON_BIN}" ] && return 0
+    return 1
+  fi
+
+  private_candidate="$(find_existing_private_python || true)"
+  if [ -n "${private_candidate}" ] && python_is_openvino_preferred "${private_candidate}" && python_has_required_stdlib "${private_candidate}"; then
+    log "检测到应用私有 Python，将优先使用：${private_candidate}"
+    SELECTED_PYTHON_BIN="${private_candidate}"
+    return 0
+  fi
+
+  for candidate in python3.11 python3.10 python3.9 python3 python; do
+    executable="$(python_executable "${candidate}" || true)"
+    [ -n "${executable}" ] || continue
+    if python_is_openvino_preferred "${executable}" && python_has_required_stdlib "${executable}"; then
+      log "检测到系统 Python ${candidate} 可支持 OpenVINO 优先后端。"
+      SELECTED_PYTHON_BIN="${executable}"
+      return 0
+    fi
+  done
+
+  if install_private_python; then
+    log "已安装并启用应用私有 Python：${INSTALLED_PRIVATE_PYTHON_BIN}"
+    SELECTED_PYTHON_BIN="${INSTALLED_PRIVATE_PYTHON_BIN}"
+    return 0
+  fi
+
+  for candidate in python3.12 python3 python; do
+    executable="$(python_executable "${candidate}" || true)"
+    [ -n "${executable}" ] || continue
+    if python_is_supported "${executable}" && python_has_required_stdlib "${executable}"; then
+      log "未找到 Python 3.9–3.11 或应用私有 Python，回退使用系统 ${candidate}，后续将使用 ONNXRuntime 兼容后端。"
+      SELECTED_PYTHON_BIN="${executable}"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 log_section "OCR 安装环境检测"
@@ -38,17 +204,11 @@ if command -v df >/dev/null 2>&1; then
   log "磁盘空间：$(df -Pk "${DATA_DIR}" 2>/dev/null | tail -n 1 || printf 'unknown')"
 fi
 
-if [ -z "${PYTHON_BIN}" ]; then
-  for candidate in python3.12 python3.11 python3.10 python3.9 python3 python; do
-    if command -v "${candidate}" >/dev/null 2>&1; then
-      PYTHON_BIN="${candidate}"
-      break
-    fi
-  done
-fi
+select_python || true
+PYTHON_BIN="${SELECTED_PYTHON_BIN}"
 
 [ -n "${PYTHON_BIN}" ] || fail "未找到 Python。RapidOCR/OpenVINO 运行环境需要 Python 3.9–3.12，请先在设备上安装可用的 Python 运行时。"
-command -v "${PYTHON_BIN}" >/dev/null 2>&1 || fail "指定的 Python 不存在：${PYTHON_BIN}"
+python_executable "${PYTHON_BIN}" >/dev/null 2>&1 || fail "指定的 Python 不存在：${PYTHON_BIN}"
 
 log "使用 Python：$("${PYTHON_BIN}" -c 'import sys; print(sys.executable)')"
 log "Python 版本：$("${PYTHON_BIN}" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
@@ -101,11 +261,25 @@ log "pip 超时：${PIP_DEFAULT_TIMEOUT}s"
 log "pip 缓存目录：${PIP_CACHE_DIR}"
 
 log_section "安装 Python 依赖"
-log "升级 pip"
-"${VENV_DIR}/bin/python" -m pip install --upgrade pip || fail "升级 pip 失败。请检查网络访问 PyPI 是否正常，或通过 PIP_INDEX_URL 配置可用镜像。"
+PIP_NEEDS_UPGRADE="$("${VENV_DIR}/bin/python" - <<'PY'
+try:
+    import pip
+    parts = tuple(int(part) for part in pip.__version__.split(".")[:2])
+    print("1" if parts < (23, 0) else "0")
+except Exception:
+    print("1")
+PY
+)"
+if [ "${OCR_UPGRADE_PIP:-0}" = "1" ] || [ "${PIP_NEEDS_UPGRADE}" = "1" ]; then
+  log "升级 pip"
+  "${VENV_DIR}/bin/python" -m pip install --upgrade pip || fail "升级 pip 失败。请检查网络访问 PyPI 是否正常，或通过 PIP_INDEX_URL 配置可用镜像。"
+else
+  log "pip 版本已满足安装要求，跳过升级。如需强制升级可设置 OCR_UPGRADE_PIP=1。"
+fi
 
 install_onnxruntime_backend() {
   log "安装 OCR 备用依赖：rapidocr-onnxruntime / PyMuPDF / Pillow"
+  log "提示：ONNXRuntime 首次安装需要下载 rapidocr、onnxruntime、opencv、numpy、PyMuPDF、Pillow 等多个 wheel；低速网络可能需要 10–30 分钟，日志会持续显示安装心跳。"
   "${VENV_DIR}/bin/python" -m pip install \
     "PyMuPDF>=1.24,<2" \
     "Pillow>=10,<12" \

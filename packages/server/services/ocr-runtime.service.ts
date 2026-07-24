@@ -5,6 +5,8 @@ import { getAppConfig } from "../utils/runtime-config";
 import { getJobRunnerStatus } from "./job-runner.service";
 
 let installing = false;
+let installLastOutputAt: string | null = null;
+let installHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 type OcrInstallState = "idle" | "installing" | "success" | "failed";
 
@@ -116,11 +118,34 @@ function appendInstallLog(line: string) {
 }
 
 function appendChunk(stream: "stdout" | "stderr", chunk: Buffer | string) {
+  installLastOutputAt = new Date().toISOString();
   const text = String(chunk);
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     appendInstallLog(`${new Date().toISOString()} [${stream}] ${line}\n`);
   }
+}
+
+function startInstallHeartbeat(startedAt: string) {
+  if (installHeartbeatTimer) clearInterval(installHeartbeatTimer);
+  installLastOutputAt = startedAt;
+  installHeartbeatTimer = setInterval(() => {
+    if (!installing) return;
+    const now = Date.now();
+    const startedMs = Date.parse(startedAt);
+    const lastOutputMs = installLastOutputAt ? Date.parse(installLastOutputAt) : startedMs;
+    const elapsedSeconds = Math.max(0, Math.round((now - startedMs) / 1000));
+    const quietSeconds = Math.max(0, Math.round((now - lastOutputMs) / 1000));
+    appendInstallLog(
+      `${new Date().toISOString()} [info] OCR runtime installation still running, elapsed ${elapsedSeconds}s, no new pip output for ${quietSeconds}s. Large wheel downloads may take several minutes on slow networks.\n`
+    );
+  }, 30_000);
+}
+
+function stopInstallHeartbeat() {
+  if (!installHeartbeatTimer) return;
+  clearInterval(installHeartbeatTimer);
+  installHeartbeatTimer = null;
 }
 
 export function getOcrStatus() {
@@ -164,8 +189,10 @@ export function installOcrRuntime() {
   const startedAt = new Date().toISOString();
   const logPath = installLogPath(config.logDir);
   installing = true;
+  installLastOutputAt = startedAt;
   writeInstallStatus({ state: "installing", startedAt, logPath });
   appendInstallLog(`${startedAt} [info] OCR runtime installation started\n`);
+  startInstallHeartbeat(startedAt);
   const child = spawn("sh", [config.ocrSetupScript], {
     detached: false,
     stdio: ["ignore", "pipe", "pipe"],
@@ -179,6 +206,7 @@ export function installOcrRuntime() {
     if (finalized) return;
     finalized = true;
     installing = false;
+    stopInstallHeartbeat();
     writeInstallStatus(status);
     appendInstallLog(logLine);
   };

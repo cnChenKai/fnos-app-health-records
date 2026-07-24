@@ -94,6 +94,13 @@ const ocrRuntimeRows = computed(() => {
   return rows.filter((row) => row.value !== "—" || !ocr.value?.available);
 });
 
+function logLineClass(line: string) {
+  const lower = line.toLowerCase();
+  if (/error|failed|失败|错误/.test(lower)) return "log-line log-line--error";
+  if (/warn|警告|注意/.test(lower)) return "log-line log-line--warn";
+  return "log-line";
+}
+
 function formatBytes(value?: number | null) {
   const bytes = Number(value || 0);
   if (bytes < 1024) return `${bytes} B`;
@@ -203,7 +210,8 @@ onBeforeUnmount(stopStatusPolling);
         <p v-if="ocr?.lastInstall?.warning" class="preview-hint">{{ ocr.lastInstall.warning }}</p>
         <p v-if="ocr?.lastInstall?.missing?.length" class="preview-hint">缺失路径：{{ ocr.lastInstall.missing.join("；") }}</p>
         <p v-if="ocr?.lastInstall?.logPath" class="preview-hint">安装日志：{{ ocr.lastInstall.logPath }}</p>
-        <pre v-if="ocr?.lastInstall?.logTail?.length" class="runtime-install-log">{{ ocr.lastInstall.logTail.join('\n') }}</pre>
+        <pre v-if="ocr?.lastInstall?.logTail?.length" class="runtime-install-log"><span v-for="(line, index) in ocr.lastInstall.logTail" :key="index" :class="logLineClass(line)">{{ line }}
+</span></pre>
       </section>
       <p v-if="runtimeMessage" class="runtime-message">{{ runtimeMessage }}</p>
     </section>
