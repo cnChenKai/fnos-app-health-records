@@ -53,6 +53,7 @@ command -v "${PYTHON_BIN}" >/dev/null 2>&1 || fail "指定的 Python 不存在�
 log "使用 Python：$("${PYTHON_BIN}" -c 'import sys; print(sys.executable)')"
 log "Python 版本：$("${PYTHON_BIN}" -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
 log "Python 平台：$("${PYTHON_BIN}" -c 'import platform; print(platform.platform() + " / " + platform.machine())')"
+PYTHON_MINOR="$("${PYTHON_BIN}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
 "${PYTHON_BIN}" - <<'PY' || fail "当前 Python 版本不受支持。RapidOCR/OpenVINO 建议使用 Python 3.9–3.12。"
 import sys
@@ -84,6 +85,9 @@ log "创建 OCR 虚拟环境：${VENV_DIR}"
 PIP_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}"
 export PIP_DEFAULT_TIMEOUT="${PIP_TIMEOUT}"
 export PIP_DISABLE_PIP_VERSION_CHECK="${PIP_DISABLE_PIP_VERSION_CHECK:-1}"
+PIP_CACHE_DIR="${PIP_CACHE_DIR:-${DATA_DIR}/pip-cache}"
+mkdir -p "${PIP_CACHE_DIR}" || fail "无法创建 pip 缓存目录：${PIP_CACHE_DIR}"
+export PIP_CACHE_DIR
 
 log "虚拟环境 Python：$("${VENV_DIR}/bin/python" -c 'import sys; print(sys.executable)')"
 log "pip 版本：$("${VENV_DIR}/bin/python" -m pip --version 2>/dev/null || printf 'pip unavailable')"
@@ -94,18 +98,48 @@ if [ -n "${PIP_EXTRA_INDEX_URL:-}" ]; then
   log "PIP_EXTRA_INDEX_URL：${PIP_EXTRA_INDEX_URL}"
 fi
 log "pip 超时：${PIP_DEFAULT_TIMEOUT}s"
+log "pip 缓存目录：${PIP_CACHE_DIR}"
 
 log_section "安装 Python 依赖"
 log "升级 pip"
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip || fail "升级 pip 失败。请检查网络访问 PyPI 是否正常，或通过 PIP_INDEX_URL 配置可用镜像。"
 
-log "安装 OCR 依赖：rapidocr-openvino / openvino / PyMuPDF / Pillow"
-"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements.txt" || fail "安装 OCR Python 依赖失败。常见原因：设备无法访问 PyPI、CPU 架构没有对应 wheel、Python 版本不兼容，或磁盘空间不足。"
+install_onnxruntime_backend() {
+  log "安装 OCR 备用依赖：rapidocr-onnxruntime / PyMuPDF / Pillow"
+  "${VENV_DIR}/bin/python" -m pip install \
+    "PyMuPDF>=1.24,<2" \
+    "Pillow>=10,<12" \
+    "pillow-heif>=0.16,<1" \
+    "rapidocr-onnxruntime==1.4.4" \
+    || fail "安装 ONNXRuntime 备用 OCR 后端失败。请检查 PyPI 网络、Python 版本和 CPU 架构 wheel 支持。"
+}
+
+PREFER_ONNXRUNTIME=0
+if [ "${PYTHON_MINOR}" = "3.12" ]; then
+  PREFER_ONNXRUNTIME=1
+  log "检测到 Python 3.12：当前 OpenVINO 依赖锁定版本不提供兼容 wheel，将直接使用 ONNXRuntime 备用后端。"
+fi
+
+if [ "${PREFER_ONNXRUNTIME}" = "1" ]; then
+  install_onnxruntime_backend
+else
+  log "安装 OCR 主依赖：rapidocr-openvino / openvino / PyMuPDF / Pillow"
+  if ! "${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements.txt"; then
+    log "OpenVINO 主依赖安装失败，将自动切换到 ONNXRuntime 备用后端。常见原因：CPU 架构或 Python 版本没有对应 wheel。"
+    install_onnxruntime_backend
+    PREFER_ONNXRUNTIME=1
+  fi
+fi
 
 log_section "OCR 引擎与识别验证"
 log "执行 OCR Worker 自检：导入依赖、加载 OCR 后端、生成测试图片并识别 OCR TEST 2026"
 CHECK_RESULT_JSON=""
-if CHECK_RESULT_JSON="$("${VENV_DIR}/bin/python" "${SCRIPT_DIR}/worker.py" --check 2>&1)"; then
+if [ "${PREFER_ONNXRUNTIME}" = "1" ]; then
+  CHECK_COMMAND_ENV="onnxruntime"
+else
+  CHECK_COMMAND_ENV="auto"
+fi
+if CHECK_RESULT_JSON="$(OCR_BACKEND="${CHECK_COMMAND_ENV}" "${VENV_DIR}/bin/python" "${SCRIPT_DIR}/worker.py" --check 2>&1)"; then
   log "${CHECK_RESULT_JSON}"
   VERIFIED_BACKEND="$(
     CHECK_RESULT_JSON="${CHECK_RESULT_JSON}" "${VENV_DIR}/bin/python" - <<'PY'
@@ -121,7 +155,7 @@ PY
 else
   log "${CHECK_RESULT_JSON}"
   log "默认 OCR 后端自检失败，开始安装 ONNXRuntime 备用后端"
-  "${VENV_DIR}/bin/python" -m pip install "rapidocr-onnxruntime==1.4.4" || fail "安装 ONNXRuntime 备用 OCR 后端失败。请检查 PyPI 网络、Python 版本和 CPU 架构 wheel 支持。"
+  install_onnxruntime_backend
   log "使用 ONNXRuntime 备用后端重新执行 OCR 自检"
   CHECK_RESULT_JSON="$(OCR_BACKEND=onnxruntime "${VENV_DIR}/bin/python" "${SCRIPT_DIR}/worker.py" --check 2>&1)" || fail "OCR Worker 自检失败。OpenVINO 与 ONNXRuntime 后端都不可用，请查看上方日志确认架构、Python wheel 或系统依赖问题。${CHECK_RESULT_JSON}"
   log "${CHECK_RESULT_JSON}"

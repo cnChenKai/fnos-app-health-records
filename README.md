@@ -193,13 +193,14 @@ ocr-venv/      OCR Python 虚拟环境
 
 ## OCR 安装失败排查
 
-OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前需要管理员在“我的 → 运行与识别”中安装。安装过程会在设备本地创建 `ocr-venv`，并下载 RapidOCR/OpenVINO、PyMuPDF、Pillow 等 Python 依赖。安装完成后会加载 OCR 引擎，生成一张本地测试图片并执行 OCR 识别；只有测试通过后才会写入就绪标记并显示为可用。默认优先使用 OpenVINO 后端；如果当前平台 OpenVINO 动态库加载失败，会自动安装并验证 ONNXRuntime 备用后端。
+OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前需要管理员在“我的 → 运行与识别”中安装。安装过程会在设备本地创建 `ocr-venv`，并下载 RapidOCR、PyMuPDF、Pillow 等 Python 依赖。安装完成后会加载 OCR 引擎，生成一张本地测试图片并执行 OCR 识别；只有测试通过后才会写入就绪标记并显示为可用。
+
+默认策略是 Python 3.9–3.11 优先使用 OpenVINO 后端，OpenVINO 依赖安装或动态库加载失败时自动切换到 ONNXRuntime 备用后端。Python 3.12 环境会直接使用 ONNXRuntime，因为当前锁定的 OpenVINO 版本范围没有 Python 3.12 可用 wheel。
 
 如果安装失败，可以在“运行与识别 → OCR 安装诊断”查看：
 
-- 安装状态、退出码、开始/结束时间。
-- Python 路径和安装脚本路径。
-- OCR 就绪标记路径。
+- 当前运行环境的 Python、OCR 后端、识别模型、PyMuPDF、Pillow 和 HEIF 支持版本。
+- 安装失败时的错误、告警和缺失路径。
 - 最近安装日志尾部。
 - 完整日志文件路径：`/var/apps/fnos-app-health-records/var/log/ocr-install.log`。
 
@@ -208,7 +209,7 @@ OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前�
 - 设备上没有可用的 Python 3.9–3.12。
 - Python 安装缺少 `venv` 或 `pip`。
 - 设备无法访问 PyPI，或需要配置可用的 pip 镜像。
-- 当前 CPU 架构没有 rapidocr-openvino/openvino 对应 wheel。
+- 当前 CPU 架构或 Python 版本没有 rapidocr-openvino/openvino 对应 wheel；应用会尽量自动切换到 ONNXRuntime 后端。
 - 数据目录不可写或磁盘空间不足。
 - macOS arm64 仅作为开发环境参考，OpenVINO macOS wheel 可能出现动态库加载兼容问题；fnOS OCR 验收应以 Linux 真机日志为准。
 
