@@ -33,6 +33,7 @@
     "build": "npm run build:web && nitro build",
     "generate:icons": "node scripts/generate-icons.mjs",
     "release:info": "node scripts/release-info.mjs",
+    "release:notes": "node scripts/generate-release-notes.mjs",
     "version:bump": "node scripts/bump-version.mjs",
     "version:auto": "node scripts/bump-version.mjs auto",
     "validate:migrations": "node scripts/validate-migrations.mjs",

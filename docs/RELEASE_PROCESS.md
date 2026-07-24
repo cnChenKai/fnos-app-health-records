@@ -163,6 +163,7 @@ schema v6 -> v7
 2. `CHANGELOG.md`
    - 先在当前未发布章节写清楚变更内容。
    - 写明是否包含数据库迁移。
+   - GitHub Release 的“本版本变更”会直接读取当前发布版本对应的 `CHANGELOG.md` 段落，发布前必须把用户可感知的功能、修复和升级注意事项写完整。
 3. `template.config.json`
    - 更新 `releaseNotes.summary`。
    - 更新 `releaseNotes.highlights`。
@@ -215,11 +216,19 @@ npm run release:ci
 - 构造高版本数据库，确认当前应用拒绝启动。
 - 迁移失败时，确认保留备份并写入 failed 记录。
 
+Release notes 预览：
+
+```bash
+npm run release:notes
+```
+
+该命令会读取 `CHANGELOG.md` 当前版本段落、`template.config.json` 的发布摘要/亮点和数据库迁移注册表，生成与 GitHub Release 一致的 Markdown。若当前 `package.json` 版本没有对应的 changelog 段落，命令会失败，避免发布页缺少本版本变更说明。
+
 自动化校验：
 
 - GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`。
-- GitHub Release 在 tag 或手动触发时执行 `npm run release:ci`。
-- Release notes 会自动读取 `package.json`、`template.config.json` 和迁移注册表，输出应用版本、应用 ID、目标 schema 和数据库升级说明。
+- GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
+- Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、应用版本、应用 ID、目标 schema 和数据库升级说明。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。
 
 本地完整发布：

@@ -122,6 +122,7 @@ npm test
 npm run build
 npm run pack:app
 npm run pack:fpk
+npm run release:notes
 npm run release:ci
 ```
 
@@ -151,6 +152,8 @@ pnpm release
 ```
 
 该命令会要求工作区干净，交互选择版本，执行完整构建校验，创建版本提交和 `v版本号` tag。GitHub Actions 只使用 `release:ci` 基于已推送的 tag 构建产物，不修改版本、不打 tag。
+
+GitHub Release 正文由 `npm run release:notes` 生成，会读取 `CHANGELOG.md` 当前版本段落作为“本版本变更”，并补充 `template.config.json` 的发布摘要/亮点、应用 ID 和目标数据库 schema。发布前建议先本地执行一次预览。
 
 ## 目录
 
