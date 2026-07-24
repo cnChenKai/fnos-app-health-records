@@ -109,6 +109,19 @@ CREATE INDEX IF NOT EXISTS reports_timeline_idx
   ON reports(member_id, report_issued_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS report_field_overrides (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  field_key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(report_id, field_key)
+);
+
+CREATE INDEX IF NOT EXISTS report_field_overrides_report_idx
+  ON report_field_overrides(report_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS report_pages (
   id TEXT PRIMARY KEY,
   report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,

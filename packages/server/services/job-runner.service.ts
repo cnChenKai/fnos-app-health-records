@@ -17,6 +17,7 @@ import {
   requestAiIndicatorNormalization,
   type AiIndicatorExecutor
 } from "./indicator-normalization.service";
+import { listManualReportFieldKeys, reportFieldDefinitions } from "./report-field-overrides.service";
 
 type JobRow = {
   id: string;
@@ -299,6 +300,9 @@ function scoreOcrQuality(lines: Array<Record<string, unknown>>) {
 function completeJob(job: JobRow, response: WorkerResponse) {
   if (!job.pageId) throw new Error("页面任务缺少页面 ID");
   const db = getDatabase();
+  const ocrMeta = typeof response.engineElapsed === "object" && response.engineElapsed !== null
+    ? (response.engineElapsed as Record<string, unknown>)
+    : {};
   if (job.jobType === "pdf_extract") {
     expandPdf(job, response);
   } else if (job.jobType === "thumbnail") {
@@ -346,6 +350,12 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       height: response.height,
       engine: response.engine,
       modelVersion: response.modelVersion,
+      ocrSource: typeof ocrMeta.source === "string" ? ocrMeta.source : undefined,
+      renderScale: typeof ocrMeta.renderScale === "number" ? ocrMeta.renderScale : undefined,
+      pdfTextLines: typeof ocrMeta.pdfTextLines === "number" ? ocrMeta.pdfTextLines : undefined,
+      ocrLines: typeof ocrMeta.ocrLines === "number" ? ocrMeta.ocrLines : undefined,
+      mergedLines: typeof ocrMeta.mergedLines === "number" ? ocrMeta.mergedLines : undefined,
+      imageCoverage: typeof ocrMeta.imageCoverage === "number" ? ocrMeta.imageCoverage : undefined,
       elapsedMs: response.elapsedMs
     }
   });
@@ -677,6 +687,8 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
     WHERE report_id = ? AND status IN ('queued', 'failed')
   `).all(reportId) as Array<{ id: string; jobType: JobRow["jobType"]; attempts: number }>;
   const queuedOcrJobs: string[] = [];
+  const manualFieldKeys = listManualReportFieldKeys(reportId);
+  const resetFields = reportFieldDefinitions.filter((field) => !manualFieldKeys.has(field.key));
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -705,41 +717,12 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
     db.prepare(`
       UPDATE reports SET
         status = 'processing',
-        title = '待识别报告',
-        report_type = 'other',
-        report_subtype = NULL,
-        hospital_name_raw = NULL,
+        ${resetFields.map((field) => `${field.column} = ?`).join(",\n        ")}${resetFields.length ? "," : ""}
         organization_id = NULL,
-        hospital_branch = NULL,
-        city = NULL,
-        visit_type = NULL,
-        visit_department = NULL,
-        ordering_department = NULL,
-        performing_department = NULL,
-        reporting_department = NULL,
-        inpatient_ward = NULL,
-        body_parts_json = '[]',
-        identifiers_json = '{}',
-        report_issued_at = NULL,
-        examined_at = NULL,
-        ordered_at = NULL,
-        sampled_at = NULL,
-        received_at = NULL,
-        reviewed_at = NULL,
-        admitted_at = NULL,
-        discharged_at = NULL,
-        clinicians_json = '{}',
-        clinical_diagnosis = NULL,
-        purpose = NULL,
-        chief_complaint = NULL,
-        findings = NULL,
-        impression = NULL,
-        summary = NULL,
-        recommendation = NULL,
         source_version = source_version + 1,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(reportId);
+    `).run(...resetFields.map((field) => field.resetValue), reportId);
     for (const page of pages) {
       const jobId = createId("job");
       db.prepare(`
@@ -767,6 +750,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
       pageCount: pages.length,
       queuedOcr: queuedOcrJobs.length,
       aiConfigured: isAiExtractionConfigured(),
+      manualFieldKeys: [...manualFieldKeys],
       batchId
     }));
     db.exec("COMMIT");

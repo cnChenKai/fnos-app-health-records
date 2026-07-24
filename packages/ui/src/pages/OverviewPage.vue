@@ -156,7 +156,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
           </header>
           <div class="overview-card-body">
           <div v-if="!recentReadyReports.length" class="overview-empty-line">暂无已存档报告</div>
-          <article v-for="item in recentReadyReports" :key="item.id" class="overview-row report-row">
+          <article v-for="item in recentReadyReports" :key="item.id" class="overview-row report-row" role="button" tabindex="0" @click="openReport(item.id)" @keydown.enter="openReport(item.id)">
             <div>
               <strong>{{ item.title }}</strong>
               <span>{{ formatDate(item.reportIssuedAt) }} · {{ item.hospitalName || "未识别医院" }}</span>
@@ -173,7 +173,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
           </header>
           <div class="overview-card-body">
           <div v-if="!unfiledReports.length" class="overview-empty-line">暂无待识别报告</div>
-          <article v-for="item in unfiledReports" :key="item.id" class="overview-row report-row">
+          <article v-for="item in unfiledReports" :key="item.id" class="overview-row report-row" role="button" tabindex="0" @click="openReport(item.id)" @keydown.enter="openReport(item.id)">
             <div>
               <strong>{{ item.title }}</strong>
               <span>{{ formatDate(item.reportIssuedAt) }} · {{ item.hospitalName || "未识别医院" }} · {{ statusLabel(item.status) }}</span>

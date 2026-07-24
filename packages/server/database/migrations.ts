@@ -233,6 +233,27 @@ export const databaseMigrations: DatabaseMigration[] = [
           ON ai_audit_events(report_id, created_at DESC);
       `);
     }
+  },
+  {
+    version: 9,
+    name: "add_report_field_overrides",
+    checksum: "manual:009-add-report-field-overrides",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS report_field_overrides (
+          id TEXT PRIMARY KEY,
+          report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+          field_key TEXT NOT NULL,
+          value_json TEXT NOT NULL,
+          updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(report_id, field_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS report_field_overrides_report_idx
+          ON report_field_overrides(report_id, updated_at DESC);
+      `);
+    }
   }
 ];
 

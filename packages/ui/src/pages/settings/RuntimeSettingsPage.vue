@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { Cpu, Database, Download, LoaderCircle } from "@lucide/vue";
+import { Cpu, Database, Download, LoaderCircle, Save } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
@@ -67,11 +67,25 @@ type SystemSummary = {
     totalKnownBytes: number;
   };
 };
+type PipMirrorKey = "official" | "tsinghua" | "aliyun" | "tencent" | "huaweicloud" | "custom";
+type OcrInstallSettings = {
+  pipMirror: PipMirrorKey;
+  customPipIndexUrl: string;
+  resolvedPipIndexUrl: string;
+  mirrors: Array<{ key: PipMirrorKey; label: string; indexUrl: string; description: string }>;
+};
 
 const app = useAppContext();
 const system = ref<SystemSummary | null>(null);
 const ocr = ref<OcrStatus | null>(null);
+const ocrSettings = ref<OcrInstallSettings>({
+  pipMirror: "official",
+  customPipIndexUrl: "",
+  resolvedPipIndexUrl: "",
+  mirrors: []
+});
 const runtimeMessage = ref("");
+const savingOcrSettings = ref(false);
 let statusTimer: ReturnType<typeof setInterval> | null = null;
 const databaseSummaryRows = computed(() => [
   { label: "报告", value: system.value?.database?.rowCounts?.reports || 0 },
@@ -92,6 +106,10 @@ const ocrRuntimeRows = computed(() => {
     { label: "平台", value: runtime?.machine ? `${runtime.platform || "—"} · ${runtime.machine}` : runtime?.platform || "—" }
   ];
   return rows.filter((row) => row.value !== "—" || !ocr.value?.available);
+});
+const selectedPipIndexUrl = computed(() => {
+  if (ocrSettings.value.pipMirror === "custom") return ocrSettings.value.customPipIndexUrl.trim();
+  return ocrSettings.value.mirrors.find((mirror) => mirror.key === ocrSettings.value.pipMirror)?.indexUrl || "";
 });
 
 function logLineClass(line: string) {
@@ -147,8 +165,30 @@ async function installOcr() {
     stopStatusPolling();
   }
 }
+async function saveOcrSettings() {
+  savingOcrSettings.value = true;
+  runtimeMessage.value = "";
+  try {
+    ocrSettings.value = await request<OcrInstallSettings>("ocr/settings", {
+      method: "PUT",
+      body: JSON.stringify({
+        pipMirror: ocrSettings.value.pipMirror,
+        customPipIndexUrl: ocrSettings.value.customPipIndexUrl
+      })
+    });
+    runtimeMessage.value = "Python 依赖镜像源已保存，下次安装或重装 OCR 环境时生效";
+  } catch (error) {
+    runtimeMessage.value = error instanceof Error ? error.message : "保存镜像源失败";
+  } finally {
+    savingOcrSettings.value = false;
+  }
+}
 onMounted(async () => {
-  [system.value, ocr.value] = await Promise.all([request<SystemSummary>("system"), request<OcrStatus>("ocr/status")]);
+  [system.value, ocr.value, ocrSettings.value] = await Promise.all([
+    request<SystemSummary>("system"),
+    request<OcrStatus>("ocr/status"),
+    request<OcrInstallSettings>("ocr/settings")
+  ]);
   syncStatusPolling();
 });
 onBeforeUnmount(stopStatusPolling);
@@ -196,6 +236,34 @@ onBeforeUnmount(stopStatusPolling);
           <div><span>日志</span><strong>{{ formatBytes(system?.storage?.logsBytes) }}</strong></div>
           <div><span>OCR 模型</span><strong>{{ formatBytes(system?.storage?.modelsBytes) }}</strong></div>
           <div><span>已统计合计</span><strong>{{ formatBytes(system?.storage?.totalKnownBytes) }}</strong></div>
+        </div>
+      </section>
+      <section class="runtime-detail">
+        <header>
+          <h4>Python 依赖镜像源</h4>
+          <p>国内网络建议选择清华、阿里云、腾讯云或华为云；保存后下次安装 OCR 环境时生效。</p>
+        </header>
+        <div class="settings-form runtime-pip-form">
+          <label>
+            <span>镜像源</span>
+            <select v-model="ocrSettings.pipMirror">
+              <option v-for="mirror in ocrSettings.mirrors" :key="mirror.key" :value="mirror.key">
+                {{ mirror.label }}
+              </option>
+            </select>
+          </label>
+          <label v-if="ocrSettings.pipMirror === 'custom'">
+            <span>自定义地址</span>
+            <input v-model.trim="ocrSettings.customPipIndexUrl" placeholder="https://example.com/simple" />
+          </label>
+          <p class="preview-hint">当前将使用：{{ selectedPipIndexUrl || "pip 默认源" }}</p>
+          <div class="form-actions">
+            <button type="button" :disabled="savingOcrSettings || ocr?.installing" @click="saveOcrSettings">
+              <LoaderCircle v-if="savingOcrSettings" class="spin-icon" :size="17" />
+              <Save v-else :size="17" />
+              {{ savingOcrSettings ? "正在保存" : "保存镜像源" }}
+            </button>
+          </div>
         </div>
       </section>
       <section v-if="!ocr?.available || ocr?.lastInstall?.state" class="runtime-detail">

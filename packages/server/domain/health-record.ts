@@ -121,6 +121,7 @@ export type ReportDetail = ReportSummary & {
   pages: ReportPage[];
   observations: Observation[];
   duplicateCandidates: DuplicateReportCandidate[];
+  manualFieldKeys: string[];
 };
 
 export type CursorPage<T> = {

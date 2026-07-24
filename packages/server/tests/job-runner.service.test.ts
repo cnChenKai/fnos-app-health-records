@@ -16,6 +16,7 @@ import {
 import { buildReportTitle, normalizeAiExtraction, type AiExecutor } from "../services/ai-extraction.service.ts";
 import { saveAiSettings } from "../services/ai-settings.service.ts";
 import { createUpload } from "../services/upload.service.ts";
+import { getReportDetail, updateReportFields } from "../services/records.service.ts";
 
 const manager: RequestUser = {
   id: "runner-manager",
@@ -391,22 +392,47 @@ test("reprocesses a single report by clearing current OCR and AI content then qu
     assert.equal(await processNextJob(worker, ai), true);
     assert.equal(aiRound, 1);
 
+    const beforeManualEdit = getReportDetail(manager, upload.reportId);
+    const manuallyEdited = updateReportFields(manager, upload.reportId, {
+      title: "旧血糖报告",
+      reportType: "laboratory",
+      hospitalName: "人工医院",
+      hospitalBranch: "",
+      city: "",
+      visitType: "",
+      departmentName: "",
+      orderingDepartment: "",
+      performingDepartment: "",
+      reportingDepartment: "",
+      bodyPart: beforeManualEdit.bodyPart || "",
+      reportIssuedAt: "2026-07-21",
+      examinedAt: "",
+      clinicalDiagnosis: "",
+      purpose: "",
+      findings: "",
+      impression: "",
+      summary: "人工摘要",
+      recommendation: ""
+    });
+    assert.deepEqual([...manuallyEdited.manualFieldKeys].sort(), ["hospitalName", "summary"]);
+
     const reset = reprocessReportOcrAndAi(manager, upload.reportId);
     assert.equal(reset.queuedOcr, 1);
     assert.equal(reset.aiWillRun, true);
     const cleared = getDatabase().prepare(`
-      SELECT title, report_type AS reportType, summary, status,
+      SELECT title, report_type AS reportType, hospital_name_raw AS hospitalName, summary, status,
         (SELECT COUNT(*) FROM ocr_results o JOIN report_pages p ON p.id = o.page_id WHERE p.report_id = reports.id) AS ocrCount,
         (SELECT COUNT(*) FROM observations WHERE report_id = reports.id) AS observationCount,
         (SELECT COUNT(*) FROM report_extractions WHERE report_id = reports.id) AS extractionCount
       FROM reports WHERE id = ?
     `).get(upload.reportId) as {
-      title: string; reportType: string; summary: string | null; status: string;
+      title: string; reportType: string; hospitalName: string | null; summary: string | null; status: string;
       ocrCount: number; observationCount: number; extractionCount: number;
     };
     assert.deepEqual({
       title: cleared.title,
       reportType: cleared.reportType,
+      hospitalName: cleared.hospitalName,
       summary: cleared.summary,
       status: cleared.status,
       ocrCount: cleared.ocrCount,
@@ -415,7 +441,8 @@ test("reprocesses a single report by clearing current OCR and AI content then qu
     }, {
       title: "待识别报告",
       reportType: "other",
-      summary: null,
+      hospitalName: "人工医院",
+      summary: "人工摘要",
       status: "processing",
       ocrCount: 0,
       observationCount: 0,
@@ -436,15 +463,16 @@ test("reprocesses a single report by clearing current OCR and AI content then qu
     assert.equal(await processNextJob(worker, ai), true);
     assert.equal(aiRound, 2);
     const refreshed = getDatabase().prepare(`
-      SELECT title, summary,
+      SELECT title, hospital_name_raw AS hospitalName, summary,
         (SELECT numeric_value FROM observations WHERE report_id = ? AND item_name = '血糖' ORDER BY created_at DESC LIMIT 1) AS glucose,
         (SELECT COUNT(*) FROM report_extractions WHERE report_id = ?) AS extractionCount
       FROM reports WHERE id = ?
     `).get(upload.reportId, upload.reportId, upload.reportId) as {
-      title: string; summary: string; glucose: number; extractionCount: number;
+      title: string; hospitalName: string; summary: string; glucose: number; extractionCount: number;
     };
     assert.equal(refreshed.title, "新血糖报告");
-    assert.equal(refreshed.summary, "新识别结果");
+    assert.equal(refreshed.hospitalName, "人工医院");
+    assert.equal(refreshed.summary, "人工摘要");
     assert.equal(refreshed.glucose, 5.8);
     assert.equal(refreshed.extractionCount, 2);
     const audits = getDatabase().prepare(`

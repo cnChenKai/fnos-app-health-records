@@ -202,6 +202,90 @@ def dedupe_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [best[key] for key in order]
 
 
+def line_key(text: str) -> str:
+    return "".join(character.lower() for character in text if character.isalnum())
+
+
+def merge_pdf_text_and_ocr_lines(pdf_lines: list[dict[str, Any]], ocr_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer embedded PDF text, then add OCR-only content.
+
+    Many hospital PDFs contain a partial text layer plus scanned/table images.
+    Returning the text layer alone misses the image content; returning OCR alone
+    may lose exact digital text. This merge keeps exact PDF text and adds OCR
+    lines whose normalized text is not already present.
+    """
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for line in pdf_lines:
+        text = str(line.get("text", "")).strip()
+        key = line_key(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append({**line, "id": f"line_{len(merged) + 1}"})
+
+    for line in ocr_lines:
+        text = str(line.get("text", "")).strip()
+        key = line_key(text)
+        if not key or key in seen:
+            continue
+        # Skip very short OCR fragments when PDF text is already present; these
+        # fragments are often punctuation/noise around table borders.
+        if len(key) <= 1 and pdf_lines:
+            continue
+        seen.add(key)
+        merged.append({**line, "id": f"line_{len(merged) + 1}"})
+
+    return merged
+
+
+def pdf_image_coverage(blocks: list[dict[str, Any]], page_area: float) -> float:
+    if page_area <= 0:
+        return 0
+    image_area = 0.0
+    for block in blocks:
+        if block.get("type") != 1:
+            continue
+        bbox = block.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+            continue
+        try:
+            width = max(0.0, float(bbox[2]) - float(bbox[0]))
+            height = max(0.0, float(bbox[3]) - float(bbox[1]))
+            image_area += width * height
+        except Exception:
+            continue
+    return min(1.0, image_area / page_area)
+
+
+def should_ocr_pdf_page(embedded_lines: list[dict[str, Any]], image_coverage: float) -> bool:
+    text_length = sum(len(str(line.get("text", "")).strip()) for line in embedded_lines)
+    if not embedded_lines:
+        return True
+    if len(embedded_lines) < 8:
+        return True
+    if text_length < 300:
+        return True
+    # A hospital PDF may contain a partial text layer plus a scanned table/image.
+    # If the image area is meaningful, render the current page and merge OCR-only
+    # content back into the embedded text layer. Tiny logos/seals usually stay
+    # below this threshold and won't slow every digital PDF page down.
+    if image_coverage >= 0.18:
+        return True
+    if image_coverage >= 0.06 and text_length < 1500:
+        return True
+    return False
+
+
+def pdf_render_scale() -> float:
+    try:
+        requested = float(os.environ.get("OCR_PDF_RENDER_SCALE", "3") or 3)
+    except Exception:
+        requested = 3.0
+    return max(2.0, min(4.0, requested))
+
+
 def date_image_variants(image_path: Path, temp_dir: Path) -> list[tuple[str, Path]]:
     """Create lightweight variants that help dot-matrix / low-contrast date codes.
 
@@ -292,8 +376,13 @@ def recognize_input(
             raise IndexError(f"PDF page does not exist: {page_number}")
         page = document.load_page(index)
         embedded = page.get_text("dict")
+        blocks = embedded.get("blocks", [])
+        image_coverage = pdf_image_coverage(blocks, float(page.rect.width * page.rect.height))
+        has_image_blocks = image_coverage > 0
         embedded_lines: list[dict[str, Any]] = []
-        for block in embedded.get("blocks", []):
+        for block in blocks:
+            if block.get("type") != 0:
+                continue
             for line in block.get("lines", []):
                 text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
                 if text:
@@ -306,14 +395,42 @@ def recognize_input(
                             "variant": "pdf_text",
                         }
                     )
-        if embedded_lines:
-            return embedded_lines, {"source": "pdf_text", "page": index + 1}
+        if not should_ocr_pdf_page(embedded_lines, image_coverage):
+            return embedded_lines, {
+                "source": "pdf_text",
+                "page": index + 1,
+                "pdfTextLines": len(embedded_lines),
+                "hasImageBlocks": has_image_blocks,
+                "imageCoverage": round(image_coverage, 4),
+            }
 
         with tempfile.TemporaryDirectory(prefix="health-record-pdf-") as temp_name:
             image_path = Path(temp_name) / f"page-{index + 1}.png"
-            page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False).save(image_path)
-            lines, elapsed = recognize_image(engine, image_path, image_role)
-            return lines, {"source": "pdf_render", "page": index + 1, "ocr": elapsed}
+            render_scale = pdf_render_scale()
+            page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), alpha=False).save(image_path)
+            ocr_lines, elapsed = recognize_image(engine, image_path, image_role)
+            if embedded_lines:
+                lines = merge_pdf_text_and_ocr_lines(embedded_lines, ocr_lines)
+                return lines, {
+                    "source": "pdf_text_plus_render",
+                    "page": index + 1,
+                    "renderScale": render_scale,
+                    "pdfTextLines": len(embedded_lines),
+                    "ocrLines": len(ocr_lines),
+                    "mergedLines": len(lines),
+                    "hasImageBlocks": has_image_blocks,
+                    "imageCoverage": round(image_coverage, 4),
+                    "ocr": elapsed,
+                }
+            return ocr_lines, {
+                "source": "pdf_render",
+                "page": index + 1,
+                "renderScale": render_scale,
+                "ocrLines": len(ocr_lines),
+                "hasImageBlocks": has_image_blocks,
+                "imageCoverage": round(image_coverage, 4),
+                "ocr": elapsed,
+            }
 
 
 def inspect_pdf(input_path: Path) -> dict[str, Any]:

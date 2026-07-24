@@ -116,6 +116,70 @@ test("lists reports with cursors and returns detail pages with original files", 
   }
 });
 
+test("manual report field edits are tracked as field overrides", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-overrides-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const upload = createUpload(manager, "records-member", [{ originalName: "manual.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = 'AI血糖报告', report_type = 'laboratory', status = 'needs_review',
+        hospital_name_raw = 'AI医院', visit_department = '检验科', report_issued_at = '2026-07-21',
+        impression = 'AI结论'
+      WHERE id = ?
+    `).run(upload.reportId);
+
+    const detail = updateReportFields(manager, upload.reportId, {
+      title: "AI血糖报告",
+      reportType: "laboratory",
+      hospitalName: "人工医院",
+      hospitalBranch: "",
+      city: "",
+      visitType: "",
+      departmentName: "检验科",
+      orderingDepartment: "",
+      performingDepartment: "",
+      reportingDepartment: "",
+      bodyPart: "",
+      reportIssuedAt: "2026-07-21",
+      examinedAt: "",
+      clinicalDiagnosis: "",
+      purpose: "",
+      findings: "",
+      impression: "人工结论",
+      summary: "",
+      recommendation: ""
+    });
+
+    assert.equal(detail.hospitalName, "人工医院");
+    assert.equal(detail.impression, "人工结论");
+    assert.deepEqual([...detail.manualFieldKeys].sort(), ["hospitalName", "impression"]);
+    const rows = db.prepare(`
+      SELECT field_key AS fieldKey, value_json AS valueJson FROM report_field_overrides
+      WHERE report_id = ? ORDER BY field_key
+    `).all(upload.reportId) as Array<{ fieldKey: string; valueJson: string }>;
+    assert.deepEqual(rows.map((row) => [row.fieldKey, JSON.parse(row.valueJson)]), [
+      ["hospitalName", "人工医院"],
+      ["impression", "人工结论"]
+    ]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("detects duplicate report candidates from extracted content instead of file hash", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-"));
   process.env.STORAGE_DIR = storageDir;

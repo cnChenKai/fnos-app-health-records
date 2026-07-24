@@ -27,6 +27,12 @@ import { assertMemberAccess, assertMemberManage } from "./member.service";
 import { requestWorker } from "./ocr-worker-client";
 import { isGenericReportTitle } from "./ai-extraction.service";
 import { getJobRunnerStatus, startJobRunner, stopJobRunner } from "./job-runner.service";
+import {
+  listManualReportFieldKeys,
+  reportFieldDefinitions,
+  upsertManualReportFieldOverrides,
+  type ReportFieldKey
+} from "./report-field-overrides.service";
 
 type ReportCursor = { issuedAt: string | null; id: string };
 export type ReportFilters = {
@@ -611,6 +617,7 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
     clinicians: parseJson(row.cliniciansJson, {}),
     pages,
     observations,
+    manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates: findDuplicateCandidates(row)
   };
 }
@@ -915,43 +922,62 @@ export function mergeDuplicateReport(user: RequestUser, sourceReportId: string, 
 }
 
 export function updateReportFields(user: RequestUser, reportId: string, input: Record<string, unknown>) {
-  const report = getDatabase().prepare("SELECT member_id AS memberId, status FROM reports WHERE id = ? AND status <> 'trashed'")
-    .get(reportId) as { memberId: string; status: string } | undefined;
+  const db = getDatabase();
+  const report = db.prepare(`
+    SELECT member_id AS memberId, status, ${reportFieldDefinitions.map((field) => field.column).join(", ")}
+    FROM reports
+    WHERE id = ? AND status <> 'trashed'
+  `).get(reportId) as ({ memberId: string; status: string } & Record<string, string | null>) | undefined;
   if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
   const reportType = textInput(input.reportType, 40);
   if (reportType && !allowedReportTypes.has(reportType)) throw createError({ statusCode: 400, statusMessage: "报告类型无效" });
   const bodyPart = textInput(input.bodyPart, 120);
+  const bodyPartsValue = bodyPart ? JSON.stringify([{ raw: bodyPart, name: bodyPart, parent: null, laterality: "unspecified" }]) : "[]";
   const updates = [
-    ["title", textInput(input.title, 180)],
-    ["report_type", reportType],
-    ["hospital_name_raw", textInput(input.hospitalName, 180)],
-    ["hospital_branch", textInput(input.hospitalBranch, 120)],
-    ["city", textInput(input.city, 80)],
-    ["visit_type", textInput(input.visitType, 80)],
-    ["visit_department", textInput(input.departmentName, 120)],
-    ["ordering_department", textInput(input.orderingDepartment, 120)],
-    ["performing_department", textInput(input.performingDepartment, 120)],
-    ["reporting_department", textInput(input.reportingDepartment, 120)],
-    ["report_issued_at", dateInput(input.reportIssuedAt)],
-    ["examined_at", dateInput(input.examinedAt)],
-    ["clinical_diagnosis", textInput(input.clinicalDiagnosis, 500)],
-    ["purpose", textInput(input.purpose, 500)],
-    ["findings", textInput(input.findings, 2000)],
-    ["impression", textInput(input.impression, 2000)],
-    ["summary", textInput(input.summary, 1000)],
-    ["recommendation", textInput(input.recommendation, 1000)]
-  ] as Array<[string, string | null]>;
-  const setClauses = updates.map(([column]) => `${column} = ?`);
-  const values = updates.map(([, value]) => value);
-  setClauses.push("body_parts_json = ?");
-  values.push(bodyPart ? JSON.stringify([{ raw: bodyPart, name: bodyPart, parent: null, laterality: "unspecified" }]) : "[]");
+    { fieldKey: "title", column: "title", value: textInput(input.title, 180), overrideValue: textInput(input.title, 180) },
+    { fieldKey: "reportType", column: "report_type", value: reportType, overrideValue: reportType },
+    { fieldKey: "hospitalName", column: "hospital_name_raw", value: textInput(input.hospitalName, 180), overrideValue: textInput(input.hospitalName, 180) },
+    { fieldKey: "hospitalBranch", column: "hospital_branch", value: textInput(input.hospitalBranch, 120), overrideValue: textInput(input.hospitalBranch, 120) },
+    { fieldKey: "city", column: "city", value: textInput(input.city, 80), overrideValue: textInput(input.city, 80) },
+    { fieldKey: "visitType", column: "visit_type", value: textInput(input.visitType, 80), overrideValue: textInput(input.visitType, 80) },
+    { fieldKey: "departmentName", column: "visit_department", value: textInput(input.departmentName, 120), overrideValue: textInput(input.departmentName, 120) },
+    { fieldKey: "orderingDepartment", column: "ordering_department", value: textInput(input.orderingDepartment, 120), overrideValue: textInput(input.orderingDepartment, 120) },
+    { fieldKey: "performingDepartment", column: "performing_department", value: textInput(input.performingDepartment, 120), overrideValue: textInput(input.performingDepartment, 120) },
+    { fieldKey: "reportingDepartment", column: "reporting_department", value: textInput(input.reportingDepartment, 120), overrideValue: textInput(input.reportingDepartment, 120) },
+    { fieldKey: "reportIssuedAt", column: "report_issued_at", value: dateInput(input.reportIssuedAt), overrideValue: dateInput(input.reportIssuedAt) },
+    { fieldKey: "examinedAt", column: "examined_at", value: dateInput(input.examinedAt), overrideValue: dateInput(input.examinedAt) },
+    { fieldKey: "clinicalDiagnosis", column: "clinical_diagnosis", value: textInput(input.clinicalDiagnosis, 500), overrideValue: textInput(input.clinicalDiagnosis, 500) },
+    { fieldKey: "purpose", column: "purpose", value: textInput(input.purpose, 500), overrideValue: textInput(input.purpose, 500) },
+    { fieldKey: "findings", column: "findings", value: textInput(input.findings, 2000), overrideValue: textInput(input.findings, 2000) },
+    { fieldKey: "impression", column: "impression", value: textInput(input.impression, 2000), overrideValue: textInput(input.impression, 2000) },
+    { fieldKey: "summary", column: "summary", value: textInput(input.summary, 1000), overrideValue: textInput(input.summary, 1000) },
+    { fieldKey: "recommendation", column: "recommendation", value: textInput(input.recommendation, 1000), overrideValue: textInput(input.recommendation, 1000) },
+    { fieldKey: "bodyParts", column: "body_parts_json", value: bodyPartsValue, overrideValue: bodyPart ? [{ raw: bodyPart, name: bodyPart, parent: null, laterality: "unspecified" }] : [] }
+  ] satisfies Array<{ fieldKey: ReportFieldKey; column: string; value: string | null; overrideValue: unknown }>;
+  const changedManualFields = updates
+    .filter((field) => (report[field.column] ?? null) !== (field.value ?? null))
+    .map((field) => ({ fieldKey: field.fieldKey, value: field.overrideValue }));
+  const setClauses = updates.map((field) => `${field.column} = ?`);
+  const values = updates.map((field) => field.value);
   setClauses.push("source_version = source_version + 1", "updated_at = CURRENT_TIMESTAMP");
-  getDatabase().prepare(`UPDATE reports SET ${setClauses.join(", ")} WHERE id = ?`).run(...values, reportId);
-  getDatabase().prepare(`
-    INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
-    VALUES (?, ?, 'report.manual_update', 'report', ?, ?)
-  `).run(createId("audit"), user.id, reportId, JSON.stringify({ memberId: report.memberId, fields: updates.map(([column]) => column) }));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`UPDATE reports SET ${setClauses.join(", ")} WHERE id = ?`).run(...values, reportId);
+    upsertManualReportFieldOverrides({ reportId, userId: user.id, fields: changedManualFields });
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'report.manual_update', 'report', ?, ?)
+    `).run(createId("audit"), user.id, reportId, JSON.stringify({
+      memberId: report.memberId,
+      fields: updates.map((field) => field.column),
+      manualFieldKeys: changedManualFields.map((field) => field.fieldKey)
+    }));
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
   return getReportDetail(user, reportId);
 }
 

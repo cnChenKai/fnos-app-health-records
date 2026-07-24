@@ -27,6 +27,7 @@ export type WorkerResponse = {
   engine?: string;
   modelVersion?: string;
   lines?: Array<Record<string, unknown>>;
+  engineElapsed?: unknown;
   elapsedMs?: number;
 };
 

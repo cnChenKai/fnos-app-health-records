@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
+import { getDatabase } from "../database/client";
 import { getAppConfig } from "../utils/runtime-config";
 import { getJobRunnerStatus } from "./job-runner.service";
 
@@ -38,6 +39,23 @@ type OcrRuntimeInfo = {
   platform?: string;
   machine?: string;
 };
+
+type OcrPipMirrorKey = "official" | "tsinghua" | "aliyun" | "tencent" | "huaweicloud" | "custom";
+
+type OcrInstallSettings = {
+  pipMirror: OcrPipMirrorKey;
+  customPipIndexUrl: string;
+};
+
+const ocrInstallSettingKey = "ocr.install";
+const pipMirrorCatalog: Array<{ key: OcrPipMirrorKey; label: string; indexUrl: string; description: string }> = [
+  { key: "official", label: "官方 PyPI", indexUrl: "", description: "使用 pip 默认源，适合海外网络或已配置系统 pip 镜像的设备" },
+  { key: "tsinghua", label: "清华大学", indexUrl: "https://pypi.tuna.tsinghua.edu.cn/simple", description: "国内常用 PyPI 镜像" },
+  { key: "aliyun", label: "阿里云", indexUrl: "https://mirrors.aliyun.com/pypi/simple", description: "阿里云 PyPI 镜像" },
+  { key: "tencent", label: "腾讯云", indexUrl: "https://mirrors.cloud.tencent.com/pypi/simple", description: "腾讯云 PyPI 镜像" },
+  { key: "huaweicloud", label: "华为云", indexUrl: "https://repo.huaweicloud.com/repository/pypi/simple", description: "华为云 PyPI 镜像" },
+  { key: "custom", label: "自定义", indexUrl: "", description: "填写可访问的 PyPI simple API 地址" }
+];
 
 function readyMarkerPath(pythonBin: string) {
   return join(dirname(dirname(pythonBin)), ".health-records-ocr-ready");
@@ -100,6 +118,63 @@ function readRuntimeInfo(readyMarker: string): OcrRuntimeInfo | null {
   } catch {
     return null;
   }
+}
+
+function isPipMirrorKey(value: unknown): value is OcrPipMirrorKey {
+  return typeof value === "string" && pipMirrorCatalog.some((item) => item.key === value);
+}
+
+function normalizePipIndexUrl(value: unknown) {
+  const url = String(value || "").trim().replace(/\/+$/, "");
+  if (!url) return "";
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    throw new Error("PyPI 镜像地址无效，请填写 http(s)://.../simple 格式地址");
+  }
+}
+
+function readOcrInstallSettings(): OcrInstallSettings {
+  const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
+    .get(ocrInstallSettingKey) as { valueJson: string } | undefined;
+  if (!row) return { pipMirror: "official", customPipIndexUrl: "" };
+  try {
+    const stored = JSON.parse(row.valueJson) as Partial<OcrInstallSettings>;
+    return {
+      pipMirror: isPipMirrorKey(stored.pipMirror) ? stored.pipMirror : "official",
+      customPipIndexUrl: normalizePipIndexUrl(stored.customPipIndexUrl)
+    };
+  } catch {
+    return { pipMirror: "official", customPipIndexUrl: "" };
+  }
+}
+
+function resolvedPipIndexUrl(settings: OcrInstallSettings) {
+  if (settings.pipMirror === "custom") return settings.customPipIndexUrl;
+  return pipMirrorCatalog.find((item) => item.key === settings.pipMirror)?.indexUrl || "";
+}
+
+export function getOcrInstallSettings() {
+  const settings = readOcrInstallSettings();
+  return {
+    ...settings,
+    resolvedPipIndexUrl: resolvedPipIndexUrl(settings),
+    mirrors: pipMirrorCatalog
+  };
+}
+
+export function saveOcrInstallSettings(input: Partial<OcrInstallSettings>) {
+  const pipMirror = isPipMirrorKey(input.pipMirror) ? input.pipMirror : "official";
+  const customPipIndexUrl = normalizePipIndexUrl(input.customPipIndexUrl);
+  if (pipMirror === "custom" && !customPipIndexUrl) throw new Error("请选择自定义镜像源地址");
+  const settings: OcrInstallSettings = { pipMirror, customPipIndexUrl };
+  getDatabase().prepare(`
+    INSERT INTO app_settings (setting_key, value_json) VALUES (?, ?)
+    ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP
+  `).run(ocrInstallSettingKey, JSON.stringify(settings));
+  return getOcrInstallSettings();
 }
 
 function writeInstallStatus(status: OcrInstallStatus) {
@@ -188,6 +263,8 @@ export function installOcrRuntime() {
   const config = getAppConfig();
   const startedAt = new Date().toISOString();
   const logPath = installLogPath(config.logDir);
+  const installSettings = readOcrInstallSettings();
+  const pipIndexUrl = resolvedPipIndexUrl(installSettings);
   installing = true;
   installLastOutputAt = startedAt;
   writeInstallStatus({ state: "installing", startedAt, logPath });
@@ -196,7 +273,11 @@ export function installOcrRuntime() {
   const child = spawn("sh", [config.ocrSetupScript], {
     detached: false,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, STORAGE_DIR: config.storageDir }
+    env: {
+      ...process.env,
+      STORAGE_DIR: config.storageDir,
+      ...(pipIndexUrl ? { PIP_INDEX_URL: pipIndexUrl } : {})
+    }
   });
 
   child.stdout?.on("data", (chunk) => appendChunk("stdout", chunk));

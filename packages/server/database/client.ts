@@ -19,6 +19,7 @@ const countedTables = [
   "ai_audit_events",
   "ocr_results",
   "report_extractions",
+  "report_field_overrides",
   "reminders",
   "app_notifications",
   "app_upgrade_history",

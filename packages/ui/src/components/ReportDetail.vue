@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, CircleAlert, Clock3, Download,
+  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
   FileImage, FileText, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCw, ScrollText,
   Sparkles, Trash2, X
 } from "@lucide/vue";
@@ -57,6 +57,7 @@ const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
 const trashingReport = ref(false);
 const editOpen = ref(false);
+const editOriginalIndex = ref(0);
 const savingReport = ref(false);
 const savingPages = ref(false);
 const editForm = ref({
@@ -89,6 +90,7 @@ const viewerImagePages = computed<ImageViewerPage[]>(() =>
   }))
 );
 const firstPdfPage = computed(() => detail.value?.pages.find((page) => page.mimeType === "application/pdf") || null);
+const currentOriginalPage = computed(() => detail.value?.pages[editOriginalIndex.value] || null);
 const pdfViewerSrc = computed(() => {
   const page = pdfViewerPage.value;
   if (!page) return "";
@@ -155,6 +157,10 @@ function typeLabel(reportType: string) {
   return typeLabels[reportType] || "其他";
 }
 
+function isManualField(fieldKey: string) {
+  return Boolean(detail.value?.manualFieldKeys?.includes(fieldKey));
+}
+
 function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
 }
@@ -196,6 +202,11 @@ function eventTitle(event: ProcessingJobEvent) {
 
 function eventDetail(event: ProcessingJobEvent) {
   const payload = event.detail || {};
+  const ocrSourceText = {
+    pdf_text: "PDF 文字层",
+    pdf_render: "PDF 高清渲染 OCR",
+    pdf_text_plus_render: "PDF 文字层+高清 OCR 合并"
+  }[typeof payload.ocrSource === "string" ? payload.ocrSource : ""] || "";
   const parts = [
     typeof payload.code === "string" ? `错误码 ${payload.code}` : "",
     typeof payload.elapsedMs === "number" ? `耗时 ${formatMs(payload.elapsedMs)}` : "",
@@ -204,6 +215,14 @@ function eventDetail(event: ProcessingJobEvent) {
     typeof payload.model === "string" ? String(payload.model) : "",
     typeof payload.engine === "string" ? `OCR ${payload.engine}` : "",
     typeof payload.modelVersion === "string" ? String(payload.modelVersion) : "",
+    ocrSourceText,
+    typeof payload.renderScale === "number" ? `${payload.renderScale}x 渲染` : "",
+    typeof payload.mergedLines === "number" ? `合并 ${payload.mergedLines} 行` : "",
+    typeof payload.ocrLines === "number" && typeof payload.mergedLines !== "number" ? `OCR ${payload.ocrLines} 行` : "",
+    typeof payload.pdfTextLines === "number" ? `文字层 ${payload.pdfTextLines} 行` : "",
+    typeof payload.imageCoverage === "number" && payload.imageCoverage > 0
+      ? `图片覆盖 ${Math.round(payload.imageCoverage * 100)}%`
+      : "",
     typeof payload.promptTokens === "number" || typeof payload.completionTokens === "number"
       ? `${Number(payload.promptTokens || 0)}/${Number(payload.completionTokens || 0)} tokens`
       : ""
@@ -294,6 +313,9 @@ function openEditReport() {
     recommendation: detail.value?.recommendation || ""
   };
   editOpen.value = true;
+  if (window.matchMedia("(min-width: 761px)").matches && !ocrPages.value.length && !ocrLoading.value) {
+    void loadOcrPages();
+  }
 }
 
 async function saveReportFields() {
@@ -367,11 +389,32 @@ async function deleteSavedPage(page: ReportPage) {
   });
 }
 
-async function openOcrText() {
-  ocrSheetOpen.value = true;
-  ocrLoading.value = true;
+/* 原件 swiper：触摸滑动翻页 + OCR 栏联动 */
+let originalSwipeX = 0;
+let originalSwipeY = 0;
+
+function onOriginalSwipeStart(event: TouchEvent) {
+  originalSwipeX = event.touches[0].clientX;
+  originalSwipeY = event.touches[0].clientY;
+}
+
+function onOriginalSwipeEnd(event: TouchEvent) {
+  const dx = event.changedTouches[0].clientX - originalSwipeX;
+  const dy = event.changedTouches[0].clientY - originalSwipeY;
+  const pageCount = detail.value?.pages.length || 0;
+  if (Math.abs(dx) < 56 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+  if (dx < 0 && editOriginalIndex.value < pageCount - 1) editOriginalIndex.value += 1;
+  else if (dx > 0 && editOriginalIndex.value > 0) editOriginalIndex.value -= 1;
+}
+
+watch(editOriginalIndex, (index) => {
+  const page = detail.value?.pages[index];
+  if (!page) return;
+  document.getElementById(`edit-ocr-page-${page.pageNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+async function loadOcrPages() {  ocrLoading.value = true;
   ocrError.value = "";
-  ocrPages.value = [];
   try {
     ocrPages.value = await request<OcrPageText[]>(`reports/${encodeURIComponent(props.reportId)}/ocr`);
   } catch (cause) {
@@ -379,6 +422,12 @@ async function openOcrText() {
   } finally {
     ocrLoading.value = false;
   }
+}
+
+async function openOcrText() {
+  ocrSheetOpen.value = true;
+  ocrPages.value = [];
+  await loadOcrPages();
 }
 
 async function confirmReady() {
@@ -444,7 +493,7 @@ async function reprocessCurrentReport() {
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "重新识别",
-    message: `确认重新识别「${title}」？\n\n会清空这份报告当前的 OCR 文本、AI 整理结果、指标和结构化字段，然后重新 OCR；原件不会删除。若已手工校对过字段，也会被重置。`,
+    message: `确认重新识别「${title}」？\n\n会清空这份报告当前的 OCR 文本、AI 整理结果和指标，然后重新 OCR；原件不会删除，已人工校对的字段会保留且不会被 AI 自动覆盖。`,
     confirmText: "重新识别",
     run: async () => {
       reprocessingReport.value = true;
@@ -565,6 +614,7 @@ watch(() => props.reportId, (reportId) => {
   processingExpanded.value = false;
   ocrSheetOpen.value = false;
   editOpen.value = false;
+  editOriginalIndex.value = 0;
   if (!reportId) {
     detail.value = null;
     return;
@@ -603,10 +653,10 @@ onBeforeUnmount(() => {
       <h3>{{ source.title }}</h3>
       <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
       <dl class="preview-facts">
-        <div><dt>报告日期</dt><dd>{{ source.reportIssuedAt || "日期待确认" }}</dd></div>
-        <div><dt>医院</dt><dd>{{ [source.hospitalName, source.hospitalBranch].filter(Boolean).join(" · ") || "待整理" }}</dd></div>
-        <div><dt>科室</dt><dd>{{ source.departmentName || "待整理" }}</dd></div>
-        <div><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}</dd></div>
+        <div><dt>报告日期</dt><dd>{{ source.reportIssuedAt || "日期待确认" }}<span v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</span></dd></div>
+        <div><dt>医院</dt><dd>{{ [source.hospitalName, source.hospitalBranch].filter(Boolean).join(" · ") || "待整理" }}<span v-if="isManualField('hospitalName') || isManualField('hospitalBranch')" class="manual-field-chip">人工校对</span></dd></div>
+        <div><dt>科室</dt><dd>{{ source.departmentName || "待整理" }}<span v-if="isManualField('departmentName')" class="manual-field-chip">人工校对</span></dd></div>
+        <div><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}<span v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>页数</dt><dd>{{ source.pageCount || 0 }} 页</dd></div>
         <div><dt>状态</dt><dd>{{ statusMeta[source.status]?.label || source.status }}</dd></div>
       </dl>
@@ -659,15 +709,15 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="hasAiContent" class="ai-content">
         <section v-if="detail?.summary || detail?.impression || detail?.recommendation" class="ai-section-grid">
-          <article v-if="detail?.summary"><span>摘要</span><p>{{ detail.summary }}</p></article>
-          <article v-if="detail?.impression"><span>结论</span><p>{{ detail.impression }}</p></article>
-          <article v-if="detail?.recommendation"><span>建议/复查</span><p>{{ detail.recommendation }}</p></article>
+          <article v-if="detail?.summary"><span>摘要<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><p>{{ detail.summary }}</p></article>
+          <article v-if="detail?.impression"><span>结论<em v-if="isManualField('impression')" class="manual-field-chip">人工校对</em></span><p>{{ detail.impression }}</p></article>
+          <article v-if="detail?.recommendation"><span>建议/复查<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><p>{{ detail.recommendation }}</p></article>
         </section>
         <section v-if="detail?.clinicalDiagnosis || detail?.purpose || detail?.chiefComplaint || detail?.findings" class="ai-long-text">
-          <article v-if="detail?.clinicalDiagnosis"><span>临床诊断</span><p>{{ detail.clinicalDiagnosis }}</p></article>
-          <article v-if="detail?.purpose"><span>检查目的</span><p>{{ detail.purpose }}</p></article>
-          <article v-if="detail?.chiefComplaint"><span>主诉</span><p>{{ detail.chiefComplaint }}</p></article>
-          <article v-if="detail?.findings"><span>检查所见</span><p>{{ detail.findings }}</p></article>
+          <article v-if="detail?.clinicalDiagnosis"><span>临床诊断<em v-if="isManualField('clinicalDiagnosis')" class="manual-field-chip">人工校对</em></span><p>{{ detail.clinicalDiagnosis }}</p></article>
+          <article v-if="detail?.purpose"><span>检查目的<em v-if="isManualField('purpose')" class="manual-field-chip">人工校对</em></span><p>{{ detail.purpose }}</p></article>
+          <article v-if="detail?.chiefComplaint"><span>主诉<em v-if="isManualField('chiefComplaint')" class="manual-field-chip">人工校对</em></span><p>{{ detail.chiefComplaint }}</p></article>
+          <article v-if="detail?.findings"><span>检查所见<em v-if="isManualField('findings')" class="manual-field-chip">人工校对</em></span><p>{{ detail.findings }}</p></article>
         </section>
         <section v-if="detail?.observations.length" class="observation-panel">
           <header>
@@ -782,41 +832,113 @@ onBeforeUnmount(() => {
 
   <Teleport to="body">
     <div v-if="editOpen" class="modal-backdrop report-edit-backdrop" @click.self="editOpen = false">
-      <section class="modal-panel report-edit-modal" role="dialog" aria-modal="true" aria-label="校对报告字段">
-        <header>
-          <div><Pencil :size="20" /><h3>校对报告字段</h3></div>
+      <section class="modal-panel edit-workspace" role="dialog" aria-modal="true" aria-label="校对报告字段">
+        <header class="edit-workspace-header">
+          <div class="edit-workspace-title">
+            <Pencil :size="20" />
+            <div><h3>校对报告字段</h3><p>对照原件与 OCR 文本逐项核对</p></div>
+          </div>
           <button class="plain-icon-button" type="button" title="关闭" @click="editOpen = false"><X :size="18" /></button>
         </header>
-        <form class="settings-form report-edit-form" @submit.prevent="saveReportFields">
-          <div class="form-grid">
-            <label><span>标题</span><input v-model="editForm.title" /></label>
-            <label><span>报告类型</span><FormSelect v-model="editForm.reportType" :options="typeOptions.filter((option) => option.value !== 'all')" aria-label="报告类型" /></label>
-            <label><span>报告日期</span><input v-model="editForm.reportIssuedAt" type="date" /></label>
-            <label><span>检查日期</span><input v-model="editForm.examinedAt" type="date" /></label>
-            <label><span>医院</span><input v-model="editForm.hospitalName" /></label>
-            <label><span>院区/分院</span><input v-model="editForm.hospitalBranch" /></label>
-            <label><span>城市</span><input v-model="editForm.city" /></label>
-            <label><span>就诊科室</span><input v-model="editForm.departmentName" /></label>
-            <label><span>开单科室</span><input v-model="editForm.orderingDepartment" /></label>
-            <label><span>执行科室</span><input v-model="editForm.performingDepartment" /></label>
-            <label><span>报告科室</span><input v-model="editForm.reportingDepartment" /></label>
-            <label><span>检查部位</span><input v-model="editForm.bodyPart" /></label>
-          </div>
-          <label><span>临床诊断</span><textarea v-model="editForm.clinicalDiagnosis" rows="2"></textarea></label>
-          <label><span>检查目的</span><textarea v-model="editForm.purpose" rows="2"></textarea></label>
-          <label><span>检查所见</span><textarea v-model="editForm.findings" rows="4"></textarea></label>
-          <label><span>结论</span><textarea v-model="editForm.impression" rows="3"></textarea></label>
-          <label><span>摘要</span><textarea v-model="editForm.summary" rows="3"></textarea></label>
-          <label><span>建议/复查</span><textarea v-model="editForm.recommendation" rows="3"></textarea></label>
-          <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
-          <div class="form-actions">
-            <button type="button" @click="editOpen = false">取消</button>
-            <button class="primary-button" type="submit" :disabled="savingReport">
-              <LoaderCircle v-if="savingReport" class="spin-icon" :size="16" />
-              保存校对
+        <div class="edit-workspace-body">
+          <section class="edit-col edit-col-originals">
+            <h4>报告原件</h4>
+            <button v-if="firstPdfPage" class="soft-action-button edit-original-pdf" type="button" @click="openPdfOriginalViewer(firstPdfPage)">
+              <FileText :size="16" />打开 PDF 原件
             </button>
-          </div>
-        </form>
+            <div v-if="currentOriginalPage" class="edit-swiper">
+              <button
+                class="edit-swiper-nav edit-swiper-nav--prev"
+                type="button" title="上一页" :disabled="editOriginalIndex === 0"
+                @click="editOriginalIndex -= 1"
+              ><ChevronLeft :size="20" /></button>
+              <div
+                class="edit-swiper-stage"
+                @touchstart="onOriginalSwipeStart"
+                @touchend="onOriginalSwipeEnd"
+              >
+                <Transition name="page-fade" mode="out-in">
+                  <button
+                    :key="currentOriginalPage.id"
+                    type="button"
+                    class="edit-original-page"
+                    :title="`第 ${currentOriginalPage.pageNumber} 页，点击放大`"
+                    @click="openOriginalViewer(editOriginalIndex)"
+                  >
+                    <img :src="viewerFullUrl(currentOriginalPage)" :alt="`第 ${currentOriginalPage.pageNumber} 页`" decoding="async" />
+                  </button>
+                </Transition>
+              </div>
+              <button
+                class="edit-swiper-nav edit-swiper-nav--next"
+                type="button" title="下一页" :disabled="editOriginalIndex >= (detail?.pages.length || 1) - 1"
+                @click="editOriginalIndex += 1"
+              ><ChevronRight :size="20" /></button>
+            </div>
+            <div v-if="(detail?.pages.length || 0) > 1" class="edit-swiper-indicator">
+              <span>第 {{ currentOriginalPage?.pageNumber }} 页 / 共 {{ detail?.pages.length }} 页</span>
+              <div class="edit-swiper-dots">
+                <button
+                  v-for="(page, index) in detail?.pages || []"
+                  :key="page.id"
+                  type="button"
+                  :class="{ active: index === editOriginalIndex }"
+                  :aria-label="`第 ${page.pageNumber} 页`"
+                  @click="editOriginalIndex = index"
+                ></button>
+              </div>
+            </div>
+          </section>
+          <section class="edit-col edit-col-ocr">
+            <h4>OCR 识别文本</h4>
+            <div v-if="ocrLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取 OCR 文本</div>
+            <p v-else-if="ocrError" class="inline-panel-error">{{ ocrError }}</p>
+            <template v-else-if="ocrPages.length">
+              <article v-for="page in ocrPages" :key="page.pageId" :id="`edit-ocr-page-${page.pageNumber}`" class="ocr-page-text">
+                <header>
+                  <strong>第 {{ page.pageNumber }} 页</strong>
+                  <span>{{ page.engine || "未识别" }} · {{ page.lineCount }} 行</span>
+                </header>
+                <pre v-if="page.text">{{ page.text }}</pre>
+                <p v-else class="preview-hint">这一页还没有 OCR 文本。</p>
+              </article>
+            </template>
+            <p v-else class="preview-hint">暂无 OCR 文本。</p>
+          </section>
+          <section class="edit-col edit-col-form">
+            <h4>校对字段</h4>
+            <form class="settings-form report-edit-form" @submit.prevent="saveReportFields">
+              <div class="form-grid">
+                <label><span>标题<em v-if="isManualField('title')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.title" /></label>
+                <label><span>报告类型<em v-if="isManualField('reportType')" class="manual-field-chip">人工校对</em></span><FormSelect v-model="editForm.reportType" :options="typeOptions.filter((option) => option.value !== 'all')" aria-label="报告类型" /></label>
+                <label><span>报告日期<em v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportIssuedAt" type="date" /></label>
+                <label><span>检查日期<em v-if="isManualField('examinedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.examinedAt" type="date" /></label>
+                <label><span>医院<em v-if="isManualField('hospitalName')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalName" /></label>
+                <label><span>院区/分院<em v-if="isManualField('hospitalBranch')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalBranch" /></label>
+                <label><span>城市<em v-if="isManualField('city')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.city" /></label>
+                <label><span>就诊科室<em v-if="isManualField('departmentName')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.departmentName" /></label>
+                <label><span>开单科室<em v-if="isManualField('orderingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.orderingDepartment" /></label>
+                <label><span>执行科室<em v-if="isManualField('performingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.performingDepartment" /></label>
+                <label><span>报告科室<em v-if="isManualField('reportingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportingDepartment" /></label>
+                <label><span>检查部位<em v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.bodyPart" /></label>
+              </div>
+              <label><span>临床诊断<em v-if="isManualField('clinicalDiagnosis')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.clinicalDiagnosis" rows="2"></textarea></label>
+              <label><span>检查目的<em v-if="isManualField('purpose')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.purpose" rows="2"></textarea></label>
+              <label><span>检查所见<em v-if="isManualField('findings')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.findings" rows="4"></textarea></label>
+              <label><span>结论<em v-if="isManualField('impression')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.impression" rows="3"></textarea></label>
+              <label><span>摘要<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.summary" rows="3"></textarea></label>
+              <label><span>建议/复查<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.recommendation" rows="3"></textarea></label>
+              <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
+              <div class="form-actions">
+                <button type="button" @click="editOpen = false">取消</button>
+                <button class="primary-button" type="submit" :disabled="savingReport">
+                  <LoaderCircle v-if="savingReport" class="spin-icon" :size="16" />
+                  保存校对
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
       </section>
     </div>
   </Teleport>
