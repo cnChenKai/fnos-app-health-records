@@ -2,6 +2,7 @@
 import { onMounted, ref } from "vue";
 import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Trash2, UploadCloud } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
+import MarqueeText from "../../components/MarqueeText.vue";
 import { apiUrl, request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
@@ -206,14 +207,15 @@ onMounted(() => {
       <header>
         <DatabaseBackup :size="20" />
         <div><h3>完整应用备份</h3><p>包含 SQLite 快照、报告原件、分页图、运行配置和 AI 密钥；仅系统管理员可操作。</p></div>
-        <div v-if="app.session.value?.isGatewayAdmin" class="backup-header-actions">
-          <input ref="backupFileInput" type="file" accept=".tar.gz,application/gzip" hidden @change="restoreUploadedBackup" />
-          <button
-            class="header-action"
-            type="button"
-            :disabled="creatingBackup || uploadingRestore"
-            @click="createBackupNow"
-          >
+      </header>
+      <div v-if="app.session.value?.isGatewayAdmin" class="backup-header-actions">
+        <input ref="backupFileInput" type="file" accept=".tar.gz,application/gzip" hidden @change="restoreUploadedBackup" />
+        <button
+          class="header-action"
+          type="button"
+          :disabled="creatingBackup || uploadingRestore"
+          @click="createBackupNow"
+        >
             <LoaderCircle v-if="creatingBackup" class="spin-icon" :size="16" />
             <DatabaseBackup v-else :size="16" />
             {{ creatingBackup ? "备份中" : "创建备份" }}
@@ -229,7 +231,6 @@ onMounted(() => {
             {{ uploadingRestore ? "恢复中" : "上传恢复" }}
           </button>
         </div>
-      </header>
 
       <div v-if="!app.session.value?.isGatewayAdmin" class="settings-form">
         <p class="preview-hint">完整备份包含所有成员的医疗数据和密钥，仅系统管理员可查看和恢复。</p>
@@ -240,7 +241,7 @@ onMounted(() => {
         <p v-else-if="!backups.length" class="backup-empty">暂无完整备份，建议在升级、迁移或批量整理前先创建一份。</p>
         <article v-for="backup in backups" :key="backup.id" class="backup-item">
           <div class="backup-main">
-            <strong>{{ backup.filename }}</strong>
+            <MarqueeText :text="backup.filename" />
             <span>{{ formatDatabaseTime(backup.createdAt) }} · {{ formatBytes(backup.sizeBytes) }} · v{{ backup.appVersion }} · DB v{{ backup.schemaVersion }}</span>
             <small>{{ backup.memberCount }} 位成员 · {{ backup.reportCount }} 份报告 · {{ backup.includes.join("、") }}</small>
             <small

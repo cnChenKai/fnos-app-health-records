@@ -161,6 +161,13 @@ function isManualField(fieldKey: string) {
   return Boolean(detail.value?.manualFieldKeys?.includes(fieldKey));
 }
 
+function toDateTimeLocalValue(value: string | null | undefined) {
+  if (!value) return "";
+  const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?$/);
+  if (match) return `${match[1]}T${match[2]}:${match[3] || "00"}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : "";
+}
+
 function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
 }
@@ -303,8 +310,8 @@ function openEditReport() {
     performingDepartment: detail.value?.performingDepartment || "",
     reportingDepartment: detail.value?.reportingDepartment || "",
     bodyPart: current.bodyPart || "",
-    reportIssuedAt: (current.reportIssuedAt || "").slice(0, 10),
-    examinedAt: (detail.value?.examinedAt || "").slice(0, 10),
+    reportIssuedAt: toDateTimeLocalValue(current.reportIssuedAt),
+    examinedAt: toDateTimeLocalValue(detail.value?.examinedAt),
     clinicalDiagnosis: detail.value?.clinicalDiagnosis || "",
     purpose: detail.value?.purpose || "",
     findings: detail.value?.findings || "",
@@ -910,8 +917,8 @@ onBeforeUnmount(() => {
               <div class="form-grid">
                 <label><span>标题<em v-if="isManualField('title')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.title" /></label>
                 <label><span>报告类型<em v-if="isManualField('reportType')" class="manual-field-chip">人工校对</em></span><FormSelect v-model="editForm.reportType" :options="typeOptions.filter((option) => option.value !== 'all')" aria-label="报告类型" /></label>
-                <label><span>报告日期<em v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportIssuedAt" type="date" /></label>
-                <label><span>检查日期<em v-if="isManualField('examinedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.examinedAt" type="date" /></label>
+                <label><span>报告生成时间<em v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportIssuedAt" type="datetime-local" step="1" /></label>
+                <label><span>检查时间<em v-if="isManualField('examinedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.examinedAt" type="datetime-local" step="1" /></label>
                 <label><span>医院<em v-if="isManualField('hospitalName')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalName" /></label>
                 <label><span>院区/分院<em v-if="isManualField('hospitalBranch')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalBranch" /></label>
                 <label><span>城市<em v-if="isManualField('city')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.city" /></label>
