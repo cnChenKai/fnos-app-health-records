@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/timor-m/fnos-app-health-records.git"
+    "url": "git+https://github.com/timor-m/fnos-app-health-records"
   },
   "templateRepository": {
     "type": "git",

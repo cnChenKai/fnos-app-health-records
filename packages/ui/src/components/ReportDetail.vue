@@ -906,7 +906,6 @@ onBeforeUnmount(() => {
             <p v-else class="preview-hint">暂无 OCR 文本。</p>
           </section>
           <section class="edit-col edit-col-form">
-            <h4>校对字段</h4>
             <form class="settings-form report-edit-form" @submit.prevent="saveReportFields">
               <div class="form-grid">
                 <label><span>标题<em v-if="isManualField('title')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.title" /></label>
