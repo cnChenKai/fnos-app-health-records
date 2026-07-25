@@ -9,9 +9,9 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.1.11` | `package.json` |
-| fnOS manifest 版本 | `0.1.11` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.1.11.0` | `scripts/prepare-package.mjs` 生成 |
+| 应用版本 | `0.1.12` | `package.json` |
+| fnOS manifest 版本 | `0.1.12` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.1.12.0` | `scripts/prepare-package.mjs` 生成 |
 | 数据库 schema | `v7` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
