@@ -43,6 +43,8 @@ const ai = ref<AiSettings>({
   providers: []
 });
 const message = ref("");
+const loading = ref(true);
+const loadError = ref("");
 const saving = ref(false);
 const testing = ref(false);
 const currentProvider = computed(() => ai.value.providers.find((item) => item.key === ai.value.provider));
@@ -94,9 +96,18 @@ async function test() {
   catch (error) { message.value = error instanceof Error ? error.message : "连接失败"; }
   finally { testing.value = false; }
 }
-onMounted(async () => {
-  ai.value = await request<AiSettings>("ai/settings");
-});
+async function loadSettings() {
+  loading.value = true;
+  loadError.value = "";
+  try {
+    ai.value = await request<AiSettings>("ai/settings");
+  } catch (error) {
+    loadError.value = error instanceof Error ? error.message : "AI 配置加载失败";
+  } finally {
+    loading.value = false;
+  }
+}
+onMounted(() => { void loadSettings(); });
 </script>
 
 <template>
@@ -104,7 +115,11 @@ onMounted(async () => {
     <SubPageHeader title="AI 解析模型" description="原图仅在视觉增强开启后发送" />
     <section class="settings-band">
       <header><Bot :size="21" /><div><h3>模型配置</h3><p>使用兼容 Chat Completions 的服务</p></div></header>
-      <div class="settings-form">
+      <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
+      <p v-else-if="loadError" class="inline-panel-error">
+        {{ loadError }}<button class="error-retry" type="button" @click="loadSettings">重试</button>
+      </p>
+      <div v-else class="settings-form">
         <label class="toggle-row"><div><strong>启用 AI 整理</strong><span>识别后的文本由 AI 整理为结构化字段</span></div><input v-model="ai.enabled" class="switch" type="checkbox" /></label>
         <label><span>AI 服务商</span><FormSelect v-model="ai.provider" :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))" aria-label="AI 服务商" @change="changeProvider" /></label>
         <label class="toggle-row"><div><strong>视觉增强</strong><span>复杂表格可发送处理后的页面副本</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" /></label>

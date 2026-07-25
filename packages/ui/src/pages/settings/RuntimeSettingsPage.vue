@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { Cpu, Database, Download, LoaderCircle, Save } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
@@ -79,7 +79,7 @@ const app = useAppContext();
 const system = ref<SystemSummary | null>(null);
 const ocr = ref<OcrStatus | null>(null);
 const ocrSettings = ref<OcrInstallSettings>({
-  pipMirror: "official",
+  pipMirror: "tsinghua",
   customPipIndexUrl: "",
   resolvedPipIndexUrl: "",
   mirrors: []
@@ -184,14 +184,23 @@ async function saveOcrSettings() {
   }
 }
 onMounted(async () => {
-  [system.value, ocr.value, ocrSettings.value] = await Promise.all([
+  const [systemResult, ocrResult, ocrSettingsResult] = await Promise.allSettled([
     request<SystemSummary>("system"),
     request<OcrStatus>("ocr/status"),
     request<OcrInstallSettings>("ocr/settings")
   ]);
+  if (systemResult.status === "fulfilled") system.value = systemResult.value;
+  if (ocrResult.status === "fulfilled") ocr.value = ocrResult.value;
+  if (ocrSettingsResult.status === "fulfilled") ocrSettings.value = ocrSettingsResult.value;
+  if (systemResult.status === "rejected" || ocrResult.status === "rejected" || ocrSettingsResult.status === "rejected") {
+    runtimeMessage.value = "部分运行状态加载失败，请稍后刷新页面重试";
+  }
   syncStatusPolling();
 });
 onBeforeUnmount(stopStatusPolling);
+/* KeepAlive 缓存期间暂停 OCR 安装状态轮询，回到页面时若仍在安装则恢复 */
+onDeactivated(stopStatusPolling);
+onActivated(syncStatusPolling);
 </script>
 
 <template>

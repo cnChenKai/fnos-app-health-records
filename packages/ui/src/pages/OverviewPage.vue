@@ -6,6 +6,7 @@ import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
+import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
 import { request } from "../utils/api";
 import type { OverviewSummary, Reminder, ReportSummary, ReportSummaryStats } from "../types/api";
@@ -78,6 +79,8 @@ function reloadOverview() {
   const memberId = app.selectedMemberId.value;
   if (memberId) void load(memberId, true);
 }
+
+useRefreshOnActivate(reloadOverview);
 
 const { pullDistance, refreshing } = usePullRefresh(root, async () => {
   const memberId = app.selectedMemberId.value;

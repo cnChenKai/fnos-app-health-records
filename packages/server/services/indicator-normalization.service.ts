@@ -6,7 +6,7 @@ import { createError } from "h3";
 import { getAiSettings } from "./ai-settings.service";
 
 const normalizationVersion = `indicator-normalization-${builtinIndicatorVersion}`;
-const aiNormalizationPromptVersion = "indicator-normalization-ai-v1";
+const aiNormalizationPromptVersion = "indicator-normalization-ai-v2";
 const maxAiFallbackItems = 50;
 
 type ObservationRow = {
@@ -149,6 +149,17 @@ function compactIndicatorKey(value: string | null | undefined) {
     .trim();
 }
 
+/** AI 归一化键保留括号内容：括号内的测量条件（如 高切/低切/中切）是指标本体，剥掉会把不同测量并为一个趋势系列 */
+function compactAiIndicatorKey(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .replace(/\s+/g, "")
+    .replace(/[：:，,。.;；、_\-]/g, "")
+    .replace(/[＋]/g, "+")
+    .trim();
+}
+
 function normalizeUnit(value: string | null | undefined) {
   if (!value) return null;
   const unit = value
@@ -228,7 +239,7 @@ function boolValue(value: unknown) {
 }
 
 function aiCanonicalKey(candidate: AiIndicatorCandidate) {
-  const name = compactIndicatorKey(candidate.canonicalName);
+  const name = compactAiIndicatorKey(candidate.canonicalName);
   const valueType = candidate.valueType || "text";
   return name ? `ai:${valueType}:${name}` : null;
 }
@@ -445,7 +456,7 @@ function indicatorAiSystemPrompt() {
 1. observationId 必须原样来自输入，不能新增 ID。
 2. 只有明确是单一数值指标时 valueType=numeric 且 trendEnabled=true，例如 BMI、尿酸、内膜厚度、病毒核酸定量。
 3. 影像/超声/心电/耳鼻喉的文字发现、定性筛查、阳性发现、分级描述，valueType 应为 text 或 positive_negative，trendEnabled=false。
-4. canonicalName 使用中文常用医学报告名称，去掉左右侧、程度、分级、括号里的“定性”等修饰，保留指标本体。
+4. canonicalName 使用中文常用医学报告名称，去掉左右侧、程度、分级、括号里的“定性”等修饰，保留指标本体；但括号内如果是测量条件或方法（如 高切/低切/中切、空腹/餐后、卧位/立位、吸气/呼气）必须原样保留，属于不同指标，不得省略、不得互相合并。
 5. 如果无法确定标准名称，canonicalName=null，confidence 不高于 0.5。
 6. 不输出姓名、身份证、电话、住址。`;
 }
@@ -926,10 +937,15 @@ export function normalizeAllObservations(user: RequestUser): IndicatorNormalizat
 
 export async function normalizeAllObservationsWithAiFallback(
   user: RequestUser,
-  executor: AiIndicatorExecutor = requestAiIndicatorNormalization
+  executor: AiIndicatorExecutor = requestAiIndicatorNormalization,
+  options?: { full?: boolean }
 ): Promise<IndicatorNormalizationMaintenanceResult> {
   if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
+  /* 全量重跑：清空已有归一化结果（含 AI 兜底写错的），让字典和 AI 兜底重新整理所有指标 */
+  if (options?.full) {
+    getDatabase().prepare("DELETE FROM observation_normalizations").run();
+  }
   const reportIds = getDatabase().prepare(`
     SELECT DISTINCT o.report_id AS reportId
     FROM observations o
@@ -962,7 +978,7 @@ export async function normalizeAllObservationsWithAiFallback(
   getDatabase().prepare(`
     INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
     VALUES (?, ?, 'maintenance.normalize_indicators', 'observation', NULL, ?)
-  `).run(createId("audit"), user.id, JSON.stringify(total));
+  `).run(createId("audit"), user.id, JSON.stringify({ ...total, full: options?.full === true }));
   return total;
 }
 

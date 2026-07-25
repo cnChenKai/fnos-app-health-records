@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, ref } from "vue";
 import {
   ArrowDown, ArrowUp, Camera, CheckCircle2, CircleAlert, FileImage, FileText,
   ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
@@ -140,16 +140,20 @@ function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
 }
 
-async function refreshJobs() {
+async function refreshJobs(includeRuntime = false) {
   if (!result.value) return;
   try {
+    /* OCR 运行状态仅在提交后首次刷新时查询，轮询周期内不再重复请求 */
     const [nextJobs, ocr] = await Promise.all([
       request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(result.value.reportId)}`),
-      app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
+      includeRuntime && app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
     jobs.value = nextJobs;
     if (ocr) runtimeAvailable.value = ocr.available;
-    if (nextJobs.length && nextJobs.every((job) => ["completed", "failed"].includes(job.status))) stopPolling();
+    if (nextJobs.length && nextJobs.every((job) => ["completed", "failed"].includes(job.status))) {
+      stopPolling();
+      app.notifyDataChanged();
+    }
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "无法获取任务状态";
     stopPolling();
@@ -158,7 +162,7 @@ async function refreshJobs() {
 
 function startPolling() {
   stopPolling();
-  void refreshJobs();
+  void refreshJobs(true);
   pollTimer = setInterval(() => { void refreshJobs(); }, 2500);
 }
 
@@ -195,6 +199,10 @@ async function submit() {
 onBeforeUnmount(() => {
   clearQueue();
   stopPolling();
+});
+/* 任务未跑完时后台（KeepAlive 失活）也保持轮询，完成后广播数据变更；回到页面时补一次刷新 */
+onActivated(() => {
+  if (result.value) startPolling();
 });
 </script>
 

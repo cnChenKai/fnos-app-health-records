@@ -49,8 +49,13 @@ async function trash(report: ReportSummary) {
     confirmText: "移入回收站",
     danger: true,
     run: async () => {
-      await request(`reports/${encodeURIComponent(report.id)}`, { method: "DELETE" });
-      await scan();
+      try {
+        await request(`reports/${encodeURIComponent(report.id)}`, { method: "DELETE" });
+        toast.show("报告已移入回收站");
+        await scan();
+      } catch (cause) {
+        toast.show(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
+      }
     }
   });
 }
@@ -62,12 +67,16 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
     confirmText: "合并",
     danger: true,
     run: async () => {
-      await request(`reports/${encodeURIComponent(source.id)}/merge`, {
-        method: "POST",
-        body: JSON.stringify({ targetReportId: target.id })
-      });
-      toast.show("已合并原件页，源报告已移入回收站");
-      await scan();
+      try {
+        await request(`reports/${encodeURIComponent(source.id)}/merge`, {
+          method: "POST",
+          body: JSON.stringify({ targetReportId: target.id })
+        });
+        toast.show("已合并原件页，源报告已移入回收站");
+        await scan();
+      } catch (cause) {
+        toast.show(cause instanceof Error ? cause.message : "合并失败，请稍后重试");
+      }
     }
   });
 }

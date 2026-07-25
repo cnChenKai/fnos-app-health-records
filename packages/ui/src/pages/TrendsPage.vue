@@ -9,11 +9,13 @@ import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
+import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
 import type { TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
 
 const app = useAppContext();
 const loading = ref(true);
+const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
 const query = ref("");
 const groupFilter = ref("all");
@@ -75,15 +77,27 @@ const filterSummary = computed(() => {
 
 async function load(memberId: string, silent = false) {
   if (!silent) loading.value = true;
+  loadError.value = "";
   activeDetailKey.value = null;
   try { series.value = await request(`trends?memberId=${encodeURIComponent(memberId)}`); }
+  catch (cause) {
+    if (!silent) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
+    throw cause;
+  }
   finally { if (!silent) loading.value = false; }
+}
+
+function retryLoad() {
+  const memberId = app.selectedMemberId.value;
+  if (memberId) load(memberId).catch(() => {});
 }
 
 function reloadTrends() {
   const memberId = app.selectedMemberId.value;
   if (memberId) void load(memberId, true);
 }
+
+useRefreshOnActivate(reloadTrends);
 
 function formatNumber(value: number | null) {
   if (value === null) return "—";
@@ -99,6 +113,15 @@ function formatDate(value: string | null) {
 
 function pointValue(point: TrendPoint, unit: string | null) {
   return [formatNumber(point.numericValue), unit].filter(Boolean).join(" ");
+}
+
+/* 部分报告的 resultText 已包含单位，避免 “89 mmHg mmHg” 重复展示 */
+function excludedPointText(point: TrendExcludedPoint) {
+  const result = (point.resultText || "").trim();
+  const unit = (point.unit || "").trim();
+  if (!result) return unit;
+  if (!unit) return result;
+  return result.toLowerCase().endsWith(unit.toLowerCase()) ? result : `${result} ${unit}`;
 }
 
 function abnormalLabel(value: TrendPoint["abnormalFlag"]) {
@@ -219,7 +242,7 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 
 watch(() => app.selectedMemberId.value, (memberId) => {
   if (!memberId) return;
-  load(memberId).catch(() => toast.show("加载失败，请稍后重试"));
+  load(memberId).catch(() => {});
 }, { immediate: true });
 
 watch([query, groupFilter], () => {
@@ -232,6 +255,9 @@ watch([query, groupFilter], () => {
     <div class="page-intro"><div><h2>指标趋势</h2><p>仅比较相同指标和兼容单位</p></div><span class="page-intro-badge"><ChartNoAxesCombined :size="22" /></span></div>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
+    <p v-else-if="loadError" class="inline-panel-error">
+      {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
+    </p>
     <EmptyState v-else-if="!series.length" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
     <template v-else>
       <div class="trend-filter-row">
@@ -303,7 +329,7 @@ watch([query, groupFilter], () => {
                   <span>相似但未纳入</span>
                   <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
                     <div>
-                      <strong>{{ point.itemName }} · {{ point.resultText }}<template v-if="point.unit"> {{ point.unit }}</template></strong>
+                      <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
                       <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
                     </div>
                     <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
@@ -317,7 +343,7 @@ watch([query, groupFilter], () => {
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
-                <strong>{{ pointValue(point, item.unit) }}<em class="trend-flag" :class="flagClass(point.abnormalFlag)">{{ abnormalLabel(point.abnormalFlag) }}</em></strong>
+                <strong>{{ pointValue(point, item.unit) }}<em v-if="point.abnormalFlag" class="trend-flag" :class="flagClass(point.abnormalFlag)">{{ abnormalLabel(point.abnormalFlag) }}</em></strong>
                 <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
                 <small v-if="point.referenceText">参考 {{ point.referenceText }}</small>
               </div>

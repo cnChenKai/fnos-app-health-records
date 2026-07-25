@@ -48,9 +48,11 @@ type OcrInstallSettings = {
 };
 
 const ocrInstallSettingKey = "ocr.install";
+/** 面向国内 fnOS 设备，首次安装默认走清华镜像，避免用户忽略配置导致 PyPI 直连超时 */
+const defaultPipMirror: OcrPipMirrorKey = "tsinghua";
 const pipMirrorCatalog: Array<{ key: OcrPipMirrorKey; label: string; indexUrl: string; description: string }> = [
   { key: "official", label: "官方 PyPI", indexUrl: "", description: "使用 pip 默认源，适合海外网络或已配置系统 pip 镜像的设备" },
-  { key: "tsinghua", label: "清华大学", indexUrl: "https://pypi.tuna.tsinghua.edu.cn/simple", description: "国内常用 PyPI 镜像" },
+  { key: "tsinghua", label: "清华大学", indexUrl: "https://pypi.tuna.tsinghua.edu.cn/simple", description: "国内常用 PyPI 镜像，新安装的默认源" },
   { key: "aliyun", label: "阿里云", indexUrl: "https://mirrors.aliyun.com/pypi/simple", description: "阿里云 PyPI 镜像" },
   { key: "tencent", label: "腾讯云", indexUrl: "https://mirrors.cloud.tencent.com/pypi/simple", description: "腾讯云 PyPI 镜像" },
   { key: "huaweicloud", label: "华为云", indexUrl: "https://repo.huaweicloud.com/repository/pypi/simple", description: "华为云 PyPI 镜像" },
@@ -139,15 +141,15 @@ function normalizePipIndexUrl(value: unknown) {
 function readOcrInstallSettings(): OcrInstallSettings {
   const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
     .get(ocrInstallSettingKey) as { valueJson: string } | undefined;
-  if (!row) return { pipMirror: "official", customPipIndexUrl: "" };
+  if (!row) return { pipMirror: defaultPipMirror, customPipIndexUrl: "" };
   try {
     const stored = JSON.parse(row.valueJson) as Partial<OcrInstallSettings>;
     return {
-      pipMirror: isPipMirrorKey(stored.pipMirror) ? stored.pipMirror : "official",
+      pipMirror: isPipMirrorKey(stored.pipMirror) ? stored.pipMirror : defaultPipMirror,
       customPipIndexUrl: normalizePipIndexUrl(stored.customPipIndexUrl)
     };
   } catch {
-    return { pipMirror: "official", customPipIndexUrl: "" };
+    return { pipMirror: defaultPipMirror, customPipIndexUrl: "" };
   }
 }
 
@@ -166,7 +168,7 @@ export function getOcrInstallSettings() {
 }
 
 export function saveOcrInstallSettings(input: Partial<OcrInstallSettings>) {
-  const pipMirror = isPipMirrorKey(input.pipMirror) ? input.pipMirror : "official";
+  const pipMirror = isPipMirrorKey(input.pipMirror) ? input.pipMirror : defaultPipMirror;
   const customPipIndexUrl = normalizePipIndexUrl(input.customPipIndexUrl);
   if (pipMirror === "custom" && !customPipIndexUrl) throw new Error("请选择自定义镜像源地址");
   const settings: OcrInstallSettings = { pipMirror, customPipIndexUrl };

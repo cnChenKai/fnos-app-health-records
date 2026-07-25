@@ -38,6 +38,7 @@ const previewRunning = ref(false);
 const previewResult = ref<PdfPreviewMaintenanceResult | null>(null);
 const previewError = ref("");
 const normalizationRunning = ref(false);
+const fullNormalizationRunning = ref(false);
 const normalizationResult = ref<IndicatorNormalizationResult | null>(null);
 const normalizationError = ref("");
 
@@ -84,6 +85,32 @@ async function normalizeIndicators() {
     }
   });
 }
+
+async function normalizeAllIndicators() {
+  confirmDialog.ask({
+    title: "全量重新归一化",
+    message: "确认清空所有已归一化结果并重新整理全部指标？用于修复历史误并的指标系列；不会重新 OCR 或修改原始指标，但 AI 兜底会对所有未命中字典的指标重新调用，指标较多时可能产生较高模型调用费用。",
+    confirmText: "清空并重跑",
+    danger: true,
+    run: async () => {
+      fullNormalizationRunning.value = true;
+      normalizationError.value = "";
+      try {
+        normalizationResult.value = await request<IndicatorNormalizationResult>("maintenance/indicator-normalization", {
+          method: "POST",
+          body: JSON.stringify({ full: true })
+        });
+        toast.show(normalizationResult.value.ai?.applied
+          ? `已全量归一化 ${normalizationResult.value.normalized} 项，AI 兜底 ${normalizationResult.value.ai.applied} 项`
+          : `已全量归一化 ${normalizationResult.value.normalized} 项指标`);
+      } catch (cause) {
+        normalizationError.value = cause instanceof Error ? cause.message : "全量归一化失败";
+      } finally {
+        fullNormalizationRunning.value = false;
+      }
+    }
+  });
+}
 </script>
 
 <template>
@@ -99,10 +126,16 @@ async function normalizeIndicators() {
             <p>只处理尚未归类的历史指标；非预设指标会在 AI 已启用时调用文本模型兜底，不修改原始指标。</p>
           </div>
         </div>
-        <button class="primary-button compact-primary" type="button" :disabled="normalizationRunning" @click="normalizeIndicators">
-          <RefreshCw :size="16" :class="{ 'spin-icon': normalizationRunning }" />{{ normalizationRunning ? "整理中" : "开始整理" }}
-        </button>
+        <div class="maintenance-actions">
+          <button class="soft-action-button danger-action-button" type="button" :disabled="normalizationRunning || fullNormalizationRunning" @click="normalizeAllIndicators">
+            <RefreshCw :size="15" :class="{ 'spin-icon': fullNormalizationRunning }" />{{ fullNormalizationRunning ? "重跑中" : "全量重跑" }}
+          </button>
+          <button class="primary-button" type="button" :disabled="normalizationRunning || fullNormalizationRunning" @click="normalizeIndicators">
+            <RefreshCw :size="15" :class="{ 'spin-icon': normalizationRunning }" />{{ normalizationRunning ? "整理中" : "增量整理" }}
+          </button>
+        </div>
       </header>
+      <p class="preview-hint">“增量整理”只处理未归类指标；“全量重跑”会清空已有归一化结果全部重建，用于修复误并的指标系列。</p>
       <p v-if="normalizationError" class="inline-panel-error">{{ normalizationError }}</p>
       <div v-if="normalizationResult" class="maintenance-result">
         <div>

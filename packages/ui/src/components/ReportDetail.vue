@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
   FileImage, FileText, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCw, ScrollText,
@@ -276,8 +276,14 @@ function abnormalLabel(value: string | null) {
   return { high: "偏高", low: "偏低", abnormal: "异常", normal: "正常" }[value || ""] || "";
 }
 
-function observationLine(item: ReportDetail["observations"][number]) {
-  return [item.resultText, item.unit, item.referenceText ? `参考 ${item.referenceText}` : ""].filter(Boolean).join(" ");
+function observationValueLine(item: ReportDetail["observations"][number]) {
+  const result = (item.resultText || "").trim();
+  const unit = (item.unit || "").trim();
+  if (!result) return unit;
+  if (!unit) return result;
+  /* 部分报告的 resultText 已包含单位（如 “89 mmHg”），避免 “89 mmHg mmHg” 重复展示 */
+  if (result.toLowerCase().endsWith(unit.toLowerCase())) return result;
+  return `${result} ${unit}`;
 }
 
 function observationNormalizationLine(item: ReportDetail["observations"][number]) {
@@ -545,6 +551,9 @@ function maybeStartJobsPolling() {
   }
 }
 
+/* 详情/列表/提醒级联刷新的节流时间戳：处理中任务状态几乎每轮都变，避免每 2.5 秒拉一整页数据 */
+let lastDetailSyncAt = 0;
+
 async function refreshJobs(silent = false) {
   if (!props.reportId) return;
   const reportId = props.reportId;
@@ -552,15 +561,21 @@ async function refreshJobs(silent = false) {
   if (!silent) jobsLoading.value = true;
   jobsError.value = "";
   try {
+    /* OCR 运行状态只在打开报告/手动重试（非轮询）时查询，轮询周期内不再重复请求 */
     const [nextJobs, ocr] = await Promise.all([
       request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(reportId)}`),
-      app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
+      !silent && app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
     selectedJobs.value = nextJobs;
     if (ocr) runtimeAvailable.value = ocr.available;
-    if (jobStatusChanged && props.reportId === reportId) {
+    const settled = nextJobs.length > 0 && nextJobs.every((job) => ["completed", "failed"].includes(job.status));
+    const newlyFailed = nextJobs.some((job) => job.status === "failed" && previousStatuses.get(job.id) !== "failed");
+    /* 级联刷新（详情+提醒+列表）节流 10 秒；任务全部结束或出现新失败时立即同步 */
+    const shouldSync = jobStatusChanged && (settled || newlyFailed || Date.now() - lastDetailSyncAt > 10000);
+    if (shouldSync && props.reportId === reportId) {
+      lastDetailSyncAt = Date.now();
       await loadDetail(reportId, true);
       if (app.selectedMemberId.value) await app.refreshReminderCount(app.selectedMemberId.value);
       emit("updated");
@@ -626,6 +641,8 @@ watch(() => props.reportId, (reportId) => {
     detail.value = null;
     return;
   }
+  /* 打开报告时 watch 已拉详情，标记同步时间点避免首轮轮询重复级联 */
+  lastDetailSyncAt = Date.now();
   void loadDetail(reportId);
   void refreshJobs();
 }, { immediate: true });
@@ -636,6 +653,13 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopJobsPolling();
   window.removeEventListener("keydown", handleViewerKeydown);
+});
+/* 随 KeepAlive 页面失活暂停任务轮询，激活时立即刷新一次并按任务状态恢复轮询 */
+onDeactivated(stopJobsPolling);
+onActivated(() => {
+  if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
+    void refreshJobs(true);
+  }
 });
 </script>
 
@@ -733,11 +757,11 @@ onBeforeUnmount(() => {
           </header>
           <div class="observation-list">
             <article v-for="item in visibleObservations" :key="item.id">
-              <div><strong>{{ item.itemName }}</strong><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
-              <p>{{ observationLine(item) }}</p>
+              <strong>{{ item.itemName }}</strong>
+              <p>{{ observationValueLine(item) }}<em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em></p>
+              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="item.referenceText">参考 {{ item.referenceText }}</span></div>
               <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
               <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
-              <em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em>
             </article>
           </div>
           <p v-if="detail.observations.length > visibleObservations.length" class="preview-hint">已显示前 {{ visibleObservations.length }} 项，完整指标表后续会独立分页展示。</p>

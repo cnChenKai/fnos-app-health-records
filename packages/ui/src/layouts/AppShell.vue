@@ -27,6 +27,17 @@ function isNavActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`);
 }
 const isMePage = computed(() => route.path === "/me");
+
+/* 页面缓存（KeepAlive）下的滚动位置记忆：切走前按路径保存，切回时恢复，未访问过的页面回到顶部 */
+const pageScrollPositions = new Map<string, number>();
+let activePath = route.fullPath;
+function savePageScroll() {
+  pageScrollPositions.set(activePath, window.scrollY);
+}
+function restorePageScroll() {
+  activePath = route.fullPath;
+  window.scrollTo(0, pageScrollPositions.get(activePath) ?? 0);
+}
 const sessionInitial = computed(() => app.session.value?.displayName?.slice(0, 1) || "我");
 const providerLabel = computed(() => {
   const provider = app.session.value?.provider;
@@ -102,8 +113,10 @@ const navItems = [
       </header>
       <main class="page-content">
         <RouterView v-slot="{ Component }">
-          <Transition name="page-fade" mode="out-in">
-            <component :is="Component" />
+          <Transition name="page-fade" mode="out-in" @before-leave="savePageScroll" @after-enter="restorePageScroll">
+            <KeepAlive>
+              <component :is="Component" />
+            </KeepAlive>
           </Transition>
         </RouterView>
       </main>

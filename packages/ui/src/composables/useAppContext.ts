@@ -10,6 +10,11 @@ const selectedMemberId = ref(localStorage.getItem("health-records:selected-membe
 const selectedMember = computed(() => members.value.find((member) => member.id === selectedMemberId.value) || null);
 const topbarSubtitle = ref("");
 const pendingReminderCount = ref(0);
+/* 数据变更信号：上传完成、后台任务跑完等场景递增，各页面据此静默刷新缓存数据 */
+const dataVersion = ref(0);
+function notifyDataChanged() {
+  dataVersion.value += 1;
+}
 
 watch(selectedMemberId, (value) => {
   if (value) localStorage.setItem("health-records:selected-member", value);
@@ -70,6 +75,8 @@ export function useAppContext() {
     selectedMember,
     topbarSubtitle: readonly(topbarSubtitle),
     pendingReminderCount: readonly(pendingReminderCount),
+    dataVersion: readonly(dataVersion),
+    notifyDataChanged,
     setTopbarSubtitle: (value: string) => {
       topbarSubtitle.value = value;
     },

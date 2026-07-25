@@ -4,7 +4,7 @@ import { getAiSettings } from "./ai-settings.service";
 import { normalizeReportObservations } from "./indicator-normalization.service";
 import { listManualReportFieldKeys, type ReportFieldKey } from "./report-field-overrides.service";
 
-const promptVersion = "health-record-v2";
+const promptVersion = "health-record-v3";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -24,6 +24,15 @@ const reportTypeAliases: Record<string, string> = {
 };
 const lateralityValues = new Set(["left", "right", "bilateral", "unspecified"]);
 const abnormalFlags = new Set(["high", "low", "abnormal", "normal"]);
+
+/* AI 漏标时的确定性兜底：结果文本或证据原文里明确出现的箭头/高低标记（只基于原文，不做参考范围推断） */
+function markerFlagFromText(...chunks: Array<string | null>): AiObservation["abnormalFlag"] {
+  const text = chunks.filter(Boolean).join(" ");
+  if (!text) return null;
+  if (/[↑▲⬆]|偏高/.test(text)) return "high";
+  if (/[↓▼⬇]|偏低/.test(text)) return "low";
+  return null;
+}
 const identifierKeys = new Set([
   "reportNo", "outpatientNo", "inpatientNo", "physicalExamNo", "examNo", "specimenNo", "barcodeNo"
 ]);
@@ -168,6 +177,8 @@ export function normalizeAiExtraction(value: unknown): {
     const resultText = textValue(row.resultText, 500);
     if (!itemName || !resultText) return [];
     const flag = textValue(row.abnormalFlag, 20);
+    const evidence = evidenceValue(row.evidence);
+    const parsedFlag = flag && abnormalFlags.has(flag) ? flag as AiObservation["abnormalFlag"] : null;
     return [{
       sectionName: textValue(row.sectionName, 200),
       itemCode: textValue(row.itemCode, 100),
@@ -179,9 +190,9 @@ export function normalizeAiExtraction(value: unknown): {
       referenceLow: numberValue(row.referenceLow),
       referenceHigh: numberValue(row.referenceHigh),
       referenceText: textValue(row.referenceText, 300),
-      abnormalFlag: flag && abnormalFlags.has(flag) ? flag as AiObservation["abnormalFlag"] : null,
+      abnormalFlag: parsedFlag || markerFlagFromText(resultText, ...evidence.map((item) => item.quote)),
       method: textValue(row.method, 200),
-      evidence: evidenceValue(row.evidence)
+      evidence
     }];
   }) : [];
   const rawEvidence = source.evidence && typeof source.evidence === "object" && !Array.isArray(source.evidence)
@@ -390,6 +401,7 @@ bodyParts 用于档案展示的检查部位/范围，每项使用 raw、name、p
 identifiers 只允许 reportNo、outpatientNo、inpatientNo、physicalExamNo、examNo、specimenNo、barcodeNo。
 clinicians 只允许 ordering、examining、reporting、reviewing、chief。
 observations 每项包括 sectionName、itemCode、itemName、normalizedName、resultText、numericValue、unit、referenceLow、referenceHigh、referenceText、abnormalFlag、method、evidence。
+abnormalFlag 提取原报告的异常标记：结果旁的 ↑、▲ 或“偏高”为 high，↓、▼ 或“偏低”为 low，有异常标记但无法区分高低（如 阳性、异常、*）为 abnormal，报告明确标记正常为 normal，原报告没有任何标记时为 null。
 每个证据使用 {"pageNumber":1,"quote":"原文"}。顶层 evidence 保存公共字段证据，confidence 保存 0 到 1 的字段置信度。
 禁止输出姓名、身份证号、电话、住址；summary 必须是中性事实摘要。缺失字段使用 null、空对象或空数组。`;
 }

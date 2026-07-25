@@ -608,7 +608,13 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
     WHERE o.report_id = ? ORDER BY o.section_name, o.id LIMIT 200
   `).all(reportId).map((item) => {
     const row = item as Observation & { evidenceJson: string };
-    return { ...row, evidence: parseJson(row.evidenceJson, null), evidenceJson: undefined };
+    const evidence = parseJson<Array<{ quote?: string }> | null>(row.evidenceJson, null);
+    return {
+      ...row,
+      abnormalFlag: displayAbnormalFlag(row.abnormalFlag, row.resultText, ...(Array.isArray(evidence) ? evidence : []).map((entry) => entry.quote || null)),
+      evidence,
+      evidenceJson: undefined
+    };
   }) as Observation[];
   return {
     ...row,
@@ -620,6 +626,16 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates: findDuplicateCandidates(row)
   };
+}
+
+/* 异常标记读取兜底：存量数据 AI 漏标时，从结果文本和证据原文的箭头/高低标记推导（只基于原文，不做参考范围推断） */
+function displayAbnormalFlag<T extends "high" | "low" | "abnormal" | "normal" | null>(flag: T, ...chunks: Array<string | null>): T {
+  if (flag) return flag;
+  const text = chunks.filter(Boolean).join(" ");
+  if (!text) return flag;
+  if (/[↑▲⬆]|偏高/.test(text)) return "high" as T;
+  if (/[↓▼⬇]|偏低/.test(text)) return "low" as T;
+  return flag;
 }
 
 export function getReportPageFile(user: RequestUser, reportId: string, pageId: string, variant: "original" | "thumbnail") {
@@ -1289,6 +1305,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const evidence = firstObservationEvidence(row.evidenceJson);
     return {
       ...row,
+      abnormalFlag: displayAbnormalFlag(row.abnormalFlag, row.resultText, evidence?.quote || null),
       parsedNumericValue: numericValue,
       trendNumericValue: numericValue === null ? null : usesCanonical ? (row.canonicalValue ?? numericValue) : numericValue,
       trendName: usesCanonical ? row.canonicalName! : normalizeTrendName(row.name),
@@ -1458,11 +1475,26 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   }
 
   return Array.from(groups.values()).map((group) => {
-    const points = group.points.sort((left, right) =>
+    /* 去重保留优先级：已归档 > 归一化质量高 > 报告 ID 字典序 */
+    const qualityRank = (quality: string | null) => ({ high: 0, medium: 1, low: 2 }[quality || ""] ?? 3);
+    const sortedPoints = group.points.sort((left, right) =>
       String(left.sortDate || "").localeCompare(String(right.sortDate || ""))
+      || (left.reportStatus === "ready" ? 0 : 1) - (right.reportStatus === "ready" ? 0 : 1)
+      || qualityRank(left.normalizationQuality) - qualityRank(right.normalizationQuality)
       || left.reportId.localeCompare(right.reportId)
       || left.observationId.localeCompare(right.observationId)
     );
+    /* 同一报告重复上传（归档/待确认多份并存）时，完全相同的点只保留一份，避免重复计入趋势。
+       参考范围不参与比较：重复报告 OCR 可能产出细微差异（如 “0~40” 与 “0--40”），
+       同日期、同医院、同指标、同数值已足以判定为重复。 */
+    const points = sortedPoints.filter((point, index) => !sortedPoints.some((other, otherIndex) =>
+      otherIndex < index
+      && other.reportId !== point.reportId
+      && other.itemName === point.itemName
+      && other.numericValue === point.numericValue
+      && String(other.reportIssuedAt || "") === String(point.reportIssuedAt || "")
+      && String(other.hospitalName || "") === String(point.hospitalName || "")
+    ));
     const values = points.map((point) => point.numericValue);
     const latest = points.at(-1) || null;
     const previous = points.length > 1 ? points.at(-2) || null : null;
@@ -1682,6 +1714,22 @@ const auditTargetLabels: Record<string, string> = {
   observation: "指标",
 };
 
+/** 审计 detail 中的状态值统一翻译成中文，覆盖提醒/通知/报告三类状态 */
+const auditStatusLabels: Record<string, string> = {
+  pending: "待处理",
+  completed: "已完成",
+  dismissed: "已忽略",
+  unread: "未读",
+  archived: "已归档",
+  uploading: "上传中",
+  queued: "排队中",
+  processing: "处理中",
+  needs_review: "待确认",
+  ready: "已归档",
+  failed: "识别失败",
+  trashed: "回收站",
+};
+
 function shortAuditId(value: string) {
   return value.length > 14 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
 }
@@ -1758,7 +1806,7 @@ function userAuditDescription(
   if (typeof detail.memberCount === "number") parts.push(`${detail.memberCount} 位成员`);
   if (typeof detail.safetyBackupId === "string") parts.push(`安全备份 ${shortAuditId(detail.safetyBackupId)}`);
   if (typeof detail.updated === "number") parts.push(`更新 ${detail.updated} 条`);
-  if (typeof detail.status === "string") parts.push(`状态 ${detail.status}`);
+  if (typeof detail.status === "string") parts.push(`状态 ${auditStatusLabels[detail.status] || detail.status}`);
   if (Array.isArray(detail.fields) && detail.fields.length) parts.push(`字段 ${detail.fields.length} 项`);
   return parts.join(" · ") || auditActionTitles[action] || action;
 }

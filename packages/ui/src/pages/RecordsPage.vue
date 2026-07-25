@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { CalendarDays, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Search } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -10,6 +10,7 @@ import { request } from "../utils/api";
 import type { CursorPage, ReportDetail as ReportDetailType, ReportSummary, ReportSummaryStats } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
+import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
 
@@ -23,6 +24,7 @@ const loadingMore = ref(false);
 const reports = ref<ReportSummary[]>([]);
 const nextCursor = ref<string | null>(null);
 const hasMore = ref(false);
+const loadError = ref("");
 const loadMoreError = ref("");
 const summaryStats = ref<ReportSummaryStats | null>(null);
 const query = ref("");
@@ -123,12 +125,13 @@ function closeMobileDetail() {
   mobileDetailOpen.value = false;
 }
 
-async function load(memberId: string, silent = false) {
+async function load(memberId: string, silent = false, limit = PAGE_SIZE) {
   const seq = ++listSeq;
   if (!silent) loading.value = true;
+  loadError.value = "";
   loadMoreError.value = "";
   try {
-    const params = buildReportParams(memberId);
+    const params = buildReportParams(memberId, null, limit);
     const [page, stats] = await Promise.all([
       request<CursorPage<ReportSummary>>(`reports?${params.toString()}`),
       request<ReportSummaryStats>(`reports/summary?memberId=${encodeURIComponent(memberId)}`)
@@ -146,9 +149,17 @@ async function load(memberId: string, silent = false) {
     if (!reports.value.some((report) => report.id === selectedId.value)) {
       selectedId.value = reports.value[0]?.id || "";
     }
+  } catch (cause) {
+    if (seq === listSeq && !silent) loadError.value = cause instanceof Error ? cause.message : "档案加载失败";
+    throw cause;
   } finally {
     if (seq === listSeq && !silent) loading.value = false;
   }
+}
+
+function retryLoad() {
+  const memberId = app.selectedMemberId.value;
+  if (memberId) load(memberId).catch(() => {});
 }
 
 async function loadMoreReports() {
@@ -177,7 +188,8 @@ async function loadMoreReports() {
 
 async function reloadList() {
   const memberId = app.selectedMemberId.value;
-  if (memberId) await load(memberId, true);
+  /* 静默刷新按已加载条数一次性取回（服务端上限 50），避免列表塌回第一页导致滚动位置跳动 */
+  if (memberId) await load(memberId, true, Math.min(50, Math.max(PAGE_SIZE, reports.value.length)));
 }
 
 const root = ref<HTMLElement | null>(null);
@@ -198,8 +210,13 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   syncFiltersFromRoute();
   summaryStats.value = null;
   mobileDetailOpen.value = false;
-  if (memberId) load(memberId).catch(() => toast.show("加载失败，请稍后重试"));
+  if (memberId) load(memberId).catch(() => {});
 }, { immediate: true });
+
+function applyFilters() {
+  const memberId = app.selectedMemberId.value;
+  if (memberId) load(memberId).catch(() => {});
+}
 
 watch(recordCountSubtitle, (subtitle) => app.setTopbarSubtitle(subtitle), { immediate: true });
 
@@ -215,7 +232,7 @@ watch(() => route.query.status, () => {
   const memberId = app.selectedMemberId.value;
   if (memberId && statusFilter.value !== previous) {
     selectedId.value = "";
-    void load(memberId);
+    load(memberId).catch(() => {});
   }
 }, { immediate: true });
 
@@ -238,6 +255,15 @@ onBeforeUnmount(() => {
   loadMoreObserver?.disconnect();
   app.setTopbarSubtitle("");
 });
+/* KeepAlive 缓存期间：失活时收起移动端详情并清副标题，激活时恢复副标题 */
+onDeactivated(() => {
+  mobileDetailOpen.value = false;
+  app.setTopbarSubtitle("");
+});
+onActivated(() => {
+  app.setTopbarSubtitle(recordCountSubtitle.value);
+});
+useRefreshOnActivate(() => { void reloadList(); });
 </script>
 
 <template>
@@ -252,18 +278,21 @@ onBeforeUnmount(() => {
       </div>
     </section>
     <div class="filter-row">
-      <label class="search-field"><Search :size="18" /><input v-model="query" placeholder="搜索医院、科室、部位或报告" @keydown.enter="app.selectedMemberId.value && load(app.selectedMemberId.value)" /></label>
-      <input v-model="ocrQuery" class="compact-filter advanced-filter" placeholder="OCR 全文" @keydown.enter="app.selectedMemberId.value && load(app.selectedMemberId.value)" />
-      <FormSelect v-model="typeFilter" class="records-filter-select advanced-filter" :options="typeOptions" aria-label="报告类型" @change="app.selectedMemberId.value && load(app.selectedMemberId.value)" />
-      <FormSelect v-model="statusFilter" class="records-filter-select advanced-filter" :options="statusOptions" aria-label="归档状态" @change="app.selectedMemberId.value && load(app.selectedMemberId.value)" />
-      <input v-model="dateFrom" class="compact-filter date-filter advanced-filter" type="date" title="开始日期" @change="app.selectedMemberId.value && load(app.selectedMemberId.value)" />
-      <input v-model="dateTo" class="compact-filter date-filter advanced-filter" type="date" title="结束日期" @change="app.selectedMemberId.value && load(app.selectedMemberId.value)" />
-      <button class="soft-action-button advanced-filter" type="button" @click="app.selectedMemberId.value && load(app.selectedMemberId.value)">筛选</button>
+      <label class="search-field"><Search :size="18" /><input v-model="query" placeholder="搜索医院、科室、部位或报告" @keydown.enter="applyFilters" /></label>
+      <input v-model="ocrQuery" class="compact-filter advanced-filter" placeholder="OCR 全文" @keydown.enter="applyFilters" />
+      <FormSelect v-model="typeFilter" class="records-filter-select advanced-filter" :options="typeOptions" aria-label="报告类型" @change="applyFilters" />
+      <FormSelect v-model="statusFilter" class="records-filter-select advanced-filter" :options="statusOptions" aria-label="归档状态" @change="applyFilters" />
+      <input v-model="dateFrom" class="compact-filter date-filter advanced-filter" type="date" title="开始日期" @change="applyFilters" />
+      <input v-model="dateTo" class="compact-filter date-filter advanced-filter" type="date" title="结束日期" @change="applyFilters" />
+      <button class="soft-action-button advanced-filter" type="button" @click="applyFilters">筛选</button>
     </div>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
     <div class="records-layout">
       <section class="timeline-panel">
         <div v-if="loading" class="loading-list"><span v-for="index in 4" :key="index"></span></div>
+        <p v-else-if="loadError" class="inline-panel-error">
+          {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
+        </p>
         <EmptyState v-else-if="!filtered.length" title="还没有健康报告" description="上传第一份报告后，会按报告日期出现在这里。">
           <RouterLink class="primary-button" to="/upload">上传报告</RouterLink>
         </EmptyState>

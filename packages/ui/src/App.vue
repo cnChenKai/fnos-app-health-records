@@ -28,6 +28,10 @@ onMounted(() => {
     <span class="spinner" aria-hidden="true"></span>
     <p>正在打开健康档案</p>
   </div>
+  <div v-else-if="app.error.value" class="boot-state">
+    <p>应用启动失败：{{ app.error.value }}</p>
+    <button class="primary-button" type="button" @click="app.load">重试</button>
+  </div>
   <LoginView v-else-if="!app.session.value?.authenticated" @authenticated="app.load" />
   <AppShell v-else />
   <ConfirmDialog />

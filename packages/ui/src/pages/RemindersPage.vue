@@ -9,6 +9,7 @@ import { formatDatabaseTime } from "../utils/time";
 import type { AppNotification, Reminder } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
+import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
 
 const app = useAppContext();
@@ -90,14 +91,24 @@ async function createManualReminder() {
   }
 }
 
+const actionPendingId = ref("");
+
 async function setStatus(item: Reminder, status: Reminder["status"]) {
   const memberId = app.selectedMemberId.value;
-  if (!memberId) return;
-  await request(`reminders/${encodeURIComponent(item.id)}`, {
-    method: "PUT",
-    body: JSON.stringify({ status })
-  });
-  await load(memberId, true);
+  if (!memberId || actionPendingId.value) return;
+  actionPendingId.value = item.id;
+  try {
+    await request(`reminders/${encodeURIComponent(item.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ status })
+    });
+    await load(memberId, true);
+    toast.show(status === "completed" ? "提醒已完成" : status === "dismissed" ? "已忽略该提醒" : "提醒已恢复待处理");
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
+  } finally {
+    actionPendingId.value = "";
+  }
 }
 
 function reloadReminders() {
@@ -105,14 +116,24 @@ function reloadReminders() {
   if (memberId) void load(memberId, true);
 }
 
+useRefreshOnActivate(reloadReminders);
+
 async function setNotificationStatus(item: AppNotification, status: AppNotification["status"]) {
   const memberId = app.selectedMemberId.value;
-  if (!memberId) return;
-  await request(`notifications/${encodeURIComponent(item.id)}`, {
-    method: "PUT",
-    body: JSON.stringify({ status })
-  });
-  await load(memberId, true);
+  if (!memberId || actionPendingId.value) return;
+  actionPendingId.value = item.id;
+  try {
+    await request(`notifications/${encodeURIComponent(item.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ status })
+    });
+    await load(memberId, true);
+    toast.show("通知已归档");
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
+  } finally {
+    actionPendingId.value = "";
+  }
 }
 
 const root = ref<HTMLElement | null>(null);
@@ -169,7 +190,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
           <span class="chip status-label" :class="notificationMeta(item).chip">{{ notificationMeta(item).label }}</span>
           <div class="row-actions">
             <button v-if="item.reportId" type="button" @click="openReport(item.reportId)">查看报告</button>
-            <button type="button" @click="setNotificationStatus(item, 'archived')"><CheckCircle2 :size="15" />知道了</button>
+            <button type="button" :disabled="actionPendingId === item.id" @click="setNotificationStatus(item, 'archived')"><CheckCircle2 :size="15" />知道了</button>
           </div>
         </div>
       </article>
@@ -188,9 +209,9 @@ watch(() => app.selectedMemberId.value, (memberId) => {
           <span class="chip status-label" :class="reminderStatusMeta(item).chip">{{ reminderStatusMeta(item).label }}</span>
           <div class="row-actions">
             <button v-if="item.reportId" type="button" @click="openReport(item.reportId)">查看报告</button>
-            <button v-if="item.status !== 'completed'" type="button" @click="setStatus(item, 'completed')"><CheckCircle2 :size="15" />完成</button>
-            <button v-if="item.status !== 'dismissed'" class="danger-action" type="button" @click="setStatus(item, 'dismissed')"><X :size="15" />忽略</button>
-            <button v-if="item.status !== 'pending'" type="button" @click="setStatus(item, 'pending')"><Clock3 :size="15" />恢复</button>
+            <button v-if="item.status !== 'completed'" type="button" :disabled="actionPendingId === item.id" @click="setStatus(item, 'completed')"><CheckCircle2 :size="15" />完成</button>
+            <button v-if="item.status !== 'dismissed'" class="danger-action" type="button" :disabled="actionPendingId === item.id" @click="setStatus(item, 'dismissed')"><X :size="15" />忽略</button>
+            <button v-if="item.status !== 'pending'" type="button" :disabled="actionPendingId === item.id" @click="setStatus(item, 'pending')"><Clock3 :size="15" />恢复</button>
           </div>
         </div>
       </article>
