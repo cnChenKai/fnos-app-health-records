@@ -15,7 +15,7 @@ import {
 } from "../services/job-runner.service.ts";
 import { buildReportTitle, normalizeAiExtraction, type AiExecutor } from "../services/ai-extraction.service.ts";
 import { saveAiSettings } from "../services/ai-settings.service.ts";
-import { createUpload } from "../services/upload.service.ts";
+import { createUpload, listProcessingJobs } from "../services/upload.service.ts";
 import { getReportDetail, updateReportFields } from "../services/records.service.ts";
 
 const manager: RequestUser = {
@@ -139,6 +139,40 @@ test("skips AI extraction and warns when OCR extracts no text", async () => {
       () => queueManualAiExtraction(manager, upload.reportId),
       /暂无可用于 AI 整理的 OCR 文本/
     );
+  });
+});
+
+test("treats legacy OCR rows without text_length as having content", async () => {
+  await withDatabase(async () => {
+    saveAiSettings({
+      enabled: true,
+      baseUrl: "https://ai.example.test/v1",
+      textModel: "health-structurer",
+      apiKey: "test-secret"
+    });
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "legacy.png", data: pngBytes() }
+    ]);
+    const worker: WorkerExecutor = async (request) => request.action === "thumbnail"
+      ? { ok: true, width: 240, height: 320, elapsedMs: 5 }
+      : {
+          ok: true,
+          engine: "test-ocr",
+          modelVersion: "test-v1",
+          lines: [{ text: "空腹血糖 5.2 mmol/L", confidence: 0.99, box: [0, 0, 10, 10] }],
+          elapsedMs: 6
+        };
+    assert.equal(await processNextJob(worker), true);
+    assert.equal(await processNextJob(worker), true);
+    getDatabase().prepare("DELETE FROM processing_jobs WHERE report_id = ? AND job_type = 'ai_extract'")
+      .run(upload.reportId);
+    /* 模拟 text_length 列加入之前的历史数据：只有 lines_json */
+    getDatabase().prepare("UPDATE ocr_results SET text_length = NULL").run();
+
+    const jobs = listProcessingJobs(manager, upload.reportId) as Array<{ jobType: string; ocrTextLength: number | null }>;
+    assert.equal(jobs.find((job) => job.jobType === "ocr")?.ocrTextLength, 1);
+    const manual = queueManualAiExtraction(manager, upload.reportId);
+    assert.equal(manual.status, "queued");
   });
 });
 

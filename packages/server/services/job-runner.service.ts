@@ -168,8 +168,15 @@ function queueJob(reportId: string, pageId: string, jobType: "thumbnail" | "ocr"
 }
 
 function reportOcrTextLength(reportId: string) {
+  /* text_length 列后加，旧行只按 lines_json 是否含文本估算，避免把历史报告误判为空 */
   const row = getDatabase().prepare(`
-    SELECT COALESCE(SUM(o.text_length), 0) AS total
+    SELECT COALESCE(SUM(
+      CASE
+        WHEN o.text_length IS NOT NULL THEN o.text_length
+        WHEN o.lines_json IS NOT NULL AND o.lines_json NOT IN ('', '[]') THEN 1
+        ELSE 0
+      END
+    ), 0) AS total
     FROM ocr_results o JOIN report_pages p ON p.id = o.page_id
     WHERE p.report_id = ?
   `).get(reportId) as { total: number };

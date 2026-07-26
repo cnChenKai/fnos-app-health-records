@@ -195,7 +195,12 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
       j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
       j.started_at AS startedAt, j.finished_at AS finishedAt,
       o.engine AS ocrEngine, o.model_version AS ocrModelVersion, o.elapsed_ms AS ocrElapsedMs,
-      o.text_length AS ocrTextLength, o.quality_level AS ocrQualityLevel,
+      CASE
+        WHEN o.text_length IS NOT NULL THEN o.text_length
+        WHEN o.lines_json IS NOT NULL AND o.lines_json NOT IN ('', '[]') THEN 1
+        ELSE 0
+      END AS ocrTextLength,
+      o.quality_level AS ocrQualityLevel,
       e.provider AS aiProvider, e.model AS aiModel, e.elapsed_ms AS aiElapsedMs,
       e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens
     FROM processing_jobs j

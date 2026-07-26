@@ -1115,6 +1115,19 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   white-space: normal; overflow-wrap: anywhere; text-overflow: clip;
 }
 .about-kv-list { display: grid; }
+.about-update-row {
+  padding: 0 16px 16px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  color: var(--muted); font-size: 12px;
+}
+.about-update-row button,
+.about-update-row a {
+  min-height: 34px; padding: 0 14px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; color: var(--brand-strong); font-size: 12px; font-weight: 700;
+  display: inline-flex; align-items: center; cursor: pointer; text-decoration: none;
+}
+.about-update-available { color: var(--amber); font-weight: 700; }
+.about-update-failed { color: var(--danger); }
+.about-update-row .about-update-download { background: var(--brand); border-color: var(--brand); color: #fff; }
 .about-kv-list > div {
   min-height: 48px; padding: 10px 16px; border-top: 1px solid var(--line);
   display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 12px;
@@ -1656,6 +1669,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .usage-grid--compact { grid-template-columns: 1fr 1fr; }
   .table-counts { grid-template-columns: 1fr 1fr; }
   .about-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; gap: 6px; }
+  .about-update-row { padding: 0 12px 12px; }
   .about-kv-list > div { grid-template-columns: 76px minmax(0, 1fr); padding: 9px 12px; gap: 10px; }
   .settings-page { gap: 0; }
   .settings-page > .settings-band + .settings-band { margin-top: 12px; }
