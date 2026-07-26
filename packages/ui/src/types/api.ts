@@ -1,4 +1,11 @@
-export type ApiResponse<T> = { ok: boolean; data: T; statusMessage?: string; error?: { message?: string } };
+export type ApiResponse<T> = {
+  ok: boolean;
+  data: T;
+  statusMessage?: string;
+  statusText?: string;
+  message?: string;
+  error?: boolean | { message?: string };
+};
 
 export type Session = {
   id: string;
@@ -151,6 +158,8 @@ export type ProcessingJob = {
   ocrEngine: string | null;
   ocrModelVersion: string | null;
   ocrElapsedMs: number | null;
+  ocrTextLength: number | null;
+  ocrQualityLevel: string | null;
   aiProvider: string | null;
   aiModel: string | null;
   aiElapsedMs: number | null;

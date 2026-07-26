@@ -68,8 +68,23 @@ const editForm = ref({
 });
 let jobsTimer: ReturnType<typeof setInterval> | null = null;
 let detailSeq = 0;
+let jobsPollFailures = 0;
+
+/* 处理进度区默认折叠：任何写入 jobsError 的失败都要同时展开该区并 toast，否则按钮停了用户却看不到原因 */
+function failJobsAction(cause: unknown, fallback: string) {
+  jobsError.value = cause instanceof Error ? cause.message : fallback;
+  processingExpanded.value = true;
+  toast.show(jobsError.value, 3600);
+}
 
 const source = computed(() => detail.value || props.summary || null);
+/* OCR 全部完成但没有任何文字：原件大概率不是有效报告，在详情顶部明确提示而非仅发通知 */
+const ocrEmptyNotice = computed(() => {
+  const localJobs = selectedJobs.value.filter((job) => job.jobType !== "ai_extract");
+  if (!localJobs.length || localJobs.some((job) => job.status === "queued" || job.status === "processing")) return false;
+  const ocrJobs = selectedJobs.value.filter((job) => job.jobType === "ocr" && job.status === "completed");
+  return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
+});
 const completedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "completed").length);
 const failedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "failed"));
 const finishedJobs = computed(() => selectedJobs.value.filter((job) => ["completed", "failed", "cancelled"].includes(job.status)).length);
@@ -452,7 +467,7 @@ async function confirmReady() {
     emit("updated");
     toast.show("已确认归档");
   } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "确认归档失败";
+    failJobsAction(cause, "确认归档失败");
   } finally {
     confirming.value = false;
   }
@@ -481,7 +496,7 @@ async function trashCurrentReport() {
     emit("close");
     toast.show("已移入回收站，原件将保留 30 天");
   } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "移入回收站失败";
+    failJobsAction(cause, "移入回收站失败");
   } finally {
     trashingReport.value = false;
   }
@@ -495,7 +510,7 @@ async function triggerAiExtraction() {
     await refreshJobs();
     toast.show("AI 整理任务已加入队列");
   } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "AI 整理触发失败";
+    failJobsAction(cause, "AI 整理触发失败");
   } finally {
     triggeringAi.value = false;
   }
@@ -524,7 +539,7 @@ async function reprocessCurrentReport() {
           ? `已重新排队 OCR ${result.queuedOcr} 页，完成后会自动 AI 整理`
           : `已重新排队 OCR ${result.queuedOcr} 页，AI 未配置时需稍后手动整理`);
       } catch (cause) {
-        jobsError.value = cause instanceof Error ? cause.message : "重新识别失败";
+        failJobsAction(cause, "重新识别失败");
       } finally {
         reprocessingReport.value = false;
       }
@@ -569,6 +584,7 @@ async function refreshJobs(silent = false) {
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
     selectedJobs.value = nextJobs;
+    jobsPollFailures = 0;
     if (ocr) runtimeAvailable.value = ocr.available;
     const settled = nextJobs.length > 0 && nextJobs.every((job) => ["completed", "failed"].includes(job.status));
     const newlyFailed = nextJobs.some((job) => job.status === "failed" && previousStatuses.get(job.id) !== "failed");
@@ -582,8 +598,12 @@ async function refreshJobs(silent = false) {
     }
     maybeStartJobsPolling();
   } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "无法读取处理进度";
-    stopJobsPolling();
+    jobsPollFailures += 1;
+    /* 轮询允许偶发失败（网络抖动），连续 3 次失败才停止并提示，避免进度条假死 */
+    if (!silent || jobsPollFailures >= 3) {
+      failJobsAction(cause, "无法读取处理进度");
+      stopJobsPolling();
+    }
   } finally {
     if (!silent) jobsLoading.value = false;
   }
@@ -610,7 +630,7 @@ async function retryJob(job: ProcessingJob) {
     await request(`jobs/${job.id}/retry`, { method: "POST" });
     await refreshJobs();
   } catch (cause) {
-    jobsError.value = cause instanceof Error ? cause.message : "任务重试失败";
+    failJobsAction(cause, "任务重试失败");
   }
 }
 
@@ -683,6 +703,10 @@ onActivated(() => {
       </div>
       <h3>{{ source.title }}</h3>
       <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
+      <div v-if="ocrEmptyNotice" class="runtime-warning compact">
+        <CircleAlert :size="18" />
+        <div><strong>没有识别到文字</strong><span>这份报告的原件上没有识别到任何文字，可能不是有效的体检报告。可重新上传清晰原件，或直接手动校对填写。</span></div>
+      </div>
       <dl class="preview-facts">
         <div><dt>报告日期</dt><dd>{{ source.reportIssuedAt || "日期待确认" }}<span v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>医院</dt><dd>{{ [source.hospitalName, source.hospitalBranch].filter(Boolean).join(" · ") || "待整理" }}<span v-if="isManualField('hospitalName') || isManualField('hospitalBranch')" class="manual-field-chip">人工校对</span></dd></div>

@@ -5,6 +5,7 @@ export default defineNitroConfig({
   preset: "node-middleware",
   baseURL: `${templateConfig.gatewayPrefix}/`,
   serverDir: "packages/server",
+  errorHandler: "packages/server/error-handler.ts",
   output: {
     dir: ".server-dist"
   },

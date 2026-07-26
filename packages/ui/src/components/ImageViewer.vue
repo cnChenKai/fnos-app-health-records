@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  ChevronLeft, ChevronRight, Download, LoaderCircle, Maximize2,
+  ChevronLeft, ChevronRight, CircleAlert, Download, LoaderCircle, Maximize2,
   RectangleHorizontal, RectangleVertical, X, ZoomIn, ZoomOut
 } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
@@ -27,6 +27,7 @@ const viewerRotation = ref(0);
 const viewerImmersive = ref(false);
 const viewerHighRes = ref(false);
 const viewerLoading = ref(false);
+const viewerLoadFailed = ref(false);
 const viewerHighResLoading = ref(false);
 const viewerPanX = ref(0);
 const viewerPanY = ref(0);
@@ -71,6 +72,7 @@ function prepareViewerPage(index: number) {
   viewerNaturalH.value = 0;
   const page = viewerPage.value;
   const seq = ++viewerPreloadSeq;
+  viewerLoadFailed.value = false;
   if (!page || !page.previewUrl) {
     viewerHighRes.value = true;
     viewerLoading.value = Boolean(page);
@@ -84,6 +86,7 @@ function prepareViewerPage(index: number) {
     if (seq !== viewerPreloadSeq) return;
     viewerHighResLoading.value = false;
     viewerHighRes.value = true;
+    viewerLoadFailed.value = false;
   };
   probe.onerror = () => {
     if (seq === viewerPreloadSeq) viewerHighResLoading.value = false;
@@ -212,9 +215,20 @@ const viewerFitStyle = computed(() => {
 
 function onViewerImageLoad(event: Event) {
   viewerLoading.value = false;
+  viewerLoadFailed.value = false;
   const img = event.target as HTMLImageElement;
   viewerNaturalW.value = img.naturalWidth || 0;
   viewerNaturalH.value = img.naturalHeight || 0;
+}
+
+function onViewerImageError() {
+  viewerLoading.value = false;
+  viewerHighResLoading.value = false;
+  viewerLoadFailed.value = true;
+}
+
+function retryViewerImage() {
+  prepareViewerPage(viewerIndex.value);
 }
 
 let viewerCanvasObserver: ResizeObserver | null = null;
@@ -294,13 +308,18 @@ onBeforeUnmount(() => {
         @click="onViewerCanvasClick"
       >
         <div v-if="viewerLoading" class="viewer-loading"><LoaderCircle class="spin-icon" :size="18" />加载中</div>
+        <div v-if="viewerLoadFailed" class="viewer-loading viewer-load-failed">
+          <CircleAlert :size="18" />图片加载失败
+          <button type="button" @click="retryViewerImage">重试</button>
+        </div>
         <div v-if="viewerHighResLoading" class="viewer-preview-badge"><LoaderCircle class="spin-icon" :size="13" />正在加载高清图…</div>
         <img
-          v-if="viewerPage"
+          v-if="viewerPage && !viewerLoadFailed"
           :src="viewerDisplaySrc"
           :alt="viewerPage.label"
           :style="[viewerFitStyle, { transform: `translate(-50%, -50%) translate3d(${viewerPanX}px, ${viewerPanY}px, 0) scale(${viewerScale}) rotate(${viewerRotation}deg)` }]"
           @load="onViewerImageLoad"
+          @error="onViewerImageError"
         />
         <button
           v-if="!viewerImmersive"

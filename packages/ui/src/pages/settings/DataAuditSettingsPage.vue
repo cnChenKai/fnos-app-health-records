@@ -3,7 +3,8 @@ import { onMounted, ref } from "vue";
 import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Trash2, UploadCloud } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import MarqueeText from "../../components/MarqueeText.vue";
-import { apiUrl, request } from "../../utils/api";
+import { request } from "../../utils/api";
+import { downloadFile } from "../../utils/download";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
@@ -14,6 +15,7 @@ const app = useAppContext();
 const toast = useToast();
 const confirmDialog = useConfirm();
 const message = ref("");
+const error = ref("");
 const backups = ref<BackupSummary[]>([]);
 const loadingBackups = ref(false);
 const creatingBackup = ref(false);
@@ -32,10 +34,20 @@ function formatBytes(value?: number | null) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function exportMember() {
+const exportingMember = ref(false);
+
+async function exportMember() {
   const memberId = app.selectedMemberId.value;
-  if (!memberId) return;
-  window.location.href = apiUrl(`export/member?memberId=${encodeURIComponent(memberId)}`);
+  if (!memberId || exportingMember.value) return;
+  exportingMember.value = true;
+  try {
+    await downloadFile(`export/member?memberId=${encodeURIComponent(memberId)}`, "member-export.json");
+    toast.show("成员清单已导出");
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "成员清单导出失败", 3600);
+  } finally {
+    exportingMember.value = false;
+  }
 }
 
 async function loadBackups() {
@@ -44,7 +56,7 @@ async function loadBackups() {
   try {
     backups.value = await request<BackupSummary[]>("backups");
   } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "备份列表加载失败";
+    error.value = cause instanceof Error ? cause.message : "备份列表加载失败";
   } finally {
     loadingBackups.value = false;
   }
@@ -59,14 +71,18 @@ async function createBackupNow() {
     toast.show("备份已创建");
     await loadBackups();
   } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "备份创建失败";
+    error.value = cause instanceof Error ? cause.message : "备份创建失败";
   } finally {
     creatingBackup.value = false;
   }
 }
 
-function downloadBackup(backup: BackupSummary) {
-  window.location.href = apiUrl(`backups/${encodeURIComponent(backup.id)}/download`);
+async function downloadBackup(backup: BackupSummary) {
+  try {
+    await downloadFile(`backups/${encodeURIComponent(backup.id)}/download`, backup.filename);
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "备份下载失败", 3600);
+  }
 }
 
 function validationText(result: BackupValidationResult) {
@@ -90,7 +106,7 @@ async function checkBackup(backup: BackupSummary) {
     message.value = `${backup.filename}：${validationText(result)}`;
     toast.show(result.valid ? "备份校验完成" : "备份校验失败");
   } catch (cause) {
-    message.value = cause instanceof Error ? cause.message : "备份校验失败";
+    error.value = cause instanceof Error ? cause.message : "备份校验失败";
   } finally {
     checkingId.value = "";
   }
@@ -105,6 +121,7 @@ async function restoreBackup(backup: BackupSummary) {
     run: async () => {
       restoringId.value = backup.id;
       message.value = "";
+      error.value = "";
       try {
         const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string }>(
           `backups/${encodeURIComponent(backup.id)}/restore`,
@@ -114,7 +131,7 @@ async function restoreBackup(backup: BackupSummary) {
         toast.show("备份已恢复");
         await Promise.all([loadBackups(), app.load()]);
       } catch (cause) {
-        message.value = cause instanceof Error ? cause.message : "备份恢复失败";
+        error.value = cause instanceof Error ? cause.message : "备份恢复失败";
       } finally {
         restoringId.value = "";
       }
@@ -139,6 +156,7 @@ async function restoreUploadedBackup(event: Event) {
     run: async () => {
       uploadingRestore.value = true;
       message.value = "";
+      error.value = "";
       try {
         const body = new FormData();
         body.append("backup", file);
@@ -150,7 +168,7 @@ async function restoreUploadedBackup(event: Event) {
         toast.show("外部备份已恢复");
         await Promise.all([loadBackups(), app.load()]);
       } catch (cause) {
-        message.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
+        error.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
       } finally {
         uploadingRestore.value = false;
       }
@@ -168,13 +186,14 @@ async function deleteBackup(backup: BackupSummary) {
     run: async () => {
       deletingId.value = backup.id;
       message.value = "";
+      error.value = "";
       try {
         await request(`backups/${encodeURIComponent(backup.id)}`, { method: "DELETE" });
         message.value = `备份已删除：${backup.filename}`;
         toast.show("备份已删除");
         await loadBackups();
       } catch (cause) {
-        message.value = cause instanceof Error ? cause.message : "备份删除失败";
+        error.value = cause instanceof Error ? cause.message : "备份删除失败";
       } finally {
         deletingId.value = "";
       }
@@ -198,7 +217,10 @@ onMounted(() => {
       </header>
       <div class="settings-form">
         <div class="form-actions">
-          <button class="primary-button" type="button" @click="exportMember"><Download :size="16" />导出当前成员</button>
+          <button class="primary-button" type="button" :disabled="exportingMember" @click="exportMember">
+            <LoaderCircle v-if="exportingMember" class="spin-icon" :size="16" />
+            <Download v-else :size="16" />{{ exportingMember ? "正在导出" : "导出当前成员" }}
+          </button>
         </div>
       </div>
     </section>
@@ -237,6 +259,7 @@ onMounted(() => {
       </div>
       <div v-else class="backup-list">
         <p v-if="message" class="preview-hint">{{ message }}</p>
+        <p v-if="error" class="inline-panel-error">{{ error }}</p>
         <p v-if="loadingBackups" class="backup-empty"><LoaderCircle class="spin-icon" :size="16" />正在加载备份列表</p>
         <p v-else-if="!backups.length" class="backup-empty">暂无完整备份，建议在升级、迁移或批量整理前先创建一份。</p>
         <article v-for="backup in backups" :key="backup.id" class="backup-item">

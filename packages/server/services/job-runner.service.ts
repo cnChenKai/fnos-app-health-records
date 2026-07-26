@@ -167,6 +167,15 @@ function queueJob(reportId: string, pageId: string, jobType: "thumbnail" | "ocr"
   }
 }
 
+function reportOcrTextLength(reportId: string) {
+  const row = getDatabase().prepare(`
+    SELECT COALESCE(SUM(o.text_length), 0) AS total
+    FROM ocr_results o JOIN report_pages p ON p.id = o.page_id
+    WHERE p.report_id = ?
+  `).get(reportId) as { total: number };
+  return Number(row.total || 0);
+}
+
 function queueAiJobIfReady(reportId: string) {
   if (!isAiExtractionConfigured()) return false;
   const db = getDatabase();
@@ -180,6 +189,7 @@ function queueAiJobIfReady(reportId: string) {
     FROM processing_jobs WHERE report_id = ?
   `).get(reportId) as { activeLocal: number; failedLocal: number; completedOcr: number; activeAi: number; completedAi: number };
   if (Number(counts.activeLocal) > 0 || Number(counts.failedLocal) > 0 || Number(counts.completedOcr) < 1) return false;
+  if (reportOcrTextLength(reportId) < 1) return false;
   if (Number(counts.activeAi) > 0) return false;
   if (Number(counts.completedAi) > 0) {
     const report = db.prepare("SELECT title FROM reports WHERE id = ?").get(reportId) as { title: string } | undefined;
@@ -378,17 +388,22 @@ function updateReportStatus(reportId: string) {
     .run(status, reportId);
   if (!previous || previous.status === status) return;
   if (status === "needs_review") {
+    const hasAiResult = Number(counts.completedAi) > 0;
+    const ocrTextEmpty = !hasAiResult && reportOcrTextLength(reportId) < 1;
     db.prepare(`
       INSERT INTO app_notifications (id, member_id, report_id, type, title, message, severity)
-      VALUES (?, ?, ?, 'report_processed', ?, ?, 'success')
+      VALUES (?, ?, ?, 'report_processed', ?, ?, ?)
     `).run(
       createId("notice"),
       previous.memberId,
       reportId,
-      "报告处理完成",
-      Number(counts.completedAi) > 0
-        ? `「${previous.title}」已完成 OCR 和 AI 整理，等待确认归档。`
-        : `「${previous.title}」已完成 OCR 识别，等待确认归档。`
+      ocrTextEmpty ? "报告未识别到文字" : "报告处理完成",
+      ocrTextEmpty
+        ? `「${previous.title}」OCR 未提取到任何文字，可能不是有效的体检报告。请确认原件清晰后重新上传，或手动录入报告内容。`
+        : hasAiResult
+          ? `「${previous.title}」已完成 OCR 和 AI 整理，等待确认归档。`
+          : `「${previous.title}」已完成 OCR 识别，等待确认归档。`,
+      ocrTextEmpty ? "warning" : "success"
     );
   } else if (status === "failed") {
     db.prepare(`
@@ -612,7 +627,9 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
   `).get(reportId) as { activeLocal: number; failedLocal: number; completedOcr: number; activeAi: number; completedAi: number };
   if (Number(counts.activeLocal) > 0) throw createError({ statusCode: 409, statusMessage: "本地识别仍在处理中，完成后再整理" });
   if (Number(counts.failedLocal) > 0) throw createError({ statusCode: 409, statusMessage: "存在失败的 OCR/PDF 任务，请先重试本地识别" });
-  if (Number(counts.completedOcr) < 1) throw createError({ statusCode: 409, statusMessage: "暂无可用于 AI 整理的 OCR 文本" });
+  if (Number(counts.completedOcr) < 1 || reportOcrTextLength(reportId) < 1) {
+    throw createError({ statusCode: 409, statusMessage: "暂无可用于 AI 整理的 OCR 文本" });
+  }
   if (Number(counts.activeAi) > 0) throw createError({ statusCode: 409, statusMessage: "AI 整理任务已在队列中" });
   if (Number(counts.completedAi) > 0) {
     const content = db.prepare(`

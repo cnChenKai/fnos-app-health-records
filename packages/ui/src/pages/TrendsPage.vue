@@ -94,7 +94,8 @@ function retryLoad() {
 
 function reloadTrends() {
   const memberId = app.selectedMemberId.value;
-  if (memberId) void load(memberId, true);
+  if (!memberId) return;
+  load(memberId, true).catch((cause) => console.warn("[health-records] 指标趋势后台刷新失败", cause));
 }
 
 useRefreshOnActivate(reloadTrends);

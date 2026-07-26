@@ -70,6 +70,7 @@ async function load(memberId: string, silent = false) {
     await app.refreshReminderCount(memberId);
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "概览加载失败";
+    throw cause;
   } finally {
     if (!silent) loading.value = false;
   }
@@ -77,7 +78,13 @@ async function load(memberId: string, silent = false) {
 
 function reloadOverview() {
   const memberId = app.selectedMemberId.value;
-  if (memberId) void load(memberId, true);
+  if (!memberId) return;
+  load(memberId, true).catch((cause) => console.warn("[health-records] 概览后台刷新失败", cause));
+}
+
+function retryLoad() {
+  const memberId = app.selectedMemberId.value;
+  if (memberId) load(memberId).catch(() => {});
 }
 
 useRefreshOnActivate(reloadOverview);
@@ -85,8 +92,12 @@ useRefreshOnActivate(reloadOverview);
 const { pullDistance, refreshing } = usePullRefresh(root, async () => {
   const memberId = app.selectedMemberId.value;
   if (!memberId) return;
-  await load(memberId, true);
-  toast.show("概览已刷新");
+  try {
+    await load(memberId, true);
+    toast.show("概览已刷新");
+  } catch {
+    toast.show("刷新失败，请稍后重试");
+  }
 });
 
 watch(() => app.selectedMemberId.value, (memberId) => {
@@ -98,7 +109,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
     reminders.value = [];
     return;
   }
-  void load(memberId);
+  load(memberId).catch(() => {});
 }, { immediate: true });
 </script>
 
@@ -106,7 +117,9 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   <section ref="root" class="plain-page overview-page">
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
 
-    <p v-if="error" class="inline-panel-error">{{ error }}</p>
+    <p v-if="error" class="inline-panel-error">
+      {{ error }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
+    </p>
     <div v-if="loading" class="loading-list"><span v-for="index in 4" :key="index"></span></div>
     <EmptyState v-else-if="!stats || stats.totalReports === 0" title="还没有健康档案" description="从拍照或上传 PDF 开始，识别完成后这里会汇总档案数量和提醒。">
       <RouterLink class="primary-button" to="/upload">上传第一份报告</RouterLink>

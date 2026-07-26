@@ -14,7 +14,8 @@ useScrollLock(computed(() => props.open));
 
 function onOpenCandidate(candidate: DuplicateCandidate) {
   emit("close");
-  void router.push({ path: "/records", query: { reportId: candidate.id } });
+  router.push({ path: "/records", query: { reportId: candidate.id } })
+    .catch((cause) => console.warn("[health-records] 打开已有报告跳转失败", cause));
 }
 </script>
 

@@ -1,12 +1,13 @@
 import { computed, readonly, ref, watch } from "vue";
 import { request } from "../utils/api";
+import { readStorage, removeStorage, writeStorage } from "../utils/storage";
 import type { AppNotification, HealthMember, Reminder, Session } from "../types/api";
 
 const loading = ref(true);
 const error = ref("");
 const session = ref<Session | null>(null);
 const members = ref<HealthMember[]>([]);
-const selectedMemberId = ref(localStorage.getItem("health-records:selected-member") || "");
+const selectedMemberId = ref(readStorage("health-records:selected-member") || "");
 const selectedMember = computed(() => members.value.find((member) => member.id === selectedMemberId.value) || null);
 const topbarSubtitle = ref("");
 const pendingReminderCount = ref(0);
@@ -17,8 +18,8 @@ function notifyDataChanged() {
 }
 
 watch(selectedMemberId, (value) => {
-  if (value) localStorage.setItem("health-records:selected-member", value);
-  else localStorage.removeItem("health-records:selected-member");
+  if (value) writeStorage("health-records:selected-member", value);
+  else removeStorage("health-records:selected-member");
   void refreshReminderCount(value);
 });
 
@@ -34,8 +35,9 @@ async function refreshReminderCount(memberId = selectedMemberId.value) {
     ]);
     pendingReminderCount.value = reminders.filter((item) => item.status === "pending").length
       + notifications.filter((item) => item.status === "unread").length;
-  } catch {
+  } catch (cause) {
     pendingReminderCount.value = 0;
+    console.warn("[health-records] 提醒计数刷新失败", cause);
   }
 }
 

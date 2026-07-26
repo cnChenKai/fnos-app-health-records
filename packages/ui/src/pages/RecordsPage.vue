@@ -189,7 +189,12 @@ async function loadMoreReports() {
 async function reloadList() {
   const memberId = app.selectedMemberId.value;
   /* 静默刷新按已加载条数一次性取回（服务端上限 50），避免列表塌回第一页导致滚动位置跳动 */
-  if (memberId) await load(memberId, true, Math.min(50, Math.max(PAGE_SIZE, reports.value.length)));
+  if (!memberId) return;
+  try {
+    await load(memberId, true, Math.min(50, Math.max(PAGE_SIZE, reports.value.length)));
+  } catch (cause) {
+    console.warn("[health-records] 档案列表后台刷新失败", cause);
+  }
 }
 
 const root = ref<HTMLElement | null>(null);

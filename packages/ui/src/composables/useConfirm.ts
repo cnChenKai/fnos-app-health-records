@@ -1,4 +1,6 @@
 import { readonly, ref } from "vue";
+import { useToast } from "./useToast";
+import { describeTechnical } from "../utils/error";
 
 export type ConfirmOptions = {
   title: string;
@@ -29,6 +31,10 @@ export function useConfirm() {
     try {
       await current.run();
       state.value = null;
+    } catch (cause) {
+      /* run() 正常应自行处理错误；这里兜底漏网异常，避免弹层滞留且用户毫无反馈 */
+      console.error("[health-records] 确认操作执行失败", cause);
+      useToast().show(`操作失败，请重试（${describeTechnical(cause)}）`, 3600);
     } finally {
       if (state.value === current) current.loading = false;
     }

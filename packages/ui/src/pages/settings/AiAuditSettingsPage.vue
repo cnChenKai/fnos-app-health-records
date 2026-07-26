@@ -68,7 +68,7 @@ async function load(reset = true) {
     loading.value = true;
     nextCursor.value = null;
   } else {
-    if (loading.value || loadingMore.value || !hasMore.value || !nextCursor.value) return;
+    if (loading.value || loadingMore.value || !hasMore.value || !nextCursor.value) return true;
     current = seq;
     loadingMore.value = true;
   }
@@ -77,7 +77,7 @@ async function load(reset = true) {
     const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
     if (!reset && nextCursor.value) params.set("cursor", nextCursor.value);
     const page = await request<AiAuditSummary>(`audit/ai?${params.toString()}`);
-    if (current !== seq) return;
+    if (current !== seq) return true;
     if (reset || !data.value) {
       data.value = page;
     } else {
@@ -92,8 +92,10 @@ async function load(reset = true) {
     }
     nextCursor.value = page.nextCursor;
     hasMore.value = page.hasMore;
+    return true;
   } catch (cause) {
     if (current === seq) error.value = cause instanceof Error ? cause.message : "AI 审计加载失败";
+    return false;
   } finally {
     if (current === seq) {
       loading.value = false;
@@ -103,8 +105,8 @@ async function load(reset = true) {
 }
 
 const { pullDistance, refreshing, refresh } = usePullRefresh(root, async () => {
-  await load(true);
-  toast.show("AI 审计已刷新");
+  const succeeded = await load(true);
+  toast.show(succeeded ? "AI 审计已刷新" : "刷新失败，请稍后重试");
 });
 
 function attachObserver(element: HTMLElement | null) {

@@ -1,9 +1,10 @@
 import { computed, readonly, ref, watch } from "vue";
+import { readStorage, writeStorage } from "../utils/storage";
 
 export type ThemeSetting = "system" | "light" | "dark";
 const STORAGE_KEY = "health-records:theme";
 
-const stored = localStorage.getItem(STORAGE_KEY);
+const stored = readStorage(STORAGE_KEY);
 const setting = ref<ThemeSetting>(stored === "light" || stored === "dark" ? stored : "system");
 const systemDark = ref(window.matchMedia("(prefers-color-scheme: dark)").matches);
 
@@ -24,7 +25,7 @@ watch([setting, systemDark], () => {
 }, { immediate: true });
 
 watch(setting, (value) => {
-  localStorage.setItem(STORAGE_KEY, value);
+  writeStorage(STORAGE_KEY, value);
 });
 
 export function useTheme() {

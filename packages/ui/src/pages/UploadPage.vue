@@ -6,6 +6,7 @@ import {
 } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
 import { request } from "../utils/api";
+import { describeTechnical } from "../utils/error";
 
 type QueueItem = {
   id: string;
@@ -28,6 +29,7 @@ type ProcessingJob = {
   status: "queued" | "processing" | "completed" | "failed";
   attempts: number;
   errorMessage: string | null;
+  ocrTextLength?: number | null;
 };
 
 const app = useAppContext();
@@ -46,6 +48,13 @@ const completedJobs = computed(() => jobs.value.filter((job) => job.status === "
 const failedJobs = computed(() => jobs.value.filter((job) => job.status === "failed"));
 const finishedJobs = computed(() => completedJobs.value + failedJobs.value.length);
 const progressPercent = computed(() => jobs.value.length ? Math.round(finishedJobs.value / jobs.value.length * 100) : 0);
+const jobsSettled = computed(() => jobs.value.length > 0 && jobs.value.every((job) => ["completed", "failed"].includes(job.status)));
+/* 全部任务结束且 OCR 全为空：原件大概率不是有效报告，需要明确告知用户而不是只发一条通知 */
+const ocrEmptyWarning = computed(() => {
+  if (!jobsSettled.value || failedJobs.value.length) return false;
+  const ocrJobs = jobs.value.filter((job) => job.jobType === "ocr" && job.status === "completed");
+  return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
+});
 const accept = ".heic,.heif,.jpg,.jpeg,.png,.webp,.pdf,image/heic,image/heif,image/jpeg,image/png,image/webp,application/pdf";
 
 function formatBytes(bytes: number) {
@@ -61,6 +70,15 @@ function supported(file: File) {
 function canPreview(file: File) {
   return ["image/jpeg", "image/png", "image/webp"].includes(file.type)
     || /\.(jpe?g|png|webp)$/i.test(file.name);
+}
+
+/* crypto.randomUUID 仅在安全上下文（HTTPS/localhost）可用，HTTP 内网访问或旧浏览器会抛 TypeError，退回 getRandomValues */
+function createItemId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") crypto.getRandomValues(bytes);
+  else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function addFiles(files: File[]) {
@@ -85,17 +103,22 @@ function addFiles(files: File[]) {
     error.value = "单次上传不能超过 200 MB";
     return;
   }
-  for (const file of files) {
-    const duplicate = items.value.some((item) =>
-      item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified
-    );
-    if (duplicate) continue;
-    items.value.push({
-      id: crypto.randomUUID(),
-      file,
-      previewUrl: canPreview(file) ? URL.createObjectURL(file) : "",
-      rotation: 0
-    });
+  /* 入队过程的同步异常（如旧浏览器缺失 API）必须浮现给用户，避免“选完文件毫无反应” */
+  try {
+    for (const file of files) {
+      const duplicate = items.value.some((item) =>
+        item.file.name === file.name && item.file.size === file.size && item.file.lastModified === file.lastModified
+      );
+      if (duplicate) continue;
+      items.value.push({
+        id: createItemId(),
+        file,
+        previewUrl: canPreview(file) ? URL.createObjectURL(file) : "",
+        rotation: 0
+      });
+    }
+  } catch (cause) {
+    error.value = `添加文件失败，请重试或更换浏览器（${describeTechnical(cause)}）`;
   }
 }
 
@@ -177,7 +200,11 @@ async function retryJob(job: ProcessingJob) {
 }
 
 async function submit() {
-  if (!app.selectedMemberId.value || !items.value.length) return;
+  if (!items.value.length) return;
+  if (!app.selectedMemberId.value) {
+    error.value = "请先选择报告所属成员";
+    return;
+  }
   uploading.value = true;
   error.value = "";
   result.value = null;
@@ -255,6 +282,11 @@ onActivated(() => {
         <CircleAlert :size="18" />
         <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isGatewayAdmin ? "原件已安全保存，安装后任务会自动继续。" : "原件已安全保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
         <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/runtime">前往运行与识别</RouterLink>
+      </div>
+      <div v-if="ocrEmptyWarning" class="runtime-warning">
+        <CircleAlert :size="18" />
+        <div><strong>没有识别到任何文字</strong><span>上传的原件上没有可识别的文字内容，可能不是有效的体检报告。请确认照片清晰、完整包含报告文字后重新上传，或在档案详情中手动录入。</span></div>
+        <RouterLink to="/records">查看档案</RouterLink>
       </div>
       <div v-if="failedJobs.length" class="failed-job-list">
         <article v-for="job in failedJobs" :key="job.id">

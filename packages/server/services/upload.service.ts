@@ -195,6 +195,7 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
       j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
       j.started_at AS startedAt, j.finished_at AS finishedAt,
       o.engine AS ocrEngine, o.model_version AS ocrModelVersion, o.elapsed_ms AS ocrElapsedMs,
+      o.text_length AS ocrTextLength, o.quality_level AS ocrQualityLevel,
       e.provider AS aiProvider, e.model AS aiModel, e.elapsed_ms AS aiElapsedMs,
       e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens
     FROM processing_jobs j

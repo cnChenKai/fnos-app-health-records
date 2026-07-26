@@ -96,6 +96,52 @@ test("completes thumbnail and OCR jobs then marks the report for review", async 
   });
 });
 
+test("skips AI extraction and warns when OCR extracts no text", async () => {
+  await withDatabase(async () => {
+    saveAiSettings({
+      enabled: true,
+      baseUrl: "https://ai.example.test/v1",
+      textModel: "health-structurer",
+      apiKey: "test-secret"
+    });
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "blank.png", data: pngBytes() }
+    ]);
+    const worker: WorkerExecutor = async (request) => request.action === "thumbnail"
+      ? { ok: true, width: 240, height: 320, elapsedMs: 5 }
+      : { ok: true, engine: "test-ocr", modelVersion: "test-v1", lines: [], elapsedMs: 6 };
+    let aiCalls = 0;
+    const ai: AiExecutor = async () => {
+      aiCalls += 1;
+      throw new Error("AI should not be called for empty OCR text");
+    };
+
+    assert.equal(await processNextJob(worker, ai), true);
+    assert.equal(await processNextJob(worker, ai), true);
+    assert.equal(await processNextJob(worker, ai), false);
+    assert.equal(aiCalls, 0);
+
+    const aiJobs = getDatabase().prepare(`
+      SELECT COUNT(*) AS count FROM processing_jobs WHERE report_id = ? AND job_type = 'ai_extract'
+    `).get(upload.reportId) as { count: number };
+    assert.equal(aiJobs.count, 0);
+    const report = getDatabase().prepare("SELECT status FROM reports WHERE id = ?")
+      .get(upload.reportId) as { status: string };
+    assert.equal(report.status, "needs_review");
+    const notice = getDatabase().prepare(`
+      SELECT type, title, severity FROM app_notifications WHERE report_id = ?
+    `).get(upload.reportId) as { type: string; title: string; severity: string };
+    assert.deepEqual(
+      { type: notice.type, title: notice.title, severity: notice.severity },
+      { type: "report_processed", title: "报告未识别到文字", severity: "warning" }
+    );
+    assert.throws(
+      () => queueManualAiExtraction(manager, upload.reportId),
+      /暂无可用于 AI 整理的 OCR 文本/
+    );
+  });
+});
+
 test("expands a multi-page PDF and queues work for every source page", async () => {
   await withDatabase(async () => {
     const upload = createUpload(manager, "runner-member", [

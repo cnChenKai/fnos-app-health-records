@@ -14,6 +14,17 @@ export function hashPassword(password: string, salt = randomBytes(16).toString("
   return { salt, hash: scryptSync(password, salt, 64).toString("hex") };
 }
 
+/* 浏览器会拒收 HTTP 明文连接下发的 Secure cookie，按请求实际协议（含网关上送的 X-Forwarded-Proto）决定 */
+function isHttpsRequest(event: H3Event) {
+  const request = event.node!.req!;
+  const forwarded = request.headers["x-forwarded-proto"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    const proto = forwarded.split(",", 1)[0];
+    return typeof proto === "string" && proto.trim().toLowerCase() === "https";
+  }
+  return Boolean((request.socket as { encrypted?: boolean }).encrypted);
+}
+
 function verifyPassword(password: string, salt: string, expectedHex: string) {
   const expected = Buffer.from(expectedHex, "hex");
   const actual = scryptSync(password, salt, expected.length);
@@ -53,7 +64,7 @@ export function login(event: H3Event, body: Record<string, unknown>) {
   `).run(createId("session"), account.userId, tokenHash);
   setCookie(event, "health_session", token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV !== "development",
+    secure: process.env.NODE_ENV !== "development" && isHttpsRequest(event),
     sameSite: "lax",
     path: "/",
     maxAge: 12 * 60 * 60

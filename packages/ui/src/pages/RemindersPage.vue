@@ -58,7 +58,10 @@ async function load(memberId: string, silent = false) {
     reminders.value = nextReminders;
     notifications.value = nextNotifications;
   }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : "提醒加载失败"; }
+  catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "提醒加载失败";
+    throw cause;
+  }
   finally {
     await app.refreshReminderCount(memberId);
     if (!silent) loading.value = false;
@@ -67,6 +70,7 @@ async function load(memberId: string, silent = false) {
 
 function notificationMeta(item: AppNotification) {
   if (item.type === "report_failed") return { label: "处理失败", chip: "chip--red" };
+  if (item.severity === "warning") return { label: "需要注意", chip: "chip--amber" };
   return { label: "处理完成", chip: "chip--green" };
 }
 
@@ -82,7 +86,7 @@ async function createManualReminder() {
     });
     form.value = { title: "", dueAt: "" };
     formOpen.value = false;
-    await load(memberId, true);
+    await load(memberId, true).catch(() => {});
     toast.show("提醒已创建");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "创建提醒失败";
@@ -102,7 +106,7 @@ async function setStatus(item: Reminder, status: Reminder["status"]) {
       method: "PUT",
       body: JSON.stringify({ status })
     });
-    await load(memberId, true);
+    await load(memberId, true).catch(() => {});
     toast.show(status === "completed" ? "提醒已完成" : status === "dismissed" ? "已忽略该提醒" : "提醒已恢复待处理");
   } catch (cause) {
     toast.show(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
@@ -113,7 +117,8 @@ async function setStatus(item: Reminder, status: Reminder["status"]) {
 
 function reloadReminders() {
   const memberId = app.selectedMemberId.value;
-  if (memberId) void load(memberId, true);
+  if (!memberId) return;
+  load(memberId, true).catch((cause) => console.warn("[health-records] 提醒后台刷新失败", cause));
 }
 
 useRefreshOnActivate(reloadReminders);
@@ -127,7 +132,7 @@ async function setNotificationStatus(item: AppNotification, status: AppNotificat
       method: "PUT",
       body: JSON.stringify({ status })
     });
-    await load(memberId, true);
+    await load(memberId, true).catch(() => {});
     toast.show("通知已归档");
   } catch (cause) {
     toast.show(cause instanceof Error ? cause.message : "操作失败，请稍后重试");
@@ -151,7 +156,7 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 
 watch(() => app.selectedMemberId.value, (memberId) => {
   if (!memberId) return;
-  void load(memberId);
+  load(memberId).catch(() => {});
 }, { immediate: true });
 </script>
 

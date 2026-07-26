@@ -145,13 +145,19 @@ function syncStatusPolling() {
   else stopStatusPolling();
 }
 
+let statusPollFailures = 0;
 async function refreshOcr() {
   try {
     ocr.value = await request<OcrStatus>("ocr/status");
+    statusPollFailures = 0;
     syncStatusPolling();
   } catch (error) {
-    runtimeMessage.value = error instanceof Error ? error.message : "无法获取 OCR 状态";
-    stopStatusPolling();
+    statusPollFailures += 1;
+    /* 安装长达数分钟，允许偶发轮询失败；连续多次失败才停轮询并提示，避免界面卡在“正在安装” */
+    if (statusPollFailures >= 5) {
+      runtimeMessage.value = `OCR 状态刷新中断：${error instanceof Error ? error.message : "无法获取 OCR 状态"}。请刷新页面查看最新状态`;
+      stopStatusPolling();
+    }
   }
 }
 async function installOcr() {
@@ -192,8 +198,13 @@ onMounted(async () => {
   if (systemResult.status === "fulfilled") system.value = systemResult.value;
   if (ocrResult.status === "fulfilled") ocr.value = ocrResult.value;
   if (ocrSettingsResult.status === "fulfilled") ocrSettings.value = ocrSettingsResult.value;
-  if (systemResult.status === "rejected" || ocrResult.status === "rejected" || ocrSettingsResult.status === "rejected") {
-    runtimeMessage.value = "部分运行状态加载失败，请稍后刷新页面重试";
+  const failedParts = [
+    systemResult.status === "rejected" ? "系统信息" : "",
+    ocrResult.status === "rejected" ? "OCR 状态" : "",
+    ocrSettingsResult.status === "rejected" ? "镜像源设置" : ""
+  ].filter(Boolean);
+  if (failedParts.length) {
+    runtimeMessage.value = `${failedParts.join("、")}加载失败，请稍后刷新页面重试`;
   }
   syncStatusPolling();
 });

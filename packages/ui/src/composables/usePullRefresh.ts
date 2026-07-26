@@ -14,6 +14,10 @@ export function usePullRefresh(root: Ref<HTMLElement | null>, onRefresh: () => P
     if (refreshing.value) return;
     refreshing.value = true;
     try { await onRefresh(); }
+    catch (cause) {
+      /* 调用方一般会自行提示；这里兜底，避免漏 catch 时变成未捕获 rejection 且毫无痕迹 */
+      console.warn("[health-records] 下拉刷新执行失败", cause);
+    }
     finally { refreshing.value = false; }
   }
 
