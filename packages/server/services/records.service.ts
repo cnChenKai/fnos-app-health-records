@@ -1357,6 +1357,14 @@ function sourcePagesForTrendPoints(keys: Set<string>) {
 export function listTrendSeries(user: RequestUser, memberId?: string) {
   if (!user.authenticated) return [];
   if (memberId) assertMemberAccess(user, memberId);
+  const pinnedKeys = memberId
+    ? new Set((getDatabase().prepare(`
+        SELECT indicator_key AS indicatorKey, unit_key AS unitKey
+        FROM user_trend_pins
+        WHERE user_id = ? AND member_id = ?
+      `).all(user.id, memberId) as Array<{ indicatorKey: string; unitKey: string }>)
+        .map((row) => `${row.indicatorKey}\u0000${row.unitKey}`))
+    : new Set<string>();
   const rows = getDatabase().prepare(`
     SELECT
       o.id AS observationId,
@@ -1501,6 +1509,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     });
   }
   const groups = new Map<string, {
+    indicatorKey: string;
     name: string;
     unit: string | null;
     sectionName: string | null;
@@ -1561,6 +1570,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const key = `${row.trendKey}\u0000${row.trendUnit || ""}`;
     if (!groups.has(key)) {
       groups.set(key, {
+        indicatorKey: row.trendKey,
         name: row.trendName,
         unit: row.trendUnit,
         sectionName: row.sectionName,
@@ -1659,8 +1669,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const latest = points.at(-1) || null;
     const previous = points.length > 1 ? points.at(-2) || null : null;
     return {
+      indicatorKey: group.indicatorKey,
       name: group.name,
       unit: group.unit,
+      pinned: pinnedKeys.has(`${group.indicatorKey}\u0000${group.unit || ""}`),
       sectionName: group.sectionName,
       quality: group.quality,
       confidence: group.confidence,
@@ -1680,7 +1692,44 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       maxValue: values.length ? Math.max(...values) : null,
       points: points.map(({ sortDate, reportType, ...point }) => point)
     };
-  }).sort((left, right) => String(right.lastDate || "").localeCompare(String(left.lastDate || "")));
+  }).sort((left, right) =>
+    Number(right.pinned) - Number(left.pinned)
+    || String(right.lastDate || "").localeCompare(String(left.lastDate || ""))
+    || left.name.localeCompare(right.name, "zh-CN")
+    || String(left.unit || "").localeCompare(String(right.unit || ""), "zh-CN")
+  );
+}
+
+export function updateTrendPin(
+  user: RequestUser,
+  input: { memberId?: unknown; indicatorKey?: unknown; unit?: unknown },
+  pinned: boolean
+) {
+  const memberId = textInput(input.memberId, 80);
+  const indicatorKey = textInput(input.indicatorKey, 180);
+  const unitKey = textInput(input.unit, 60) || "";
+  if (!memberId || !indicatorKey) {
+    throw createError({ statusCode: 400, statusMessage: "指标置顶参数不完整" });
+  }
+  assertMemberAccess(user, memberId);
+  if (pinned) {
+    const exists = listTrendSeries(user, memberId).some((series) =>
+      series.indicatorKey === indicatorKey && (series.unit || "") === unitKey
+    );
+    if (!exists) throw createError({ statusCode: 404, statusMessage: "指标趋势不存在或已发生变化" });
+    getDatabase().prepare(`
+      INSERT INTO user_trend_pins (user_id, member_id, indicator_key, unit_key)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, member_id, indicator_key, unit_key) DO UPDATE SET
+        updated_at = CURRENT_TIMESTAMP
+    `).run(user.id, memberId, indicatorKey, unitKey);
+  } else {
+    getDatabase().prepare(`
+      DELETE FROM user_trend_pins
+      WHERE user_id = ? AND member_id = ? AND indicator_key = ? AND unit_key = ?
+    `).run(user.id, memberId, indicatorKey, unitKey);
+  }
+  return { memberId, indicatorKey, unit: unitKey || null, pinned };
 }
 
 export function listReminders(user: RequestUser, memberId?: string) {

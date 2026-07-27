@@ -374,6 +374,44 @@ CREATE TABLE IF NOT EXISTS app_settings (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS maintenance_tasks (
+  id TEXT PRIMARY KEY,
+  task_type TEXT NOT NULL CHECK (task_type IN ('indicator_normalization')),
+  mode TEXT NOT NULL CHECK (mode IN ('incremental', 'full')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (
+    status IN ('queued', 'running', 'completed', 'failed')
+  ),
+  requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  total_units INTEGER NOT NULL DEFAULT 0,
+  completed_units INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  result_json TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS maintenance_tasks_recent_idx
+  ON maintenance_tasks(task_type, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS maintenance_tasks_active_idx
+  ON maintenance_tasks(task_type)
+  WHERE status IN ('queued', 'running');
+
+CREATE TABLE IF NOT EXISTS user_trend_pins (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  indicator_key TEXT NOT NULL,
+  unit_key TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, member_id, indicator_key, unit_key)
+);
+
+CREATE INDEX IF NOT EXISTS user_trend_pins_member_idx
+  ON user_trend_pins(user_id, member_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS local_accounts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,

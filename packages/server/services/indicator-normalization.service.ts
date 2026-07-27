@@ -86,6 +86,12 @@ export type IndicatorNormalizationMaintenanceResult = {
   };
 };
 
+export type IndicatorNormalizationMaintenanceProgress = {
+  totalReports: number;
+  processedReports: number;
+  result: IndicatorNormalizationMaintenanceResult;
+};
+
 export type BuiltinIndicatorBackfillResult = {
   scanned: number;
   updated: number;
@@ -1018,7 +1024,11 @@ export function normalizeAllObservations(user: RequestUser): IndicatorNormalizat
 export async function normalizeAllObservationsWithAiFallback(
   user: RequestUser,
   executor: AiIndicatorExecutor = requestAiIndicatorNormalization,
-  options?: { full?: boolean }
+  options?: {
+    full?: boolean;
+    taskId?: string;
+    onProgress?: (progress: IndicatorNormalizationMaintenanceProgress) => void;
+  }
 ): Promise<IndicatorNormalizationMaintenanceResult> {
   if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
@@ -1043,6 +1053,12 @@ export async function normalizeAllObservationsWithAiFallback(
     unknown: 0,
     ai: { reports: 0, suggested: 0, applied: 0, skipped: 0, failed: 0 }
   };
+  options?.onProgress?.({
+    totalReports: reportIds.length,
+    processedReports: 0,
+    result: total
+  });
+  let processedReports = 0;
   for (const row of reportIds) {
     try {
       const partial = await normalizePendingReportObservationsWithAiFallback(row.reportId, user.id, executor);
@@ -1054,11 +1070,21 @@ export async function normalizeAllObservationsWithAiFallback(
     } catch {
       total.ai!.failed += 1;
     }
+    processedReports += 1;
+    options?.onProgress?.({
+      totalReports: reportIds.length,
+      processedReports,
+      result: total
+    });
   }
   getDatabase().prepare(`
     INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
     VALUES (?, ?, 'maintenance.normalize_indicators', 'observation', NULL, ?)
-  `).run(createId("audit"), user.id, JSON.stringify({ ...total, full: options?.full === true }));
+  `).run(createId("audit"), user.id, JSON.stringify({
+    ...total,
+    full: options?.full === true,
+    taskId: options?.taskId || null
+  }));
   return total;
 }
 

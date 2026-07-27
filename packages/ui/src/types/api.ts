@@ -263,8 +263,10 @@ export type TrendPoint = {
 };
 
 export type TrendSeries = {
+  indicatorKey: string;
   name: string;
   unit: string | null;
+  pinned: boolean;
   sectionName: string | null;
   quality: "high" | "medium" | "low" | "excluded" | "raw";
   confidence: number | null;

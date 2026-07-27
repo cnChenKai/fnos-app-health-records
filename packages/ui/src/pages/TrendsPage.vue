@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Activity, ChartNoAxesCombined, ChevronRight, FileText, Search } from "@lucide/vue";
+import { Activity, ChartNoAxesCombined, ChevronRight, FileText, Pin, Search } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
@@ -21,6 +21,7 @@ const query = ref("");
 const groupFilter = ref("all");
 const previewReportId = ref<string | null>(null);
 const activeDetailKey = ref<string | null>(null);
+const pinPendingKeys = ref(new Set<string>());
 const sourcePreview = ref<{
   point: TrendPoint | TrendExcludedPoint;
   seriesName: string;
@@ -85,6 +86,58 @@ async function load(memberId: string, silent = false) {
     throw cause;
   }
   finally { if (!silent) loading.value = false; }
+}
+
+function compareTrendSeries(left: TrendSeries, right: TrendSeries) {
+  return Number(right.pinned) - Number(left.pinned)
+    || String(right.lastDate || "").localeCompare(String(left.lastDate || ""))
+    || left.name.localeCompare(right.name, "zh-CN")
+    || String(left.unit || "").localeCompare(String(right.unit || ""), "zh-CN");
+}
+
+function trendPinRequestKey(memberId: string, item: TrendSeries) {
+  return `${memberId}\u0000${item.indicatorKey}\u0000${item.unit || ""}`;
+}
+
+function pinPending(item: TrendSeries) {
+  const memberId = app.selectedMemberId.value;
+  return Boolean(memberId && pinPendingKeys.value.has(trendPinRequestKey(memberId, item)));
+}
+
+function setPinPending(key: string, pending: boolean) {
+  const next = new Set(pinPendingKeys.value);
+  if (pending) next.add(key);
+  else next.delete(key);
+  pinPendingKeys.value = next;
+}
+
+async function toggleTrendPin(item: TrendSeries) {
+  const memberId = app.selectedMemberId.value;
+  if (!memberId) return;
+  const requestKey = trendPinRequestKey(memberId, item);
+  if (pinPendingKeys.value.has(requestKey)) return;
+  setPinPending(requestKey, true);
+  try {
+    const result = await request<{ pinned: boolean }>("trends/pins", {
+      method: item.pinned ? "DELETE" : "POST",
+      body: JSON.stringify({
+        memberId,
+        indicatorKey: item.indicatorKey,
+        unit: item.unit
+      })
+    });
+    if (app.selectedMemberId.value !== memberId) return;
+    const current = series.value.find((candidate) =>
+      candidate.indicatorKey === item.indicatorKey && (candidate.unit || "") === (item.unit || "")
+    );
+    if (current) current.pinned = result.pinned;
+    series.value = [...series.value].sort(compareTrendSeries);
+    toast.show(result.pinned ? `已置顶“${item.name}”` : `已取消置顶“${item.name}”`);
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "指标置顶操作失败");
+  } finally {
+    setPinPending(requestKey, false);
+  }
 }
 
 function retryLoad() {
@@ -205,7 +258,7 @@ function recentPoints(item: TrendSeries) {
 }
 
 function seriesKey(item: TrendSeries) {
-  return `${item.name}\u0000${item.unit || ""}`;
+  return `${item.indicatorKey}\u0000${item.unit || ""}`;
 }
 
 function detailsOpen(item: TrendSeries) {
@@ -289,7 +342,7 @@ watch([query, groupFilter], () => {
         description="换个指标名或类型分组试试，也可以等待更多报告完成整理。"
       />
       <div v-else class="trend-list">
-        <article v-for="item in filteredSeries" :key="`${item.name}-${item.unit}`" class="trend-card">
+        <article v-for="item in filteredSeries" :key="`${item.indicatorKey}-${item.unit}`" class="trend-card">
           <header class="trend-card-header">
             <span class="item-icon"><Activity :size="19" /></span>
             <div>
@@ -299,6 +352,18 @@ watch([query, groupFilter], () => {
               </div>
               <span>{{ item.sectionName || "未分组" }} · {{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
             </div>
+            <button
+              class="trend-pin-button"
+              :class="{ active: item.pinned }"
+              type="button"
+              :disabled="pinPending(item)"
+              :title="item.pinned ? '取消置顶' : '置顶指标'"
+              :aria-label="`${item.pinned ? '取消置顶' : '置顶'}${item.name}`"
+              :aria-pressed="item.pinned"
+              @click="toggleTrendPin(item)"
+            >
+              <Pin :size="17" :fill="item.pinned ? 'currentColor' : 'none'" />
+            </button>
           </header>
           <div class="trend-main">
             <div class="trend-latest">

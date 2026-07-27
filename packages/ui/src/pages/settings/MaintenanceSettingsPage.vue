@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ChevronRight, FileText, RefreshCw, Sparkles } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
@@ -33,14 +33,110 @@ type IndicatorNormalizationResult = {
   };
 };
 
+type IndicatorNormalizationTask = {
+  id: string;
+  mode: "incremental" | "full";
+  status: "queued" | "running" | "completed" | "failed";
+  totalReports: number;
+  processedReports: number;
+  progressPercent: number;
+  attempts: number;
+  result: IndicatorNormalizationResult | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  updatedAt: string;
+  finishedAt: string | null;
+  reused?: boolean;
+};
+
 const toast = useToast();
 const previewRunning = ref(false);
 const previewResult = ref<PdfPreviewMaintenanceResult | null>(null);
 const previewError = ref("");
-const normalizationRunning = ref(false);
-const fullNormalizationRunning = ref(false);
+const normalizationTask = ref<IndicatorNormalizationTask | null>(null);
+const normalizationTaskActive = computed(() =>
+  normalizationTask.value?.status === "queued" || normalizationTask.value?.status === "running"
+);
+const normalizationRunning = computed(() =>
+  normalizationTaskActive.value && normalizationTask.value?.mode === "incremental"
+);
+const fullNormalizationRunning = computed(() =>
+  normalizationTaskActive.value && normalizationTask.value?.mode === "full"
+);
 const normalizationResult = ref<IndicatorNormalizationResult | null>(null);
 const normalizationError = ref("");
+let normalizationPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearNormalizationPoll() {
+  if (normalizationPollTimer) clearTimeout(normalizationPollTimer);
+  normalizationPollTimer = null;
+}
+
+function normalizationStatusLabel(task: IndicatorNormalizationTask) {
+  if (task.status === "queued") return "等待执行";
+  if (task.status === "running") return "后台处理中";
+  if (task.status === "completed") return "已完成";
+  return "执行失败";
+}
+
+function applyNormalizationTask(task: IndicatorNormalizationTask | null, notify = false) {
+  const previous = normalizationTask.value;
+  normalizationTask.value = task;
+  if (task?.result) normalizationResult.value = task.result;
+  else if (previous?.id !== task?.id) normalizationResult.value = null;
+  if (task?.status === "failed") {
+    normalizationError.value = task.errorMessage || "指标归一化任务执行失败";
+  } else if (previous?.id !== task?.id) {
+    normalizationError.value = "";
+  }
+  if (
+    notify
+    && previous
+    && task
+    && previous.id === task.id
+    && (previous.status === "queued" || previous.status === "running")
+    && task.status === "completed"
+  ) {
+    toast.show(task.result?.ai?.applied
+      ? `已归一化 ${task.result.normalized} 项，AI 兜底 ${task.result.ai.applied} 项`
+      : `已归一化 ${task.result?.normalized || 0} 项指标`);
+  } else if (
+    notify
+    && previous
+    && task
+    && previous.id === task.id
+    && (previous.status === "queued" || previous.status === "running")
+    && task.status === "failed"
+  ) {
+    toast.show("指标归一化任务执行失败");
+  }
+}
+
+function scheduleNormalizationPoll() {
+  clearNormalizationPoll();
+  if (!normalizationTaskActive.value) return;
+  normalizationPollTimer = setTimeout(() => {
+    void refreshNormalizationTask(true);
+  }, 2_000);
+}
+
+async function refreshNormalizationTask(notify = false) {
+  try {
+    const task = await request<IndicatorNormalizationTask | null>("maintenance/indicator-normalization");
+    applyNormalizationTask(task, notify);
+  } catch (cause) {
+    normalizationError.value = cause instanceof Error ? cause.message : "无法获取指标归一化任务状态";
+  } finally {
+    scheduleNormalizationPoll();
+  }
+}
+
+onMounted(() => {
+  void refreshNormalizationTask();
+});
+
+onBeforeUnmount(clearNormalizationPoll);
 
 async function regeneratePdfPreviews() {
   confirmDialog.ask({
@@ -70,17 +166,16 @@ async function normalizeIndicators() {
     message: "确认整理历史未归类指标？不会重新 OCR，也不会覆盖已经归一化完成的指标；会先用内置字典补齐，若 AI 已启用，会对仍未命中的非预设指标调用文本模型兜底，可能产生模型调用费用。",
     confirmText: "开始整理",
     run: async () => {
-      normalizationRunning.value = true;
       normalizationError.value = "";
       try {
-        normalizationResult.value = await request<IndicatorNormalizationResult>("maintenance/indicator-normalization", { method: "POST" });
-        toast.show(normalizationResult.value.ai?.applied
-          ? `已归一化 ${normalizationResult.value.normalized} 项，AI 兜底 ${normalizationResult.value.ai.applied} 项`
-          : `已归一化 ${normalizationResult.value.normalized} 项指标`);
+        const task = await request<IndicatorNormalizationTask>("maintenance/indicator-normalization", { method: "POST" });
+        applyNormalizationTask(task);
+        toast.show(task.reused
+          ? `已有${task.mode === "full" ? "全量" : "增量"}任务正在执行`
+          : "已提交后台整理任务，可离开当前页面");
+        scheduleNormalizationPoll();
       } catch (cause) {
         normalizationError.value = cause instanceof Error ? cause.message : "指标归一化失败";
-      } finally {
-        normalizationRunning.value = false;
       }
     }
   });
@@ -93,20 +188,19 @@ async function normalizeAllIndicators() {
     confirmText: "清空并重跑",
     danger: true,
     run: async () => {
-      fullNormalizationRunning.value = true;
       normalizationError.value = "";
       try {
-        normalizationResult.value = await request<IndicatorNormalizationResult>("maintenance/indicator-normalization", {
+        const task = await request<IndicatorNormalizationTask>("maintenance/indicator-normalization", {
           method: "POST",
           body: JSON.stringify({ full: true })
         });
-        toast.show(normalizationResult.value.ai?.applied
-          ? `已全量归一化 ${normalizationResult.value.normalized} 项，AI 兜底 ${normalizationResult.value.ai.applied} 项`
-          : `已全量归一化 ${normalizationResult.value.normalized} 项指标`);
+        applyNormalizationTask(task);
+        toast.show(task.reused
+          ? `已有${task.mode === "full" ? "全量" : "增量"}任务正在执行`
+          : "已提交全量后台任务，可离开当前页面");
+        scheduleNormalizationPoll();
       } catch (cause) {
         normalizationError.value = cause instanceof Error ? cause.message : "全量归一化失败";
-      } finally {
-        fullNormalizationRunning.value = false;
       }
     }
   });
@@ -127,15 +221,28 @@ async function normalizeAllIndicators() {
           </div>
         </div>
         <div class="maintenance-actions">
-          <button class="soft-action-button danger-action-button" type="button" :disabled="normalizationRunning || fullNormalizationRunning" @click="normalizeAllIndicators">
+          <button class="soft-action-button danger-action-button" type="button" :disabled="normalizationTaskActive" @click="normalizeAllIndicators">
             <RefreshCw :size="15" :class="{ 'spin-icon': fullNormalizationRunning }" />{{ fullNormalizationRunning ? "重跑中" : "全量重跑" }}
           </button>
-          <button class="primary-button" type="button" :disabled="normalizationRunning || fullNormalizationRunning" @click="normalizeIndicators">
+          <button class="primary-button" type="button" :disabled="normalizationTaskActive" @click="normalizeIndicators">
             <RefreshCw :size="15" :class="{ 'spin-icon': normalizationRunning }" />{{ normalizationRunning ? "整理中" : "增量整理" }}
           </button>
         </div>
       </header>
       <p class="preview-hint">“增量整理”只处理未归类指标；“全量重跑”会清空已有归一化结果全部重建，用于修复误并的指标系列。</p>
+      <div v-if="normalizationTaskActive && normalizationTask" class="maintenance-task-progress">
+        <div class="maintenance-task-progress-head">
+          <span>{{ normalizationTask.mode === "full" ? "全量重跑" : "增量整理" }}</span>
+          <strong>{{ normalizationStatusLabel(normalizationTask) }}</strong>
+        </div>
+        <div class="maintenance-task-progress-track" aria-hidden="true">
+          <i :style="{ width: `${normalizationTask.progressPercent}%` }"></i>
+        </div>
+        <p v-if="normalizationTask.totalReports">
+          已处理 {{ normalizationTask.processedReports }} / {{ normalizationTask.totalReports }} 份报告（{{ normalizationTask.progressPercent }}%）
+        </p>
+        <p v-else>正在扫描需要整理的报告，可离开当前页面继续执行。</p>
+      </div>
       <p v-if="normalizationError" class="inline-panel-error">{{ normalizationError }}</p>
       <div v-if="normalizationResult" class="maintenance-result">
         <div>

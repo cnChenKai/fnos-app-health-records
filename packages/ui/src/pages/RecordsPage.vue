@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { CalendarDays, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Search } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
@@ -18,6 +18,7 @@ type DuplicateCandidate = ReportDetailType["duplicateCandidates"][number];
 
 const app = useAppContext();
 const route = useRoute();
+const router = useRouter();
 const PAGE_SIZE = 20;
 const loading = ref(true);
 const loadingMore = ref(false);
@@ -38,6 +39,7 @@ const mobileDetailOpen = ref(false);
 useScrollLock(computed(() => mobileDetailOpen.value));
 let listSeq = 0;
 let loadMoreObserver: IntersectionObserver | null = null;
+let pendingRouteReportId = "";
 
 const filtered = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase();
@@ -109,8 +111,23 @@ function syncFiltersFromRoute() {
   statusFilter.value = allowedStatusFilters.has(routeStatus) ? routeStatus : "all";
 }
 
+function applyPendingRouteSelection() {
+  if (!pendingRouteReportId || !reports.value.some((report) => report.id === pendingRouteReportId)) return false;
+  selectedId.value = pendingRouteReportId;
+  pendingRouteReportId = "";
+  return true;
+}
+
+function syncSelectedReportInRoute(reportId: string) {
+  if (route.query.reportId === reportId) return;
+  void router.replace({ query: { ...route.query, reportId } })
+    .catch((cause) => console.warn("[health-records] 同步当前报告地址失败", cause));
+}
+
 function selectReport(report: ReportSummary) {
+  pendingRouteReportId = "";
   selectedId.value = report.id;
+  syncSelectedReportInRoute(report.id);
   if (window.matchMedia("(max-width: 760px)").matches) mobileDetailOpen.value = true;
 }
 
@@ -118,7 +135,9 @@ function openDuplicateCandidate(candidate: DuplicateCandidate) {
   if (!reports.value.some((report) => report.id === candidate.id)) {
     reports.value = [candidate, ...reports.value];
   }
+  pendingRouteReportId = "";
   selectedId.value = candidate.id;
+  syncSelectedReportInRoute(candidate.id);
 }
 
 function closeMobileDetail() {
@@ -141,11 +160,8 @@ async function load(memberId: string, silent = false, limit = PAGE_SIZE) {
     nextCursor.value = page.nextCursor;
     hasMore.value = page.hasMore;
     summaryStats.value = stats;
-    const queryReportId = typeof route.query.reportId === "string" ? route.query.reportId : "";
-    if (queryReportId && reports.value.some((report) => report.id === queryReportId)) {
-      selectedId.value = queryReportId;
-      return;
-    }
+    /* URL 中的 reportId 只在路由进入/变化时消费一次，后台刷新不能把用户刚切换的报告改回旧值 */
+    if (applyPendingRouteSelection()) return;
     if (!reports.value.some((report) => report.id === selectedId.value)) {
       selectedId.value = reports.value[0]?.id || "";
     }
@@ -226,10 +242,9 @@ function applyFilters() {
 watch(recordCountSubtitle, (subtitle) => app.setTopbarSubtitle(subtitle), { immediate: true });
 
 watch(() => route.query.reportId, (reportId) => {
-  if (typeof reportId === "string" && reports.value.some((report) => report.id === reportId)) {
-    selectedId.value = reportId;
-  }
-});
+  pendingRouteReportId = typeof reportId === "string" ? reportId : "";
+  applyPendingRouteSelection();
+}, { immediate: true });
 
 watch(() => route.query.status, () => {
   const previous = statusFilter.value;

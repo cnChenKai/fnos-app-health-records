@@ -4,6 +4,7 @@ import { purgeExpiredReports } from "./records.service";
 import { runFileGarbageCollection, scanOrphanStorageFiles } from "./file-gc.service";
 import { builtinIndicatorVersion } from "../domain/indicator-dictionary/builtin-indicators";
 import { backfillBuiltinIndicatorNormalizations } from "./indicator-normalization.service";
+import { startIndicatorNormalizationTaskRunner } from "./indicator-normalization-task.service";
 
 const maintenanceIntervalMs = 6 * 60 * 60_000;
 const orphanScanIntervalMs = 7 * 24 * 60 * 60_000;
@@ -93,6 +94,7 @@ export async function runMaintenanceCycle() {
 }
 
 export function startMaintenanceRunner() {
+  startIndicatorNormalizationTaskRunner();
   if (startTimer || intervalTimer) return;
   startTimer = setTimeout(() => {
     startTimer = null;

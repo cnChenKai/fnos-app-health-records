@@ -450,7 +450,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   padding: 16px; border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s);
   position: relative; display: grid; gap: 14px;
 }
-.trend-card-header { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 12px; }
+.trend-card-header { display: grid; grid-template-columns: 40px minmax(0, 1fr) 34px; align-items: center; gap: 12px; }
 .trend-card-header > div { min-width: 0; display: grid; gap: 3px; }
 .trend-title-row { min-width: 0; display: flex; align-items: center; gap: 8px; }
 .trend-card-header strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
@@ -461,6 +461,15 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 }
 .trend-delta.up { background: var(--amber-soft); color: var(--amber); }
 .trend-delta.down { background: var(--info-soft); color: var(--info); }
+.trend-pin-button {
+  width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
+  align-self: start; display: inline-grid; place-items: center;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.trend-pin-button:hover { background: var(--fill-1); color: var(--ink); }
+.trend-pin-button.active { background: var(--brand-softer); color: var(--brand-strong); }
+.trend-pin-button:disabled { cursor: wait; opacity: .55; }
+.trend-pin-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .trend-main { display: grid; grid-template-columns: minmax(110px, 160px) minmax(0, 1fr); gap: 14px; align-items: end; }
 .trend-latest { display: grid; gap: 4px; }
 .trend-latest > span { color: var(--muted); font-size: 12px; font-weight: 700; }
@@ -1211,6 +1220,19 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 }
 .maintenance-result span { color: var(--muted); font-size: 12px; }
 .maintenance-result strong { font-size: 18px; color: var(--ink); }
+.maintenance-task-progress {
+  margin-top: 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-m);
+  display: grid; gap: 7px; background: var(--surface-soft);
+}
+.maintenance-task-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.maintenance-task-progress-head span { color: var(--muted); font-size: 12px; }
+.maintenance-task-progress-head strong { color: var(--brand); font-size: 12px; }
+.maintenance-task-progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: var(--line); }
+.maintenance-task-progress-track i {
+  display: block; width: 0; height: 100%; border-radius: inherit; background: var(--brand);
+  transition: width .25s ease;
+}
+.maintenance-task-progress p { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .maintenance-change-list { overflow: hidden; }
 .maintenance-change-list article {
   padding: 12px 16px; border-top: 1px solid var(--line); display: grid; gap: 5px;
@@ -1689,7 +1711,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .trend-search-field { min-width: 0; padding-inline: 14px; }
   .trend-group-select { width: 118px; flex-basis: 118px; min-width: 118px; }
   .trend-card { padding: 14px; }
-  .trend-card-header { grid-template-columns: 38px minmax(0, 1fr); }
+  .trend-card-header { grid-template-columns: 38px minmax(0, 1fr) 34px; gap: 10px; }
   .trend-title-row { gap: 7px; }
   .trend-main { grid-template-columns: 1fr; gap: 8px; }
   .trend-latest strong { font-size: 26px; }
