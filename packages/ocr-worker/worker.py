@@ -508,11 +508,14 @@ def run_daemon() -> int:
             continue
 
         request_id = None
+        action = None
+        recycle_after_response = False
         try:
             request = json.loads(raw_line)
             request_id = request.get("id")
             image_path = Path(request["imagePath"])
             action = str(request.get("action") or "ocr")
+            recycle_after_response = bool(request.get("recycleAfterResponse"))
             page_number = request.get("pageNumber")
             if not image_path.is_file():
                 raise FileNotFoundError(f"Image does not exist: {image_path}")
@@ -567,6 +570,11 @@ def run_daemon() -> int:
                     "errorMessage": str(error),
                 }
             )
+
+        # The final OCR page of a report asks the worker to exit after responding,
+        # allowing the OS to reclaim native OCR allocation high-water marks.
+        if action == "ocr" and recycle_after_response:
+            return 0
 
     return 0
 

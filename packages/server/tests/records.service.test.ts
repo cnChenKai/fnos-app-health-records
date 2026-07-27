@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
+import { schemaVersion } from "../database/schema.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
   createBackup,
@@ -61,6 +64,10 @@ function pngBytes() {
 
 function anotherPngBytes() {
   return Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x02, 0x03]);
+}
+
+function thirdPngBytes() {
+  return Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x04, 0x05, 0x06]);
 }
 
 test("lists reports with cursors and returns detail pages with original files", () => {
@@ -227,6 +234,65 @@ test("detects duplicate report candidates from extracted content instead of file
   }
 });
 
+test("detects an identical uploaded original despite divergent AI titles and body parts", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-file-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const existing = createUpload(manager, "records-member", [{ originalName: "first.png", data: pngBytes() }]);
+    const incoming = createUpload(manager, "records-member", [{ originalName: "second.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '血脂生化检查', report_type = 'laboratory', status = 'ready',
+        hospital_name_raw = '示例健康体检中心', report_issued_at = '2026-07-21',
+        body_parts_json = '[{"raw":"血脂","name":"血脂","parent":null,"laterality":"unspecified"}]'
+      WHERE id = ?
+    `).run(existing.reportId);
+    db.prepare(`
+      UPDATE reports SET title = '综合体检报告', report_type = 'checkup', status = 'needs_review',
+        hospital_name_raw = '示例健康体检中心', report_issued_at = '2026-07-21',
+        body_parts_json = '[{"raw":"综合体检","name":"综合体检","parent":null,"laterality":"unspecified"}]'
+      WHERE id = ?
+    `).run(incoming.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES ('same-file-existing-tc', ?, '生化检验', '总胆固醇', '总胆固醇', '4.26 mmol/L', 4.26, 'mmol/L')
+    `).run(existing.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES ('same-file-incoming-tc', ?, '血脂检查', '血清胆固醇', '总胆固醇', '4.26', 4.26, 'mmol/L')
+    `).run(incoming.reportId);
+
+    const detail = getReportDetail(manager, incoming.reportId);
+    assert.equal(detail.duplicateCandidates.length, 1);
+    assert.equal(detail.duplicateCandidates[0].id, existing.reportId);
+    assert.equal(detail.duplicateCandidates[0].confidence, "high");
+    assert.match(detail.duplicateCandidates[0].reason, /原件内容完全一致/);
+    assert.equal(detail.duplicateCandidates[0].matchedFields.includes("标题"), false);
+    assert.equal(detail.duplicateCandidates[0].matchedFields.includes("检查部位"), false);
+    const cholesterol = listTrendSeries(manager, "records-member")
+      .find((series) => series.name === "总胆固醇");
+    assert.ok(cholesterol);
+    assert.equal(cholesterol.pointCount, 1);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("detects duplicate candidates without report numbers when core extracted content matches", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-core-"));
   process.env.STORAGE_DIR = storageDir;
@@ -266,6 +332,101 @@ test("detects duplicate candidates without report numbers when core extracted co
     assert.equal(detail.duplicateCandidates[0].id, existing.reportId);
     assert.equal(detail.duplicateCandidates[0].confidence, "medium");
     assert.match(detail.duplicateCandidates[0].reason, /核心报告内容一致/);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("detects duplicate checkups across equivalent institution names without merging different panels", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-hospital-alias-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const original = createUpload(manager, "records-member", [{ originalName: "full-name.png", data: pngBytes() }]);
+    const duplicate = createUpload(manager, "records-member", [{ originalName: "short-name.png", data: anotherPngBytes() }]);
+    const different = createUpload(manager, "records-member", [{ originalName: "different-panel.png", data: thirdPngBytes() }]);
+    const updateReport = db.prepare(`
+      UPDATE reports SET title = ?, report_type = 'checkup', status = ?,
+        hospital_name_raw = ?, report_issued_at = '2025-01-04'
+      WHERE id = ?
+    `);
+    updateReport.run("年度健康体检报告", "ready", "安徽滨湖国宾健康体检中心", original.reportId);
+    updateReport.run("健康检查结果汇总", "needs_review", "国宾健康体检中心", duplicate.reportId);
+    updateReport.run("专项检查报告", "ready", "国宾健康体检中心", different.reportId);
+
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, abnormal_flag
+      ) VALUES (?, ?, '生化检验', ?, ?, ?, ?, ?, 'normal')
+    `);
+    const sharedItems: Array<[string, string, number, string]> = [
+      ["甘油三酯", "0.87", 0.87, "mmol/L"],
+      ["总胆固醇", "4.26", 4.26, "mmol/L"],
+      ["高密度脂蛋白胆固醇", "1.42", 1.42, "mmol/L"],
+      ["低密度脂蛋白胆固醇", "2.31", 2.31, "mmol/L"],
+      ["空腹血糖", "5.18", 5.18, "mmol/L"],
+      ["尿酸", "326", 326, "umol/L"]
+    ];
+    sharedItems.forEach(([name, resultText, numericValue, unit], index) => {
+      insertObservation.run(`alias-original-${index}`, original.reportId, name, name, resultText, numericValue, unit);
+      insertObservation.run(
+        `alias-duplicate-${index}`,
+        duplicate.reportId,
+        name,
+        name,
+        `${resultText} ${unit}`,
+        numericValue,
+        null
+      );
+    });
+    insertObservation.run("alias-different-triglyceride", different.reportId, "甘油三酯", "甘油三酯", "0.87", 0.87, "mmol/L");
+    [
+      ["促甲状腺激素", "2.16", 2.16, "mIU/L"],
+      ["游离甲状腺素", "16.4", 16.4, "pmol/L"],
+      ["甲胎蛋白", "2.8", 2.8, "ng/mL"],
+      ["癌胚抗原", "1.9", 1.9, "ng/mL"],
+      ["糖类抗原125", "8.6", 8.6, "U/mL"]
+    ].forEach(([name, resultText, numericValue, unit], index) => {
+      insertObservation.run(`alias-different-${index}`, different.reportId, name, name, resultText, numericValue, unit);
+    });
+
+    const duplicateDetail = getReportDetail(manager, duplicate.reportId);
+    assert.equal(duplicateDetail.duplicateCandidates.some((candidate) => candidate.id === original.reportId), true);
+    assert.match(
+      duplicateDetail.duplicateCandidates.find((candidate) => candidate.id === original.reportId)?.reason || "",
+      /机构名称近似/
+    );
+
+    const differentDetail = getReportDetail(manager, different.reportId);
+    assert.equal(differentDetail.duplicateCandidates.length, 0);
+
+    const trends = listTrendSeries(manager, "records-member");
+    const triglycerideSeries = trends.filter((series) => series.name === "甘油三酯");
+    assert.equal(
+      triglycerideSeries.length,
+      1,
+      JSON.stringify(triglycerideSeries.map((series) => ({ unit: series.unit, pointCount: series.pointCount })))
+    );
+    const triglyceride = triglycerideSeries[0];
+    assert.ok(triglyceride);
+    assert.equal(triglyceride.pointCount, 2);
+    assert.deepEqual(
+      new Set(triglyceride.points.map((point: { reportId: string }) => point.reportId)),
+      new Set([original.reportId, different.reportId])
+    );
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -427,6 +588,11 @@ test("scans duplicate groups and merges source pages into the target report", ()
         impression = '甲状腺右叶结节，边界清，建议随访复查。'
       WHERE id = ?
     `).run("重复甲状腺超声报告", "needs_review", bodyParts, source.reportId);
+    assert.throws(() => mergeDuplicateReport(manager, source.reportId, target.reportId), /仍有识别任务/);
+    db.prepare(`
+      UPDATE processing_jobs SET status = 'completed', finished_at = CURRENT_TIMESTAMP
+      WHERE report_id IN (?, ?)
+    `).run(source.reportId, target.reportId);
 
     const groups = listDuplicateReportGroups(manager, "records-member");
     assert.equal(groups.length, 1);
@@ -668,9 +834,34 @@ test("creates, lists, downloads and restores a full app backup", () => {
     const extractRoot = mkdtempSync(join(tmpdir(), "health-records-backup-manifest-"));
     try {
       execFileSync("tar", ["-xzf", backup.path, "-C", extractRoot], { stdio: "pipe" });
-      const manifest = JSON.parse(readFileSync(join(extractRoot, "manifest.json"), "utf8")) as { files: Array<{ path: string; sha256: string }> };
+      const manifestPath = join(extractRoot, "manifest.json");
+      const databasePath = join(extractRoot, "db", "health-records.sqlite");
+      const originalManifest = readFileSync(manifestPath, "utf8");
+      const originalDatabase = readFileSync(databasePath);
+      const manifest = JSON.parse(originalManifest) as {
+        schemaVersion: number;
+        appliedSchemaVersion: number;
+        files: Array<{ path: string; sha256: string; sizeBytes: number }>;
+      };
       assert.ok(manifest.files.some((item) => item.path === "db/health-records.sqlite" && /^[a-f0-9]{64}$/.test(item.sha256)));
-      writeFileSync(join(extractRoot, "db", "health-records.sqlite"), "tampered backup");
+
+      const forwardDatabase = new DatabaseSync(databasePath);
+      forwardDatabase.prepare("INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)")
+        .run(schemaVersion + 1, "future_schema", "test:future-schema");
+      forwardDatabase.close();
+      manifest.schemaVersion = schemaVersion + 1;
+      manifest.appliedSchemaVersion = schemaVersion + 1;
+      const databaseFile = manifest.files.find((item) => item.path === "db/health-records.sqlite")!;
+      databaseFile.sizeBytes = statSync(databasePath).size;
+      databaseFile.sha256 = createHash("sha256").update(readFileSync(databasePath)).digest("hex");
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      const forwardArchive = join(storageDir, "future-backup.tar.gz");
+      execFileSync("tar", ["-czf", forwardArchive, "-C", extractRoot, "."], { stdio: "pipe" });
+      assert.throws(() => restoreUploadedBackup(manager, forwardArchive), /高于当前应用支持/);
+
+      writeFileSync(databasePath, originalDatabase);
+      writeFileSync(manifestPath, originalManifest);
+      writeFileSync(databasePath, "tampered backup");
       const tamperedArchive = join(storageDir, "tampered-backup.tar.gz");
       execFileSync("tar", ["-czf", tamperedArchive, "-C", extractRoot, "."], { stdio: "pipe" });
       assert.throws(() => restoreUploadedBackup(manager, tamperedArchive), /备份校验失败/);
@@ -682,24 +873,44 @@ test("creates, lists, downloads and restores a full app backup", () => {
     assert.equal(existsSync(download.path), true);
 
     db.prepare("UPDATE reports SET title = '被误改的报告' WHERE id = ?").run(upload.reportId);
+    const restoredAdmin: RequestUser = {
+      id: "new-device-admin",
+      displayName: "新设备管理员",
+      provider: "fnos_gateway",
+      authenticated: true,
+      isGatewayAdmin: true
+    };
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(restoredAdmin.id, restoredAdmin.displayName);
     rmSync(join(storageDir, "reports"), { recursive: true, force: true });
     assert.equal(existsSync(originalBefore.path), false);
 
-    const restored = restoreFullBackup(manager, backup.id);
+    const restored = restoreFullBackup(restoredAdmin, backup.id);
     assert.equal(restored.restored, true);
     assert.ok(restored.safetyBackupId);
-    const detailAfter = getReportDetail(manager, upload.reportId);
+    assert.equal(restored.identityRebind.userId, restoredAdmin.id);
+    const restoredDb = getDatabase();
+    const adminRows = restoredDb.prepare("SELECT id, is_gateway_admin AS isAdmin FROM users ORDER BY id")
+      .all() as Array<{ id: string; isAdmin: number }>;
+    assert.equal(adminRows.find((row) => row.id === restoredAdmin.id)?.isAdmin, 1);
+    assert.equal(adminRows.find((row) => row.id === manager.id)?.isAdmin, 0);
+    const restoredPermission = restoredDb.prepare(`
+      SELECT permission FROM member_permissions WHERE member_id = 'records-member' AND user_id = ?
+    `).get(restoredAdmin.id) as { permission: string } | undefined;
+    assert.equal(restoredPermission?.permission, "manager");
+    const detailAfter = getReportDetail(restoredAdmin, upload.reportId);
     assert.equal(detailAfter.title, "备份前报告");
-    const originalAfter = getReportPageFile(manager, upload.reportId, detailAfter.pages[0].id, "original");
+    const originalAfter = getReportPageFile(restoredAdmin, upload.reportId, detailAfter.pages[0].id, "original");
     assert.equal(existsSync(originalAfter.path), true);
-    assert.equal(listBackups(manager).some((item) => item.id === restored.safetyBackupId && item.reason === "pre_restore"), true);
-    assert.equal((listAuditLogs(manager, 20) as Array<{ action: string }>).some((item) => item.action === "backup.restore"), true);
-    const safetyBackup = getBackupDownload(manager, restored.safetyBackupId);
+    assert.equal(listBackups(restoredAdmin).some((item) => item.id === restored.safetyBackupId && item.reason === "pre_restore"), true);
+    assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.restore"), true);
+    assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.identity_rebind"), true);
+    const safetyBackup = getBackupDownload(restoredAdmin, restored.safetyBackupId);
     assert.equal(existsSync(safetyBackup.path), true);
-    assert.deepEqual(deleteBackup(manager, restored.safetyBackupId), { id: restored.safetyBackupId, deleted: true });
+    assert.deepEqual(deleteBackup(restoredAdmin, restored.safetyBackupId), { id: restored.safetyBackupId, deleted: true });
     assert.equal(existsSync(safetyBackup.path), false);
-    assert.equal(listBackups(manager).some((item) => item.id === restored.safetyBackupId), false);
-    assert.equal((listAuditLogs(manager, 20) as Array<{ action: string }>).some((item) => item.action === "backup.delete"), true);
+    assert.equal(listBackups(restoredAdmin).some((item) => item.id === restored.safetyBackupId), false);
+    assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.delete"), true);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -879,6 +1090,9 @@ test("normalizes common health checkup issue-pool indicators", () => {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     insertObservation.run("issue-bmi", report.reportId, "一般检查", "体重指数BMI", "体重指数", "23.4", 23.4, null, "normal");
+    insertObservation.run("issue-weight", report.reportId, "一般检查", "身体重量", "体重", "72 公斤", 72, "公斤", "normal");
+    insertObservation.run("issue-height", report.reportId, "基础测量", "Height", "身高", "1.75 m", 1.75, "m", "normal");
+    insertObservation.run("issue-waist", report.reportId, "体格检查", "腰部周径", "腰围", "860 mm", 860, "mm", "normal");
     insertObservation.run("issue-uric", report.reportId, "肾脏功能", "血清尿酸", "血清尿酸", "450", 450, "μmol/L", "high");
     insertObservation.run("issue-endo", report.reportId, "检查所见", "内膜厚度", "子宫内膜厚度", "0.8", 0.8, "cm", "normal");
     insertObservation.run("issue-thyroid", report.reportId, "超声成像检查", "左叶甲状腺结节，C-TIRADS 3类", "甲状腺结节", "左叶甲状腺结节，C-TIRADS 3类", null, null, "abnormal");
@@ -904,6 +1118,16 @@ test("normalizes common health checkup issue-pool indicators", () => {
 
     assert.equal(byId.get("issue-bmi")?.canonicalKey, "body_bmi");
     assert.equal(byId.get("issue-bmi")?.quality, "medium");
+    assert.equal(byId.get("issue-weight")?.canonicalKey, "body_weight");
+    assert.equal(byId.get("issue-weight")?.canonicalValue, 72);
+    assert.equal(byId.get("issue-weight")?.canonicalUnit, "kg");
+    assert.equal(byId.get("issue-weight")?.quality, "high");
+    assert.equal(byId.get("issue-height")?.canonicalKey, "body_height");
+    assert.equal(byId.get("issue-height")?.canonicalValue, 175);
+    assert.equal(byId.get("issue-height")?.canonicalUnit, "cm");
+    assert.equal(byId.get("issue-waist")?.canonicalKey, "body_waist_circumference");
+    assert.equal(byId.get("issue-waist")?.canonicalValue, 86);
+    assert.equal(byId.get("issue-waist")?.canonicalUnit, "cm");
     assert.equal(byId.get("issue-uric")?.canonicalKey, "renal_uric_acid");
     assert.equal(byId.get("issue-uric")?.quality, "high");
     assert.equal(byId.get("issue-endo")?.canonicalKey, "gyn_endometrium_thickness");
@@ -916,6 +1140,14 @@ test("normalizes common health checkup issue-pool indicators", () => {
     assert.equal(byId.get("issue-hbv-dna")?.canonicalUnit, "IU/mL");
     assert.equal(byId.get("issue-hbsag")?.canonicalKey, "infectious_hbsag");
     assert.equal(byId.get("issue-hbsag")?.quality, "excluded");
+    const trends = listTrendSeries(manager, "records-member") as Array<{
+      name: string;
+      unit: string | null;
+      latestValue: number | null;
+    }>;
+    assert.equal(trends.some((item) => item.name === "体重" && item.unit === "kg" && item.latestValue === 72), true);
+    assert.equal(trends.some((item) => item.name === "身高" && item.unit === "cm" && item.latestValue === 175), true);
+    assert.equal(trends.some((item) => item.name === "腰围" && item.unit === "cm" && item.latestValue === 86), true);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

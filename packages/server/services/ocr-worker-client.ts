@@ -14,6 +14,7 @@ export type WorkerRequest = {
   maxSize?: number;
   quality?: number;
   renderScale?: number;
+  recycleAfterResponse?: boolean;
 };
 
 export type WorkerResponse = {
@@ -35,6 +36,7 @@ type PendingRequest = {
   resolve: (response: WorkerResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  process: ChildProcessWithoutNullStreams;
 };
 
 let child: ChildProcessWithoutNullStreams | null = null;
@@ -45,12 +47,31 @@ function workerError(message: string, code = "OCR_WORKER_UNAVAILABLE") {
   return Object.assign(new Error(message), { code });
 }
 
-function rejectPending(error: Error) {
-  for (const request of pending.values()) {
+function rejectPending(error: Error, targetProcess?: ChildProcessWithoutNullStreams) {
+  for (const [id, request] of pending.entries()) {
+    if (targetProcess && request.process !== targetProcess) continue;
     clearTimeout(request.timer);
     request.reject(error);
+    pending.delete(id);
   }
-  pending.clear();
+}
+
+function terminateWorkerProcess(process: ChildProcessWithoutNullStreams, error: Error) {
+  if (child === process) child = null;
+  rejectPending(error, process);
+  if (process.exitCode !== null || process.signalCode !== null) return;
+  process.kill("SIGTERM");
+  const forceKillTimer = setTimeout(() => {
+    if (process.exitCode === null && process.signalCode === null) process.kill("SIGKILL");
+  }, 5_000);
+  forceKillTimer.unref();
+  process.once("exit", () => clearTimeout(forceKillTimer));
+}
+
+function workerRequestTimeoutMs() {
+  const value = Number(process.env.OCR_WORKER_TIMEOUT_MS);
+  if (!Number.isFinite(value)) return 10 * 60_000;
+  return Math.min(30 * 60_000, Math.max(1_000, Math.round(value)));
 }
 
 async function startWorker() {
@@ -65,8 +86,9 @@ async function startWorker() {
     const process = spawn(config.ocrPythonBin, [config.ocrWorkerScript], { stdio: ["pipe", "pipe", "pipe"] });
     child = process;
     const startupTimer = setTimeout(() => {
-      process.kill("SIGTERM");
-      reject(workerError("OCR Worker 启动超时"));
+      const error = workerError("OCR Worker 启动超时", "OCR_WORKER_STARTUP_TIMEOUT");
+      terminateWorkerProcess(process, error);
+      reject(error);
     }, 20_000);
     const output = createInterface({ input: process.stdout });
     output.on("line", (line) => {
@@ -80,7 +102,11 @@ async function startWorker() {
       if (response.type === "ready") {
         clearTimeout(startupTimer);
         if (response.ok) resolve();
-        else reject(workerError(response.errorMessage || "OCR Worker 启动失败", response.errorCode));
+        else {
+          const error = workerError(response.errorMessage || "OCR Worker 启动失败", response.errorCode);
+          terminateWorkerProcess(process, error);
+          reject(error);
+        }
         return;
       }
       if (!response.id) return;
@@ -96,14 +122,14 @@ async function startWorker() {
     });
     process.once("error", (error) => {
       clearTimeout(startupTimer);
-      child = null;
-      rejectPending(error);
+      if (child === process) child = null;
+      rejectPending(error, process);
       reject(error);
     });
     process.once("exit", (code) => {
       clearTimeout(startupTimer);
-      child = null;
-      rejectPending(workerError(`OCR Worker 已退出（${code ?? "unknown"}）`));
+      if (child === process) child = null;
+      rejectPending(workerError(`OCR Worker 已退出（${code ?? "unknown"}）`), process);
     });
   }).finally(() => { starting = null; });
   return starting;
@@ -112,25 +138,36 @@ async function startWorker() {
 export async function requestWorker(payload: WorkerRequest) {
   await startWorker();
   if (!child) throw workerError("OCR Worker 不可用");
+  const process = child;
   const id = createId("worker");
-  return new Promise<WorkerResponse>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(workerError("Worker 任务执行超时", "WORKER_TIMEOUT"));
-    }, 10 * 60_000);
-    pending.set(id, { resolve, reject, timer });
-    child!.stdin.write(`${JSON.stringify({ id, ...payload })}\n`, (error) => {
-      if (!error) return;
-      clearTimeout(timer);
-      pending.delete(id);
-      reject(error);
+  try {
+    return await new Promise<WorkerResponse>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        const error = workerError("Worker 任务执行超时，OCR 进程已重新启动", "WORKER_TIMEOUT");
+        reject(error);
+        terminateWorkerProcess(process, error);
+      }, workerRequestTimeoutMs());
+      pending.set(id, { resolve, reject, timer, process });
+      process.stdin.write(`${JSON.stringify({ id, ...payload })}\n`, (error) => {
+        if (!error) return;
+        clearTimeout(timer);
+        pending.delete(id);
+        reject(error);
+      });
     });
-  });
+  } finally {
+    if (payload.recycleAfterResponse && child === process) {
+      child = null;
+      process.stdin.end();
+    }
+  }
 }
 
 export function stopWorker() {
-  child?.kill("SIGTERM");
-  child = null;
+  if (!child) return;
+  const process = child;
+  terminateWorkerProcess(process, workerError("OCR Worker 已停止", "OCR_WORKER_STOPPED"));
 }
 
 process.once("exit", stopWorker);

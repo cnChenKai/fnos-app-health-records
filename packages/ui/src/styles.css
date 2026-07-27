@@ -467,9 +467,42 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-latest strong { color: var(--ink); font-size: 28px; letter-spacing: -.02em; line-height: 1; }
 .trend-latest small { margin-left: 4px; color: var(--muted); font-size: 13px; letter-spacing: 0; }
 .trend-latest p, .trend-range { color: var(--muted); font-size: 12px; }
-.trend-sparkline { width: 100%; height: 64px; overflow: visible; }
+.trend-chart-scroll {
+  min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0 3px;
+  scrollbar-width: thin; overscroll-behavior-inline: contain;
+}
+.trend-chart-canvas { position: relative; width: 100%; height: 96px; }
+.trend-sparkline { position: absolute; inset: 0; width: 100%; height: 96px; overflow: visible; pointer-events: none; }
 .trend-sparkline line { stroke: var(--line); stroke-width: 1; }
-.trend-sparkline polyline { fill: none; stroke: var(--brand); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.trend-sparkline polyline { fill: none; stroke: var(--brand); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.trend-chart-node {
+  --point-y: 46%; position: absolute; top: 0; bottom: 0; width: 80px; padding: 0;
+  border: 0; border-radius: 0; background: transparent; color: var(--ink);
+  transform: translateX(-50%); cursor: pointer;
+}
+.trend-chart-node i {
+  position: absolute; left: 50%; top: var(--point-y); width: 10px; height: 10px;
+  border: 2px solid var(--surface); border-radius: 50%; background: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 24%, transparent);
+  transform: translate(-50%, -50%);
+}
+.trend-chart-node i.up { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-soft); }
+.trend-chart-node i.warn { background: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); }
+.trend-chart-node i.down { background: var(--info); box-shadow: 0 0 0 2px var(--info-soft); }
+.trend-chart-node i.ok { background: var(--green-ok); box-shadow: 0 0 0 2px var(--green-ok-soft); }
+.trend-chart-node.latest i { width: 12px; height: 12px; }
+.trend-chart-value {
+  position: absolute; left: 50%; top: calc(var(--point-y) - 23px); max-width: 76px;
+  color: var(--ink); font-size: 11px; font-weight: 800; line-height: 16px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transform: translateX(-50%);
+}
+.trend-chart-node time {
+  position: absolute; left: 50%; bottom: 1px; color: var(--muted);
+  font-size: 10px; line-height: 14px; white-space: nowrap; transform: translateX(-50%);
+}
+.trend-chart-node:hover .trend-chart-value,
+.trend-chart-node:focus-visible .trend-chart-value { color: var(--brand); }
+.trend-chart-node:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 .trend-range { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 2px; }
 .trend-range-copy { min-width: 0; display: flex; align-items: center; gap: 12px; overflow: hidden; }
 .trend-range-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1347,6 +1380,14 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .backup-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px 0; }
 .settings-band > header .backup-header-actions .header-action { margin-left: 0; }
 .backup-header-actions .muted-action { background: var(--fill-1); color: var(--ink); }
+.native-file-action { position: relative; overflow: hidden; cursor: pointer; }
+.native-file-action input[type="file"] {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+  opacity: 0; cursor: pointer;
+}
+.native-file-action:focus-within { outline: 3px solid var(--brand-soft); outline-offset: 2px; }
+.native-file-action.is-disabled { opacity: .58; cursor: not-allowed; }
+.native-file-action.is-disabled input[type="file"] { cursor: not-allowed; }
 .backup-empty {
   min-height: 58px; padding: 16px 20px; display: flex; align-items: center; gap: 8px;
   color: var(--muted); font-size: 13px;

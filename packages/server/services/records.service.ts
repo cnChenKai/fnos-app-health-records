@@ -17,16 +17,20 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { RequestUser } from "../domain/request-user";
 import type { CursorPage, DuplicateReportCandidate, DuplicateReportGroup, Observation, ReportDetail, ReportPage, ReportSummary } from "../domain/health-record";
 import { getAppConfig } from "../utils/runtime-config";
 import { createId } from "../utils/identifier";
+import { schemaVersion } from "../database/schema";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import { requestWorker } from "./ocr-worker-client";
 import { isGenericReportTitle } from "./ai-extraction.service";
-import { getJobRunnerStatus, startJobRunner, stopJobRunner } from "./job-runner.service";
+import { getJobRunnerStatus, isReportJobActive, startJobRunner, stopJobRunner } from "./job-runner.service";
+import { enqueueFileGarbage } from "./file-gc.service";
+import { rebindRestoredGatewayAdministrator } from "./restore-identity.service";
 import {
   listManualReportFieldKeys,
   reportFieldDefinitions,
@@ -90,6 +94,21 @@ function normalizeContentKey(value: string | null | undefined) {
     .trim();
 }
 
+function hospitalNamesEquivalent(current: string | null | undefined, candidate: string | null | undefined) {
+  const left = normalizeContentKey(current);
+  const right = normalizeContentKey(candidate);
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const shorter = left.length < right.length ? left : right;
+  const longer = left.length < right.length ? right : left;
+  /* 仅识别“地区/院区前缀 + 完整机构名”这类保守包含关系。
+     短品牌名或“人民医院”等泛称不能单独作为同一机构依据。 */
+  return shorter.length >= 6
+    && shorter.length / longer.length >= 0.55
+    && longer.includes(shorter);
+}
+
 function datePart(value: string | null | undefined) {
   return (value || "").slice(0, 10);
 }
@@ -137,26 +156,56 @@ function titleSimilarityMatched(current: string | null | undefined, candidate: s
   return shorter.length >= 8 && longer.includes(shorter);
 }
 
+function reportFileSignature(reportId: string) {
+  const pages = getDatabase().prepare(`
+    SELECT sha256, source_page_number AS sourcePageNumber, source_page_count AS sourcePageCount
+    FROM report_pages
+    WHERE report_id = ?
+    ORDER BY page_number, id
+  `).all(reportId) as Array<{
+    sha256: string;
+    sourcePageNumber: number | null;
+    sourcePageCount: number | null;
+  }>;
+  if (!pages.length || pages.some((page) => !page.sha256)) return null;
+  return pages
+    .map((page) => `${page.sha256}:${page.sourcePageNumber || 0}:${page.sourcePageCount || 0}`)
+    .sort()
+    .join("|");
+}
+
 function observationSignature(reportId: string) {
   return new Set(getDatabase().prepare(`
-    SELECT COALESCE(NULLIF(TRIM(normalized_name), ''), item_name) AS name, result_text AS resultText,
-      COALESCE(unit, '') AS unit
-    FROM observations
-    WHERE report_id = ?
-    ORDER BY section_name, item_name, id
-    LIMIT 30
+    SELECT
+      CASE
+        WHEN n.quality IN ('high', 'medium') AND n.canonical_key IS NOT NULL THEN n.canonical_key
+        ELSE COALESCE(NULLIF(TRIM(o.normalized_name), ''), o.item_name)
+      END AS name,
+      o.result_text AS resultText,
+      CASE
+        WHEN n.quality IN ('high', 'medium') THEN COALESCE(n.canonical_value, o.numeric_value)
+        ELSE o.numeric_value
+      END AS numericValue
+    FROM observations o
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    WHERE o.report_id = ?
+    ORDER BY o.section_name, o.item_name, o.id
+    LIMIT 200
   `).all(reportId).flatMap((row) => {
-    const item = row as { name: string; resultText: string; unit: string };
+    const item = row as { name: string; resultText: string; numericValue: number | null };
     const name = normalizeContentKey(item.name);
-    const result = normalizeContentKey(item.resultText);
+    const parsedNumber = item.numericValue ?? parseNumericResultText(item.resultText);
+    const result = parsedNumber === null ? normalizeContentKey(item.resultText) : String(parsedNumber);
     if (!name || !result) return [];
-    return [`${name}:${result}:${normalizeContentKey(item.unit)}`];
+    return [`${name}:${result}`];
   }));
 }
 
 function sharedObservationStats(currentReportId: string, candidateReportId: string) {
   const current = observationSignature(currentReportId);
-  if (!current.size) return { shared: 0, currentSize: 0, candidateSize: 0, overlapRatio: 0 };
+  if (!current.size) {
+    return { shared: 0, currentSize: 0, candidateSize: 0, overlapRatio: 0, largerOverlapRatio: 0 };
+  }
   const candidate = observationSignature(candidateReportId);
   let count = 0;
   for (const item of candidate) {
@@ -166,14 +215,15 @@ function sharedObservationStats(currentReportId: string, candidateReportId: stri
     shared: count,
     currentSize: current.size,
     candidateSize: candidate.size,
-    overlapRatio: Math.min(count / current.size, count / Math.max(1, candidate.size))
+    overlapRatio: count / Math.max(1, Math.min(current.size, candidate.size)),
+    largerOverlapRatio: count / Math.max(1, Math.max(current.size, candidate.size))
   };
 }
 
 function hasStrongObservationOverlap(stats: ReturnType<typeof sharedObservationStats>) {
   if (stats.shared >= 10) return true;
-  if (stats.shared >= 6 && stats.overlapRatio >= 0.55) return true;
-  return stats.shared >= 3 && stats.overlapRatio >= 0.75;
+  if (stats.shared >= 6 && stats.overlapRatio >= 0.75 && stats.largerOverlapRatio >= 0.3) return true;
+  return stats.shared >= 3 && stats.overlapRatio >= 0.9 && stats.largerOverlapRatio >= 0.5;
 }
 
 type DuplicateSourceRow = ReportSummary & {
@@ -202,8 +252,9 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
     current.performingDepartment || current.departmentName || current.reportingDepartment || current.orderingDepartment
   );
   const currentBodyPart = normalizeContentKey(current.bodyPart || firstBodyPart(current.bodyPartsJson));
+  const currentFileSignature = reportFileSignature(current.id);
 
-  if (!currentHospital && !currentDate && !Object.keys(currentIdentifiers).length) return [];
+  if (!currentFileSignature && !currentHospital && !currentDate && !Object.keys(currentIdentifiers).length) return [];
 
   const rows = getDatabase().prepare(`
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
@@ -238,9 +289,15 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
     const candidateBodyPart = normalizeContentKey(candidate.bodyPart || firstBodyPart(candidate.bodyPartsJson));
     const matchedFields: string[] = [];
 
+    const hasSameOriginal = Boolean(
+      currentFileSignature && currentFileSignature === reportFileSignature(candidate.id)
+    );
+    if (hasSameOriginal) matchedFields.push("原始文件");
     if (titleSimilarityMatched(current.title, candidate.title)) matchedFields.push("标题");
     if (current.reportType === candidate.reportType) matchedFields.push("报告类型");
+    const hasEquivalentHospital = hospitalNamesEquivalent(current.hospitalName, candidate.hospitalName);
     if (currentHospital && candidateHospital && currentHospital === candidateHospital) matchedFields.push("医院");
+    else if (hasEquivalentHospital) matchedFields.push("医院名称近似");
     if (currentBranch && candidateBranch && currentBranch === candidateBranch) matchedFields.push("院区");
     if (currentDate && candidateDate && currentDate === candidateDate) matchedFields.push("报告/检查日期");
     if (currentDepartment && candidateDepartment && currentDepartment === candidateDepartment) matchedFields.push("科室");
@@ -252,7 +309,16 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
     const observationMatches = observationStats.shared;
     if (observationMatches > 0) matchedFields.push(`指标${observationMatches}项`);
 
-    const hasSameHospitalAndDate = matchedFields.includes("医院") && matchedFields.includes("报告/检查日期");
+    if (hasSameOriginal) {
+      candidates.push({
+        ...candidate,
+        confidence: "high" as const,
+        matchedFields,
+        reason: "上传原件内容完全一致"
+      });
+      continue;
+    }
+    const hasSameHospitalAndDate = hasEquivalentHospital && matchedFields.includes("报告/检查日期");
     const hasSameCore = matchedFields.includes("报告类型") && hasSameHospitalAndDate;
     if (identifierMatches.length && (hasSameHospitalAndDate || matchedFields.includes("报告类型"))) {
       candidates.push({
@@ -274,8 +340,8 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
         confidence: "medium" as const,
         matchedFields,
         reason: hasStrongTextAnchor || hasStrongObservationAnchor
-          ? "医院、日期、类型及核心报告内容一致"
-          : "医院、日期、类型、标题及临床字段一致"
+          ? `${matchedFields.includes("医院名称近似") ? "机构名称近似，" : ""}医院、日期、类型及核心报告内容一致`
+          : `${matchedFields.includes("医院名称近似") ? "机构名称近似，" : ""}医院、日期、类型、标题及临床字段一致`
       });
     }
   }
@@ -839,6 +905,18 @@ export function permanentlyDeleteReport(user: RequestUser, reportId: string) {
   if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
   if (report.status !== "trashed") throw createError({ statusCode: 409, statusMessage: "只有回收站报告可以永久删除" });
+  return purgeTrashedReport(reportId, user.id, false);
+}
+
+function purgeTrashedReport(reportId: string, actorUserId: string | null, automatic: boolean) {
+  const report = getDatabase().prepare("SELECT member_id AS memberId, title, status FROM reports WHERE id = ?")
+    .get(reportId) as { memberId: string; title: string; status: string } | undefined;
+  if (!report || report.status !== "trashed") {
+    throw createError({ statusCode: 409, statusMessage: "只有回收站报告可以永久删除" });
+  }
+  if (isReportJobActive(reportId)) {
+    throw createError({ statusCode: 409, statusMessage: "报告任务仍在结束处理中，请稍后再永久删除" });
+  }
   const pages = reportPageRows(reportId);
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
@@ -846,23 +924,46 @@ export function permanentlyDeleteReport(user: RequestUser, reportId: string) {
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
       VALUES (?, ?, 'report.purge', 'report', ?, ?)
-    `).run(createId("audit"), user.id, reportId, JSON.stringify({
+    `).run(createId("audit"), actorUserId, reportId, JSON.stringify({
       memberId: report.memberId,
       reportTitle: report.title,
-      pageCount: pages.length
+      pageCount: pages.length,
+      automatic
     }));
     db.prepare("DELETE FROM reports WHERE id = ?").run(reportId);
+    enqueueFileGarbage(pages.flatMap((page) => [
+      { storagePath: page.storagePath, fileKind: "original" as const },
+      { storagePath: page.thumbnailPath, fileKind: "thumbnail" as const }
+    ]), automatic ? "recycle_bin_expired" : "report_purge", db);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  for (const page of pages) {
-    for (const relativePath of [page.storagePath, page.thumbnailPath].filter(Boolean) as string[]) {
-      try { rmSync(storagePath(relativePath), { force: true }); } catch { /* best effort cleanup */ }
+  return { id: reportId, deleted: true };
+}
+
+export function purgeExpiredReports(limit = 50) {
+  const rows = getDatabase().prepare(`
+    SELECT id FROM reports
+    WHERE status = 'trashed' AND purge_after IS NOT NULL AND purge_after <= CURRENT_TIMESTAMP
+    ORDER BY purge_after, id
+    LIMIT ?
+  `).all(Math.min(200, Math.max(1, Math.round(limit)))) as Array<{ id: string }>;
+  let deleted = 0;
+  const errors: Array<{ reportId: string; message: string }> = [];
+  for (const row of rows) {
+    try {
+      purgeTrashedReport(row.id, null, true);
+      deleted += 1;
+    } catch (error) {
+      errors.push({
+        reportId: row.id,
+        message: error instanceof Error ? error.message : "自动清理失败"
+      });
     }
   }
-  return { id: reportId, deleted: true };
+  return { checked: rows.length, deleted, failed: errors.length, errors };
 }
 
 export function listDuplicateReportGroups(user: RequestUser, memberId: string): DuplicateReportGroup[] {
@@ -893,6 +994,14 @@ export function mergeDuplicateReport(user: RequestUser, sourceReportId: string, 
   if (!source || !target) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   if (source.memberId !== target.memberId) throw createError({ statusCode: 409, statusMessage: "只能合并同一成员的报告" });
   assertMemberManage(user, source.memberId);
+  const active = getDatabase().prepare(`
+    SELECT report_id AS reportId FROM processing_jobs
+    WHERE report_id IN (?, ?) AND status IN ('queued', 'processing')
+    LIMIT 1
+  `).get(sourceReportId, targetReportId) as { reportId: string } | undefined;
+  if (active || isReportJobActive(sourceReportId) || isReportJobActive(targetReportId)) {
+    throw createError({ statusCode: 409, statusMessage: "报告仍有识别任务在处理，请完成或取消后再合并" });
+  }
 
   const sourcePages = reportPageRows(sourceReportId);
   if (!sourcePages.length) throw createError({ statusCode: 409, statusMessage: "源报告没有可合并的原件页" });
@@ -1066,6 +1175,10 @@ export function deleteReportPage(user: RequestUser, reportId: string, pageId: st
     db.prepare("DELETE FROM report_pages WHERE id = ? AND report_id = ?").run(pageId, reportId);
     const remaining = pages.filter((item) => item.id !== pageId);
     remaining.forEach((item, index) => db.prepare("UPDATE report_pages SET page_number = ? WHERE id = ?").run(index + 1, item.id));
+    enqueueFileGarbage([
+      { storagePath: page.storagePath, fileKind: "original" },
+      { storagePath: page.thumbnailPath, fileKind: "thumbnail" }
+    ], "report_page_delete", db);
     db.prepare("UPDATE reports SET source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
@@ -1183,6 +1296,15 @@ function normalizeTrendUnit(value: string | null) {
   return aliases[lower] || unit || null;
 }
 
+function inferTrendUnitFromResultText(value: string | null | undefined) {
+  const normalized = (value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/(?:\s+[HL]|[↑↓]|偏高|偏低)\s*$/i, "");
+  const match = normalized.match(/[-+]?\d+(?:\.\d+)?\s*([a-zA-Zμµ%][a-zA-Z0-9μµ%/^.×*·-]{0,23})$/);
+  return match ? normalizeTrendUnit(match[1]) : null;
+}
+
 function firstObservationEvidence(value: string) {
   const entries = parseJson<Array<{ pageNumber?: unknown; quote?: unknown }>>(value, []);
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -1258,6 +1380,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       c.explanation AS canonicalExplanation,
       r.id AS reportId,
       r.title AS reportTitle,
+      r.report_type AS reportType,
       r.status AS reportStatus,
       r.report_issued_at AS reportIssuedAt,
       COALESCE(r.report_issued_at, r.created_at) AS sortDate,
@@ -1293,6 +1416,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     canonicalExplanation: string | null;
     reportId: string;
     reportTitle: string;
+    reportType: string;
     reportStatus: string;
     reportIssuedAt: string | null;
     sortDate: string | null;
@@ -1303,13 +1427,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const numericValue = row.numericValue ?? parseNumericResultText(row.resultText);
     const usesCanonical = Boolean(row.canonicalKey && row.normalizationQuality && ["high", "medium"].includes(row.normalizationQuality));
     const evidence = firstObservationEvidence(row.evidenceJson);
+    const rawTrendUnit = normalizeTrendUnit(row.unit) || inferTrendUnitFromResultText(row.resultText);
     return {
       ...row,
       abnormalFlag: displayAbnormalFlag(row.abnormalFlag, row.resultText, evidence?.quote || null),
       parsedNumericValue: numericValue,
       trendNumericValue: numericValue === null ? null : usesCanonical ? (row.canonicalValue ?? numericValue) : numericValue,
       trendName: usesCanonical ? row.canonicalName! : normalizeTrendName(row.name),
-      trendUnit: usesCanonical ? row.canonicalUnit : normalizeTrendUnit(row.unit),
+      trendUnit: usesCanonical ? row.canonicalUnit : rawTrendUnit,
       trendKey: usesCanonical ? row.canonicalKey! : normalizeTrendName(row.name),
       trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
       trendConfidence: usesCanonical ? row.normalizationConfidence : null,
@@ -1409,6 +1534,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       observationId: string;
       reportId: string;
       reportTitle: string;
+      reportType: string;
       reportStatus: string;
       reportIssuedAt: string | null;
       sortDate: string | null;
@@ -1457,6 +1583,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       observationId: row.observationId,
       reportId: row.reportId,
       reportTitle: row.reportTitle,
+      reportType: row.reportType,
       reportStatus: row.reportStatus,
       reportIssuedAt: row.reportIssuedAt,
       sortDate: row.sortDate,
@@ -1474,6 +1601,27 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     });
   }
 
+  const reportOverlapCache = new Map<string, boolean>();
+  const reportFileSignatureCache = new Map<string, string | null>();
+  const cachedReportFileSignature = (reportId: string) => {
+    if (reportFileSignatureCache.has(reportId)) return reportFileSignatureCache.get(reportId) || null;
+    const signature = reportFileSignature(reportId);
+    reportFileSignatureCache.set(reportId, signature);
+    return signature;
+  };
+  const hasSameUploadedOriginal = (leftReportId: string, rightReportId: string) => {
+    const left = cachedReportFileSignature(leftReportId);
+    return Boolean(left && left === cachedReportFileSignature(rightReportId));
+  };
+  const hasStrongReportOverlap = (leftReportId: string, rightReportId: string) => {
+    const key = [leftReportId, rightReportId].sort().join("\u0000");
+    const cached = reportOverlapCache.get(key);
+    if (cached !== undefined) return cached;
+    const matched = hasStrongObservationOverlap(sharedObservationStats(leftReportId, rightReportId));
+    reportOverlapCache.set(key, matched);
+    return matched;
+  };
+
   return Array.from(groups.values()).map((group) => {
     /* 去重保留优先级：已归档 > 归一化质量高 > 报告 ID 字典序 */
     const qualityRank = (quality: string | null) => ({ high: 0, medium: 1, low: 2 }[quality || ""] ?? 3);
@@ -1484,16 +1632,28 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       || left.reportId.localeCompare(right.reportId)
       || left.observationId.localeCompare(right.observationId)
     );
-    /* 同一报告重复上传（归档/待确认多份并存）时，完全相同的点只保留一份，避免重复计入趋势。
-       参考范围不参与比较：重复报告 OCR 可能产出细微差异（如 “0~40” 与 “0--40”），
-       同日期、同医院、同指标、同数值已足以判定为重复。 */
+    /* 同一报告重复上传（归档/待确认多份并存）时只保留一份。
+       医院原文相同沿用原有精确规则；名称仅近似时，必须再有同类型和报告级强指标重合，
+       避免把同日、同机构、数值偶然相同的不同检查误删。 */
     const points = sortedPoints.filter((point, index) => !sortedPoints.some((other, otherIndex) =>
       otherIndex < index
       && other.reportId !== point.reportId
-      && other.itemName === point.itemName
       && other.numericValue === point.numericValue
-      && String(other.reportIssuedAt || "") === String(point.reportIssuedAt || "")
-      && String(other.hospitalName || "") === String(point.hospitalName || "")
+      && Boolean(datePart(point.reportIssuedAt))
+      && datePart(other.reportIssuedAt) === datePart(point.reportIssuedAt)
+      && (
+        hasSameUploadedOriginal(other.reportId, point.reportId)
+        ||
+        (
+          normalizeContentKey(other.hospitalName) === normalizeContentKey(point.hospitalName)
+          && other.itemName === point.itemName
+        )
+        || (
+          hospitalNamesEquivalent(other.hospitalName, point.hospitalName)
+          && other.reportType === point.reportType
+          && hasStrongReportOverlap(other.reportId, point.reportId)
+        )
+      )
     ));
     const values = points.map((point) => point.numericValue);
     const latest = points.at(-1) || null;
@@ -1518,7 +1678,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       delta: latest && previous ? latest.numericValue - previous.numericValue : null,
       minValue: values.length ? Math.min(...values) : null,
       maxValue: values.length ? Math.max(...values) : null,
-      points: points.map(({ sortDate, ...point }) => point)
+      points: points.map(({ sortDate, reportType, ...point }) => point)
     };
   }).sort((left, right) => String(right.lastDate || "").localeCompare(String(left.lastDate || "")));
 }
@@ -1698,6 +1858,7 @@ const auditActionTitles: Record<string, string> = {
   "member.permission.remove": "移除成员授权",
   "backup.create": "创建完整备份",
   "backup.restore": "恢复完整备份",
+  "backup.identity_rebind": "接管恢复数据权限",
   "backup.delete": "删除完整备份",
   "maintenance.regenerate_report_titles": "批量清理报告标题",
   "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图",
@@ -2524,6 +2685,57 @@ function readExtractedBackupManifest(extractRoot: string): { manifest?: BackupMa
   }
 }
 
+function validateBackupDatabase(databasePath: string, manifest: BackupManifest, result: BackupValidationResult) {
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    const quickCheck = database.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+    if (quickCheck?.quick_check !== "ok") result.errors.push("备份数据库完整性检查未通过");
+
+    const foreignKeyErrors = database.prepare("PRAGMA foreign_key_check").all();
+    if (foreignKeyErrors.length) {
+      result.errors.push(`备份数据库存在 ${foreignKeyErrors.length} 条外键不一致`);
+    }
+
+    const tables = new Set((database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
+      .map((row) => row.name));
+    for (const required of ["users", "health_members", "reports", "report_pages"]) {
+      if (!tables.has(required)) result.errors.push(`备份数据库缺少核心表：${required}`);
+    }
+
+    let actualSchemaVersion = 0;
+    if (tables.has("schema_migrations")) {
+      const versions = (database.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{ version: number }>)
+        .map((row) => Number(row.version));
+      actualSchemaVersion = versions.at(-1) || 0;
+      if (actualSchemaVersion <= schemaVersion) {
+        const versionSet = new Set(versions);
+        const missingVersion = Array.from({ length: actualSchemaVersion }, (_, index) => index + 1)
+          .find((version) => !versionSet.has(version));
+        if (missingVersion) result.errors.push(`备份数据库迁移记录不连续，缺少 v${missingVersion}`);
+      }
+    } else if (tables.has("reports")) {
+      actualSchemaVersion = 1;
+    }
+
+    if (actualSchemaVersion < 1) result.errors.push("无法识别备份数据库版本");
+    if (actualSchemaVersion > schemaVersion) {
+      result.errors.push(`备份数据库版本 v${actualSchemaVersion} 高于当前应用支持的 v${schemaVersion}`);
+    }
+    const declaredSchemaVersion = Number(manifest.appliedSchemaVersion || manifest.schemaVersion || 0);
+    if (declaredSchemaVersion > schemaVersion) {
+      result.errors.push(`备份清单要求数据库 v${declaredSchemaVersion}，当前应用仅支持到 v${schemaVersion}`);
+    }
+    if (declaredSchemaVersion > 0 && actualSchemaVersion > 0 && declaredSchemaVersion !== actualSchemaVersion) {
+      result.errors.push(`备份清单数据库版本 v${declaredSchemaVersion} 与实际 v${actualSchemaVersion} 不一致`);
+    }
+  } catch (error) {
+    result.errors.push(`备份数据库无法读取：${error instanceof Error ? error.message : "未知错误"}`);
+  } finally {
+    database?.close();
+  }
+}
+
 function validateExtractedBackup(extractRoot: string): BackupValidationResult {
   const { manifest, result } = readExtractedBackupManifest(extractRoot);
   const databasePath = join(extractRoot, "db", "health-records.sqlite");
@@ -2536,6 +2748,8 @@ function validateExtractedBackup(extractRoot: string): BackupValidationResult {
   }
   if (!existsSync(databasePath)) {
     result.errors.push("备份数据库缺失");
+  } else {
+    validateBackupDatabase(databasePath, manifest, result);
   }
   if (!Array.isArray(manifest.files)) {
     result.warnings.push("旧备份没有文件校验清单，仅完成基础兼容性校验");
@@ -2681,11 +2895,13 @@ function restoreBackupFromArchive(user: RequestUser, archivePath: string, backup
     for (const directoryName of backupIncludedDirectories) replaceStorageDirectory(directoryName, extractRoot);
     replaceDatabaseFromBackup(extractRoot);
     getDatabase();
+    const identityRebind = rebindRestoredGatewayAdministrator(user);
     insertRestoreAudit(user.id, backupId, safetyBackup.id);
     return {
       restored: true,
       backupId,
       safetyBackupId: safetyBackup.id,
+      identityRebind,
       validation
     };
   } finally {

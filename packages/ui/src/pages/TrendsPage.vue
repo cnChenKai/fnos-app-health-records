@@ -173,17 +173,31 @@ function deltaClass(item: TrendSeries) {
   return item.delta > 0 ? "up" : "down";
 }
 
-function sparklinePoints(item: TrendSeries) {
+function trendChartPoints(item: TrendSeries) {
   const values = item.points.map((point) => point.numericValue);
-  if (!values.length) return "";
+  if (!values.length) return [];
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
-  return values.map((value, index) => {
-    const x = values.length === 1 ? 50 : (index / (values.length - 1)) * 100;
-    const y = 42 - ((value - min) / span) * 34;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
+  return item.points.map((point, index) => ({
+    point,
+    x: values.length === 1 ? 50 : 12 + (index / (values.length - 1)) * 76,
+    y: values.length === 1 ? 46 : 62 - ((point.numericValue - min) / span) * 34
+  }));
+}
+
+function trendChartPolyline(item: TrendSeries) {
+  return trendChartPoints(item)
+    .map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`)
+    .join(" ");
+}
+
+function trendChartMinWidth(item: TrendSeries) {
+  return `${Math.max(320, item.points.length * 88)}px`;
+}
+
+function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
+  return `${item.name} ${pointValue(point, item.unit)}，${formatDate(point.reportIssuedAt)}，点击查看来源`;
 }
 
 function recentPoints(item: TrendSeries) {
@@ -292,10 +306,28 @@ watch([query, groupFilter], () => {
               <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
             </div>
-            <svg class="trend-sparkline" viewBox="0 0 100 48" preserveAspectRatio="none" aria-hidden="true">
-              <line x1="0" y1="42" x2="100" y2="42" />
-              <polyline :points="sparklinePoints(item)" />
-            </svg>
+            <div class="trend-chart-scroll">
+              <div class="trend-chart-canvas" :style="{ minWidth: trendChartMinWidth(item) }">
+                <svg class="trend-sparkline" viewBox="0 0 100 96" preserveAspectRatio="none" aria-hidden="true">
+                  <line x1="4" y1="64" x2="96" y2="64" />
+                  <polyline :points="trendChartPolyline(item)" />
+                </svg>
+                <button
+                  v-for="chartPoint in trendChartPoints(item)"
+                  :key="chartPoint.point.observationId"
+                  class="trend-chart-node"
+                  :class="{ latest: chartPoint.point === item.points[item.points.length - 1] }"
+                  type="button"
+                  :style="{ left: `${chartPoint.x}%`, '--point-y': `${chartPoint.y}%` }"
+                  :aria-label="trendNodeLabel(chartPoint.point, item)"
+                  @click="openSourcePage(chartPoint.point, item)"
+                >
+                  <span class="trend-chart-value">{{ formatNumber(chartPoint.point.numericValue) }}</span>
+                  <i :class="flagClass(chartPoint.point.abnormalFlag)"></i>
+                  <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
+                </button>
+              </div>
+            </div>
           </div>
           <div class="trend-range">
             <div class="trend-range-copy">

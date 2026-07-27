@@ -16,7 +16,7 @@ import {
 import { buildReportTitle, normalizeAiExtraction, type AiExecutor } from "../services/ai-extraction.service.ts";
 import { saveAiSettings } from "../services/ai-settings.service.ts";
 import { createUpload, listProcessingJobs } from "../services/upload.service.ts";
-import { getReportDetail, updateReportFields } from "../services/records.service.ts";
+import { getReportDetail, permanentlyDeleteReport, trashReport, updateReportFields } from "../services/records.service.ts";
 
 const manager: RequestUser = {
   id: "runner-manager",
@@ -93,6 +93,39 @@ test("completes thumbnail and OCR jobs then marks the report for review", async 
     };
     assert.equal(ocr.engine, "test-ocr");
     assert.equal(JSON.parse(ocr.linesJson)[0].text, "检查日期 2026-07-21");
+  });
+});
+
+test("discards an in-flight worker result after the report is moved to trash", async () => {
+  await withDatabase(async () => {
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "cancelled.png", data: pngBytes() }
+    ]);
+    let finishWorker!: (response: Awaited<ReturnType<WorkerExecutor>>) => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const executor: WorkerExecutor = async () => new Promise((resolve) => {
+      finishWorker = resolve;
+      markStarted();
+    });
+
+    const processing = processNextJob(executor);
+    await started;
+    trashReport(manager, upload.reportId);
+    assert.throws(() => permanentlyDeleteReport(manager, upload.reportId), /结束处理中/);
+    finishWorker({ ok: true, width: 240, height: 320, elapsedMs: 8 });
+    assert.equal(await processing, true);
+
+    const report = getDatabase().prepare("SELECT status FROM reports WHERE id = ?").get(upload.reportId) as { status: string };
+    const job = getDatabase().prepare(`
+      SELECT status FROM processing_jobs WHERE report_id = ? AND job_type = 'thumbnail'
+    `).get(upload.reportId) as { status: string };
+    const page = getDatabase().prepare(`
+      SELECT thumbnail_path AS thumbnailPath FROM report_pages WHERE report_id = ?
+    `).get(upload.reportId) as { thumbnailPath: string | null };
+    assert.equal(report.status, "trashed");
+    assert.equal(job.status, "cancelled");
+    assert.equal(page.thumbnailPath, null);
   });
 });
 
@@ -181,7 +214,18 @@ test("expands a multi-page PDF and queues work for every source page", async () 
     const upload = createUpload(manager, "runner-member", [
       { originalName: "report.pdf", data: Buffer.from("%PDF-1.4\n%%EOF") }
     ]);
-    const executor: WorkerExecutor = async () => ({ ok: true, pageCount: 3, pages: [] });
+    const recycleFlags: Array<boolean | undefined> = [];
+    const executor: WorkerExecutor = async (request) => {
+      if (request.action === "inspect_pdf") return { ok: true, pageCount: 3, pages: [] };
+      if (request.action === "thumbnail") return { ok: true, width: 240, height: 320 };
+      recycleFlags.push(request.recycleAfterResponse);
+      return {
+        ok: true,
+        engine: "test-ocr",
+        modelVersion: "test-v1",
+        lines: [{ id: "line_1", text: "检查结果", confidence: 0.99, box: [0, 0, 10, 10] }]
+      };
+    };
     assert.equal(await processNextJob(executor), true);
     const pages = getDatabase().prepare(`
       SELECT page_number AS pageNumber, source_page_number AS sourcePageNumber,
@@ -194,6 +238,10 @@ test("expands a multi-page PDF and queues work for every source page", async () 
       SELECT COUNT(*) AS count FROM processing_jobs WHERE report_id = ?
     `).get(upload.reportId) as { count: number };
     assert.equal(jobCount.count, 7);
+    for (let index = 0; index < 6; index += 1) {
+      assert.equal(await processNextJob(executor), true);
+    }
+    assert.deepEqual(recycleFlags, [false, false, true]);
   });
 });
 

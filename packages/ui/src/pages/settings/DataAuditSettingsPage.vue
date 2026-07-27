@@ -23,7 +23,6 @@ const restoringId = ref("");
 const deletingId = ref("");
 const checkingId = ref("");
 const uploadingRestore = ref(false);
-const backupFileInput = ref<HTMLInputElement | null>(null);
 const validationById = ref<Record<string, BackupValidationResult>>({});
 
 function formatBytes(value?: number | null) {
@@ -139,10 +138,6 @@ async function restoreBackup(backup: BackupSummary) {
   });
 }
 
-function chooseExternalBackup() {
-  backupFileInput.value?.click();
-}
-
 async function restoreUploadedBackup(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -231,7 +226,6 @@ onMounted(() => {
         <div><h3>完整应用备份</h3><p>包含 SQLite 快照、报告原件、分页图、运行配置和 AI 密钥；仅系统管理员可操作。</p></div>
       </header>
       <div v-if="app.session.value?.isGatewayAdmin" class="backup-header-actions">
-        <input ref="backupFileInput" type="file" accept=".tar.gz,application/gzip" hidden @change="restoreUploadedBackup" />
         <button
           class="header-action"
           type="button"
@@ -242,16 +236,22 @@ onMounted(() => {
             <DatabaseBackup v-else :size="16" />
             {{ creatingBackup ? "备份中" : "创建备份" }}
           </button>
-          <button
-            class="header-action muted-action"
-            type="button"
-            :disabled="creatingBackup || uploadingRestore || Boolean(restoringId)"
-            @click="chooseExternalBackup"
+          <label
+            class="header-action muted-action native-file-action"
+            :class="{ 'is-disabled': creatingBackup || uploadingRestore || Boolean(restoringId) }"
+            :aria-disabled="creatingBackup || uploadingRestore || Boolean(restoringId)"
           >
+            <input
+              type="file"
+              accept=".tar.gz,.tgz,application/gzip,application/x-gzip,application/octet-stream"
+              aria-label="选择外部备份文件"
+              :disabled="creatingBackup || uploadingRestore || Boolean(restoringId)"
+              @change="restoreUploadedBackup"
+            />
             <LoaderCircle v-if="uploadingRestore" class="spin-icon" :size="16" />
             <UploadCloud v-else :size="16" />
             {{ uploadingRestore ? "恢复中" : "上传恢复" }}
-          </button>
+          </label>
         </div>
 
       <div v-if="!app.session.value?.isGatewayAdmin" class="settings-form">

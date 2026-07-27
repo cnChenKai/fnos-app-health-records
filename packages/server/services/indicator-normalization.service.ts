@@ -4,6 +4,7 @@ import { createId } from "../utils/identifier";
 import type { RequestUser } from "../domain/request-user";
 import { createError } from "h3";
 import { getAiSettings } from "./ai-settings.service";
+import { configuredRequestTimeout, fetchWithTimeout } from "../utils/outbound-request";
 
 const normalizationVersion = `indicator-normalization-${builtinIndicatorVersion}`;
 const aiNormalizationPromptVersion = "indicator-normalization-ai-v2";
@@ -83,6 +84,14 @@ export type IndicatorNormalizationMaintenanceResult = {
     skipped: number;
     failed: number;
   };
+};
+
+export type BuiltinIndicatorBackfillResult = {
+  scanned: number;
+  updated: number;
+  unmatched: number;
+  preserved: number;
+  version: string;
 };
 
 export type IndicatorNormalizationIssue = {
@@ -192,8 +201,17 @@ function normalizeUnit(value: string | null | undefined) {
     "kg/m2": "kg/m²",
     "kg/m²": "kg/m²",
     "kg/㎡": "kg/m²",
+    "kg": "kg",
+    "千克": "kg",
+    "公斤": "kg",
+    "g": "g",
+    "克": "g",
+    "m": "m",
+    "米": "m",
     "cm": "cm",
+    "厘米": "cm",
     "mm": "mm",
+    "毫米": "mm",
     "10^9/l": "10^9/L",
     "10*9/l": "10^9/L",
     "×10^9/l": "10^9/L",
@@ -265,6 +283,10 @@ function convertUnit(canonicalKey: string, value: number, fromUnit: string | nul
   if (canonicalKey === "glucose_fasting" && fromUnit === "mmol/L" && toUnit === "mg/dL") return value * 18.018;
   if (canonicalKey === "cbc_hgb" && fromUnit === "g/dL" && toUnit === "g/L") return value * 10;
   if (canonicalKey === "cbc_hgb" && fromUnit === "g/L" && toUnit === "g/dL") return value / 10;
+  if (canonicalKey === "body_weight" && fromUnit === "g" && toUnit === "kg") return value / 1000;
+  if (canonicalKey === "body_weight" && fromUnit === "kg" && toUnit === "g") return value * 1000;
+  if (["body_height", "body_waist_circumference"].includes(canonicalKey) && fromUnit === "m" && toUnit === "cm") return value * 100;
+  if (["body_height", "body_waist_circumference"].includes(canonicalKey) && fromUnit === "cm" && toUnit === "m") return value / 100;
   if (fromUnit === "cm" && toUnit === "mm") return value * 10;
   if (fromUnit === "mm" && toUnit === "cm") return value / 10;
   return value;
@@ -372,8 +394,7 @@ function candidateAliases(row: ObservationRow) {
   `).all(...names) as AliasRow[];
 }
 
-export function normalizeObservation(row: ObservationRow): NormalizationResult {
-  ensureBuiltinIndicatorCatalog();
+function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
   const aliases = candidateAliases(row);
   if (!aliases.length) {
     return {
@@ -448,6 +469,11 @@ export function normalizeObservation(row: ObservationRow): NormalizationResult {
   };
 }
 
+export function normalizeObservation(row: ObservationRow): NormalizationResult {
+  ensureBuiltinIndicatorCatalog();
+  return normalizeObservationWithReadyCatalog(row);
+}
+
 function indicatorAiSystemPrompt() {
   return `你是健康报告指标归一化助手，只能基于输入里的指标事实做命名归一化，不得诊断、不得解释疾病风险、不得生成治疗建议。
 返回 JSON 对象，不要 Markdown，格式为：
@@ -499,7 +525,8 @@ export const requestAiIndicatorNormalization: AiIndicatorExecutor = async (input
     throw Object.assign(new Error("AI 解析尚未完整配置"), { code: "AI_NOT_CONFIGURED" });
   }
   const started = Date.now();
-  const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+  const timeoutMs = configuredRequestTimeout("AI_REQUEST_TIMEOUT_MS", 3 * 60_000);
+  const response = await fetchWithTimeout(`${settings.baseUrl}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${settings.apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -511,6 +538,12 @@ export const requestAiIndicatorNormalization: AiIndicatorExecutor = async (input
         { role: "user", content: JSON.stringify(input) }
       ]
     })
+  }, {
+    timeoutMs,
+    timeoutCode: "AI_NORMALIZE_TIMEOUT",
+    timeoutMessage: `AI 服务在 ${Math.round(timeoutMs / 1000)} 秒内未完成指标归一化`,
+    networkCode: "AI_NORMALIZE_NETWORK_ERROR",
+    networkMessage: "无法连接 AI 服务完成指标归一化，请检查 NAS 网络和模型状态"
   });
   if (!response.ok) throw Object.assign(new Error(`AI 指标归一化返回 ${response.status}`), { code: `AI_NORMALIZE_HTTP_${response.status}` });
   const payload = await response.json() as {
@@ -587,6 +620,25 @@ function observationRowsForReport(reportId: string) {
   `).all(reportId) as ObservationRow[];
 }
 
+function staleBuiltinNormalizationRows() {
+  return getDatabase().prepare(`
+    SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
+      o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.unit, o.reference_text AS referenceText,
+      r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
+      r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment,
+      n.canonical_key AS existingCanonicalKey, n.matched_by AS existingMatchedBy
+    FROM observations o
+    JOIN reports r ON r.id = o.report_id
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    WHERE n.observation_id IS NULL OR n.canonical_key IS NULL OR n.version <> ?
+    ORDER BY o.report_id, o.id
+  `).all(normalizationVersion) as Array<ObservationRow & {
+    existingCanonicalKey: string | null;
+    existingMatchedBy: string | null;
+  }>;
+}
+
 function pendingObservationRowsForReport(reportId: string) {
   return getDatabase().prepare(`
     SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
@@ -615,10 +667,11 @@ function createEmptyMaintenanceResult(): IndicatorNormalizationMaintenanceResult
 }
 
 function collectNormalizationResult(rows: ObservationRow[]): IndicatorNormalizationMaintenanceResult {
+  ensureBuiltinIndicatorCatalog();
   const result = createEmptyMaintenanceResult();
   result.scanned = rows.length;
   for (const row of rows) {
-    const normalized = normalizeObservation(row);
+    const normalized = normalizeObservationWithReadyCatalog(row);
     upsertNormalization(normalized);
     result[normalized.quality] += 1;
     if (!normalized.canonicalKey) result.unknown += 1;
@@ -642,6 +695,33 @@ function addMaintenanceResult(
 
 export function normalizeReportObservations(reportId: string): IndicatorNormalizationMaintenanceResult {
   return collectNormalizationResult(observationRowsForReport(reportId));
+}
+
+export function backfillBuiltinIndicatorNormalizations(): BuiltinIndicatorBackfillResult {
+  ensureBuiltinIndicatorCatalog();
+  const rows = staleBuiltinNormalizationRows();
+  const result: BuiltinIndicatorBackfillResult = {
+    scanned: rows.length,
+    updated: 0,
+    unmatched: 0,
+    preserved: 0,
+    version: builtinIndicatorVersion
+  };
+  for (const row of rows) {
+    const normalized = normalizeObservationWithReadyCatalog(row);
+    if (normalized.canonicalKey) {
+      upsertNormalization(normalized);
+      result.updated += 1;
+      continue;
+    }
+    result.unmatched += 1;
+    if (row.existingCanonicalKey || row.existingMatchedBy === "ai_suggestion") {
+      result.preserved += 1;
+      continue;
+    }
+    upsertNormalization(normalized);
+  }
+  return result;
 }
 
 function normalizePendingReportObservations(reportId: string): IndicatorNormalizationMaintenanceResult {

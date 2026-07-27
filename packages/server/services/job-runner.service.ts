@@ -41,6 +41,7 @@ let busy = false;
 let timer: NodeJS.Timeout | null = null;
 let lastRunAt: string | null = null;
 let lastError: string | null = null;
+let activeJob: { id: string; reportId: string } | null = null;
 
 type JobEventType = "queued" | "started" | "completed" | "retry_scheduled" | "failed" | "manual_retry" | "cancelled";
 
@@ -131,7 +132,7 @@ export function claimNextJob() {
         p.page_number AS pageNumber, p.source_page_number AS sourcePageNumber, p.rotation
       FROM processing_jobs j LEFT JOIN report_pages p ON p.id = j.page_id WHERE j.id = ?
     `).get(candidate.id) as JobRow;
-    db.prepare("UPDATE reports SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    db.prepare("UPDATE reports SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'trashed'")
       .run(job.reportId);
     appendJobEvent({
       jobId: job.id,
@@ -147,6 +148,30 @@ export function claimNextJob() {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function isJobStillProcessable(job: JobRow) {
+  const row = getDatabase().prepare(`
+    SELECT j.status, j.report_id AS reportId, r.status AS reportStatus,
+      j.page_id AS pageId, p.report_id AS pageReportId
+    FROM processing_jobs j
+    JOIN reports r ON r.id = j.report_id
+    LEFT JOIN report_pages p ON p.id = j.page_id
+    WHERE j.id = ?
+  `).get(job.id) as {
+    status: string;
+    reportId: string;
+    reportStatus: string;
+    pageId: string | null;
+    pageReportId: string | null;
+  } | undefined;
+  if (!row || row.status !== "processing" || row.reportStatus === "trashed") return false;
+  if (row.reportId !== job.reportId || row.pageId !== job.pageId) return false;
+  return !row.pageId || row.pageReportId === row.reportId;
+}
+
+export function isReportJobActive(reportId: string) {
+  return activeJob?.reportId === reportId;
 }
 
 function queueJob(reportId: string, pageId: string, jobType: "thumbnail" | "ocr") {
@@ -181,6 +206,17 @@ function reportOcrTextLength(reportId: string) {
     WHERE p.report_id = ?
   `).get(reportId) as { total: number };
   return Number(row.total || 0);
+}
+
+function isLastActiveOcrJobForReport(job: JobRow) {
+  if (job.jobType !== "ocr") return false;
+  const row = getDatabase().prepare(`
+    SELECT COUNT(*) AS count
+    FROM processing_jobs
+    WHERE report_id = ? AND job_type = 'ocr' AND id <> ?
+      AND status IN ('queued', 'processing')
+  `).get(job.reportId, job.id) as { count: number };
+  return Number(row.count || 0) === 0;
 }
 
 function queueAiJobIfReady(reportId: string) {
@@ -383,6 +419,7 @@ function updateReportStatus(reportId: string) {
   const db = getDatabase();
   const previous = db.prepare("SELECT status, member_id AS memberId, title FROM reports WHERE id = ?")
     .get(reportId) as { status: string; memberId: string; title: string } | undefined;
+  if (!previous || previous.status === "trashed") return;
   const counts = db.prepare(`
     SELECT
       SUM(status = 'failed') AS failed,
@@ -391,9 +428,9 @@ function updateReportStatus(reportId: string) {
     FROM processing_jobs WHERE report_id = ?
   `).get(reportId) as { failed: number; active: number; completedAi: number };
   const status = Number(counts.failed) > 0 ? "failed" : Number(counts.active) > 0 ? "processing" : "needs_review";
-  db.prepare("UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+  db.prepare("UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'trashed'")
     .run(status, reportId);
-  if (!previous || previous.status === status) return;
+  if (previous.status === status) return;
   if (status === "needs_review") {
     const hasAiResult = Number(counts.completedAi) > 0;
     const ocrTextEmpty = !hasAiResult && reportOcrTextLength(reportId) < 1;
@@ -465,6 +502,7 @@ export async function processNextJob(
 ) {
   const job = claimNextJob();
   if (!job) return false;
+  activeJob = { id: job.id, reportId: job.reportId };
   try {
     if (job.jobType === "ai_extract") {
       const persisted = getDatabase().prepare("SELECT 1 AS found FROM report_extractions WHERE job_id = ?")
@@ -472,6 +510,7 @@ export async function processNextJob(
       if (!persisted) {
         const input = buildAiExtractionInput(job.reportId);
         const extraction = await aiExecutor(input);
+        if (!isJobStillProcessable(job)) return true;
         persistAiExtraction(job.reportId, job.id, extraction, input.inputCharacters);
         let indicatorNormalization: Record<string, unknown> | null = null;
         try {
@@ -483,6 +522,7 @@ export async function processNextJob(
             error: error instanceof Error ? error.message : "AI 指标兜底失败"
           };
         }
+        if (!isJobStillProcessable(job)) return true;
         appendJobEvent({
           jobId: job.id,
           reportId: job.reportId,
@@ -513,7 +553,8 @@ export async function processNextJob(
         action: job.jobType === "pdf_extract" ? "inspect_pdf" : job.jobType,
         imagePath,
         pageNumber: job.sourcePageNumber,
-        rotation: job.rotation || 0
+        rotation: job.rotation || 0,
+        recycleAfterResponse: isLastActiveOcrJobForReport(job)
       };
       if (job.jobType === "thumbnail") {
         const relativeThumbnail = `thumbnails/${job.reportId}/${job.pageId}.jpg`;
@@ -522,13 +563,16 @@ export async function processNextJob(
         request.outputPath = outputPath;
       }
       const response = await executor(request);
+      if (!isJobStillProcessable(job)) return true;
       if (!response.ok) throw Object.assign(new Error(response.errorMessage || "Worker 任务失败"), { code: response.errorCode });
       completeJob(job, response);
     }
   } catch (error) {
+    if (!isJobStillProcessable(job)) return true;
     failJob(job, error);
     throw error;
   } finally {
+    if (activeJob?.id === job.id) activeJob = null;
     updateReportStatus(job.reportId);
   }
   return true;

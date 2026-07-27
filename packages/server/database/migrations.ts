@@ -254,6 +254,30 @@ export const databaseMigrations: DatabaseMigration[] = [
           ON report_field_overrides(report_id, updated_at DESC);
       `);
     }
+  },
+  {
+    version: 10,
+    name: "add_file_gc_queue",
+    checksum: "manual:010-add-file-gc-queue",
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS file_gc_queue (
+          id TEXT PRIMARY KEY,
+          storage_path TEXT NOT NULL UNIQUE,
+          file_kind TEXT NOT NULL CHECK (file_kind IN ('original', 'thumbnail', 'other')),
+          reason TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          not_before TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS file_gc_queue_pending_idx
+          ON file_gc_queue(completed_at, not_before, created_at);
+      `);
+    }
   }
 ];
 

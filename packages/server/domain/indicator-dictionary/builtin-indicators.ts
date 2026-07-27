@@ -1,4 +1,5 @@
-export const builtinIndicatorVersion = "2026.07.23.1";
+/* 修改内置指标、别名、单位或趋势规则时必须递增版本，启动维护会据此自动回填历史数据。 */
+export const builtinIndicatorVersion = "2026.07.27.1";
 
 export type BuiltinIndicator = {
   canonicalKey: string;
@@ -300,6 +301,45 @@ export const builtinIndicators: BuiltinIndicator[] = [
     allowedUnits: ["mmol/L", "mEq/L"],
     sectionHints: ["电解质", "生化"],
     explanation: "血液电解质指标，常用于观察体液平衡相关变化。"
+  },
+  {
+    canonicalKey: "body_weight",
+    displayName: "体重",
+    category: "基础测量",
+    specimen: "other",
+    defaultUnit: "kg",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["体重", "身体重量", "Weight", "WT", "BW"],
+    allowedUnits: ["kg", "千克", "公斤", "g", "克"],
+    sectionHints: ["一般检查", "基础测量", "体格检查", "体检", "人体成分"],
+    explanation: "记录报告中明确测量的体重，用于观察不同日期的体重变化。"
+  },
+  {
+    canonicalKey: "body_height",
+    displayName: "身高",
+    category: "基础测量",
+    specimen: "other",
+    defaultUnit: "cm",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["身高", "身体高度", "Height", "HT"],
+    allowedUnits: ["cm", "厘米", "m", "米", "mm", "毫米"],
+    sectionHints: ["一般检查", "基础测量", "体格检查", "体检", "生长发育"],
+    explanation: "记录报告中明确测量的身高；儿童和青少年可用于观察生长变化。"
+  },
+  {
+    canonicalKey: "body_waist_circumference",
+    displayName: "腰围",
+    category: "基础测量",
+    specimen: "other",
+    defaultUnit: "cm",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["腰围", "腰部周径", "腰周", "Waist", "Waist Circumference", "WC"],
+    allowedUnits: ["cm", "厘米", "m", "米", "mm", "毫米"],
+    sectionHints: ["一般检查", "基础测量", "体格检查", "体检", "人体成分"],
+    explanation: "记录报告中明确测量的腰围，用于观察腰部周径变化。"
   },
   {
     canonicalKey: "body_bmi",

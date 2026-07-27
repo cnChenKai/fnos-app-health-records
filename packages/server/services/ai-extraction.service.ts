@@ -3,8 +3,9 @@ import { createId } from "../utils/identifier";
 import { getAiSettings } from "./ai-settings.service";
 import { normalizeReportObservations } from "./indicator-normalization.service";
 import { listManualReportFieldKeys, type ReportFieldKey } from "./report-field-overrides.service";
+import { configuredRequestTimeout, fetchWithTimeout } from "../utils/outbound-request";
 
-const promptVersion = "health-record-v3";
+const promptVersion = "health-record-v4";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -401,6 +402,8 @@ bodyParts 用于档案展示的检查部位/范围，每项使用 raw、name、p
 identifiers 只允许 reportNo、outpatientNo、inpatientNo、physicalExamNo、examNo、specimenNo、barcodeNo。
 clinicians 只允许 ordering、examining、reporting、reviewing、chief。
 observations 每项包括 sectionName、itemCode、itemName、normalizedName、resultText、numericValue、unit、referenceLow、referenceHigh、referenceText、abnormalFlag、method、evidence。
+体检报告中的“一般检查/基础测量/体格检查/人体成分”必须逐项检查并提取明确出现的身高、体重、BMI、腰围等数值；每个测量单独作为一条 observation，不得合并成“身高体重”等一条记录。
+基础测量必须保留原报告单位；只有原文或表头明确给出单位时才填写 unit。不得根据 BMI 推算缺失的体重或身高，也不得根据身高和体重自行生成原报告未提供的 BMI。
 abnormalFlag 提取原报告的异常标记：结果旁的 ↑、▲ 或“偏高”为 high，↓、▼ 或“偏低”为 low，有异常标记但无法区分高低（如 阳性、异常、*）为 abnormal，报告明确标记正常为 normal，原报告没有任何标记时为 null。
 每个证据使用 {"pageNumber":1,"quote":"原文"}。顶层 evidence 保存公共字段证据，confidence 保存 0 到 1 的字段置信度。
 禁止输出姓名、身份证号、电话、住址；summary 必须是中性事实摘要。缺失字段使用 null、空对象或空数组。`;
@@ -417,7 +420,8 @@ export const requestAiExtraction: AiExecutor = async (input) => {
     throw Object.assign(new Error("AI 解析尚未完整配置"), { code: "AI_NOT_CONFIGURED" });
   }
   const started = Date.now();
-  const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+  const timeoutMs = configuredRequestTimeout("AI_REQUEST_TIMEOUT_MS", 3 * 60_000);
+  const response = await fetchWithTimeout(`${settings.baseUrl}/chat/completions`, {
     method: "POST",
     headers: { authorization: `Bearer ${settings.apiKey}`, "content-type": "application/json" },
     body: JSON.stringify({
@@ -429,6 +433,12 @@ export const requestAiExtraction: AiExecutor = async (input) => {
         { role: "user", content: input.text }
       ]
     })
+  }, {
+    timeoutMs,
+    timeoutCode: "AI_REQUEST_TIMEOUT",
+    timeoutMessage: `AI 服务在 ${Math.round(timeoutMs / 1000)} 秒内未完成报告整理`,
+    networkCode: "AI_NETWORK_ERROR",
+    networkMessage: "无法连接 AI 服务，请检查 NAS 网络、服务地址和模型状态"
   });
   if (!response.ok) throw Object.assign(new Error(`AI 服务返回 ${response.status}`), { code: `AI_HTTP_${response.status}` });
   const payload = await response.json() as {
