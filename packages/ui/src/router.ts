@@ -15,6 +15,7 @@ import MaintenanceSettingsPage from "./pages/settings/MaintenanceSettingsPage.vu
 import IndicatorIssuesSettingsPage from "./pages/settings/IndicatorIssuesSettingsPage.vue";
 import UserAuditSettingsPage from "./pages/settings/UserAuditSettingsPage.vue";
 import AiAuditSettingsPage from "./pages/settings/AiAuditSettingsPage.vue";
+import SystemLogsSettingsPage from "./pages/settings/SystemLogsSettingsPage.vue";
 import AboutSettingsPage from "./pages/settings/AboutSettingsPage.vue";
 import { useAppContext } from "./composables/useAppContext";
 
@@ -36,6 +37,7 @@ const router = createRouter({
     { path: "/me/data", component: DataAuditSettingsPage, meta: { title: "备份与恢复" } },
     { path: "/me/audit", component: UserAuditSettingsPage, meta: { title: "用户操作日志", requiresAdmin: true } },
     { path: "/me/ai-audit", component: AiAuditSettingsPage, meta: { title: "AI 审计", requiresAdmin: true } },
+    { path: "/me/system-logs", component: SystemLogsSettingsPage, meta: { title: "系统日志", requiresAdmin: true } },
     { path: "/me/maintenance", component: MaintenanceSettingsPage, meta: { title: "维护工具", requiresAdmin: true } },
     { path: "/me/maintenance/indicator-issues", component: IndicatorIssuesSettingsPage, meta: { title: "指标问题池", requiresAdmin: true } },
     { path: "/me/runtime", component: RuntimeSettingsPage, meta: { title: "运行与识别", requiresAdmin: true } },

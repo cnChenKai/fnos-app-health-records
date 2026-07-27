@@ -34,8 +34,6 @@ type ProcessingJob = {
 
 const app = useAppContext();
 const items = ref<QueueItem[]>([]);
-const fileInput = ref<HTMLInputElement | null>(null);
-const cameraInput = ref<HTMLInputElement | null>(null);
 const dragging = ref(false);
 const uploading = ref(false);
 const error = ref("");
@@ -252,12 +250,16 @@ onActivated(() => {
       <strong>拖放报告到这里</strong>
       <span class="drop-hint">HEIC、JPEG、PNG、WebP 或多页 PDF，按下方顺序识别为一份报告</span>
       <div class="drop-actions">
-        <button class="primary-button file-button" type="button" @click="fileInput?.click()"><UploadCloud :size="18" />选择文件</button>
-        <button class="camera-button" type="button" @click="cameraInput?.click()"><Camera :size="18" />拍照</button>
+        <label class="primary-button file-button upload-picker">
+          <UploadCloud :size="18" /><span>选择文件</span>
+          <input type="file" :accept="accept" multiple aria-label="选择报告文件" @change="pick" />
+        </label>
+        <label class="camera-button upload-picker">
+          <Camera :size="18" /><span>拍照</span>
+          <input type="file" accept="image/*" capture="environment" multiple aria-label="拍摄报告照片" @change="pick" />
+        </label>
       </div>
     </div>
-    <input ref="fileInput" class="visually-hidden" type="file" :accept="accept" multiple @change="pick" />
-    <input ref="cameraInput" class="visually-hidden" type="file" accept="image/*" capture="environment" multiple @change="pick" />
 
     <p v-if="error" class="upload-error">{{ error }}</p>
     <div v-if="result" class="upload-success">

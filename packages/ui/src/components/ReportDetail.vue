@@ -52,6 +52,7 @@ const ocrSheetOpen = ref(false);
 const ocrLoading = ref(false);
 const ocrError = ref("");
 const ocrPages = ref<OcrPageText[]>([]);
+const ocrReportId = ref<string | null>(null);
 const confirming = ref(false);
 const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
@@ -68,6 +69,9 @@ const editForm = ref({
 });
 let jobsTimer: ReturnType<typeof setInterval> | null = null;
 let detailSeq = 0;
+let jobsSeq = 0;
+let jobsLoadingSeq = 0;
+let ocrSeq = 0;
 let jobsPollFailures = 0;
 
 /* 处理进度区默认折叠：任何写入 jobsError 的失败都要同时展开该区并 toast，否则按钮停了用户却看不到原因 */
@@ -320,6 +324,7 @@ function observationNormalizationLine(item: ReportDetail["observations"][number]
 function openEditReport() {
   const current = source.value;
   if (!current) return;
+  const reportId = props.reportId;
   editForm.value = {
     title: current.title || "",
     reportType: current.reportType || "other",
@@ -341,8 +346,12 @@ function openEditReport() {
     recommendation: detail.value?.recommendation || ""
   };
   editOpen.value = true;
-  if (window.matchMedia("(min-width: 761px)").matches && !ocrPages.value.length && !ocrLoading.value) {
-    void loadOcrPages();
+  if (
+    window.matchMedia("(min-width: 761px)").matches
+    && (!ocrPages.value.length || ocrReportId.value !== reportId)
+    && !ocrLoading.value
+  ) {
+    void loadOcrPages(reportId);
   }
 }
 
@@ -441,21 +450,29 @@ watch(editOriginalIndex, (index) => {
   document.getElementById(`edit-ocr-page-${page.pageNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-async function loadOcrPages() {  ocrLoading.value = true;
+async function loadOcrPages(reportId = props.reportId) {
+  const seq = ++ocrSeq;
+  ocrLoading.value = true;
   ocrError.value = "";
+  ocrPages.value = [];
+  ocrReportId.value = null;
   try {
-    ocrPages.value = await request<OcrPageText[]>(`reports/${encodeURIComponent(props.reportId)}/ocr`);
+    const nextPages = await request<OcrPageText[]>(`reports/${encodeURIComponent(reportId)}/ocr`);
+    if (seq !== ocrSeq || props.reportId !== reportId) return;
+    ocrPages.value = nextPages;
+    ocrReportId.value = reportId;
   } catch (cause) {
-    ocrError.value = cause instanceof Error ? cause.message : "无法读取 OCR 文本";
+    if (seq === ocrSeq && props.reportId === reportId) {
+      ocrError.value = cause instanceof Error ? cause.message : "无法读取 OCR 文本";
+    }
   } finally {
-    ocrLoading.value = false;
+    if (seq === ocrSeq && props.reportId === reportId) ocrLoading.value = false;
   }
 }
 
 async function openOcrText() {
   ocrSheetOpen.value = true;
-  ocrPages.value = [];
-  await loadOcrPages();
+  await loadOcrPages(props.reportId);
 }
 
 async function confirmReady() {
@@ -572,8 +589,12 @@ let lastDetailSyncAt = 0;
 async function refreshJobs(silent = false) {
   if (!props.reportId) return;
   const reportId = props.reportId;
+  const seq = ++jobsSeq;
   const previousStatuses = new Map(selectedJobs.value.map((job) => [job.id, job.status]));
-  if (!silent) jobsLoading.value = true;
+  if (!silent) {
+    jobsLoadingSeq = seq;
+    jobsLoading.value = true;
+  }
   jobsError.value = "";
   try {
     /* OCR 运行状态只在打开报告/手动重试（非轮询）时查询，轮询周期内不再重复请求 */
@@ -581,6 +602,7 @@ async function refreshJobs(silent = false) {
       request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(reportId)}`),
       !silent && app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
+    if (seq !== jobsSeq || props.reportId !== reportId) return;
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
     selectedJobs.value = nextJobs;
@@ -598,6 +620,7 @@ async function refreshJobs(silent = false) {
     }
     maybeStartJobsPolling();
   } catch (cause) {
+    if (seq !== jobsSeq || props.reportId !== reportId) return;
     jobsPollFailures += 1;
     /* 轮询允许偶发失败（网络抖动），连续 3 次失败才停止并提示，避免进度条假死 */
     if (!silent || jobsPollFailures >= 3) {
@@ -605,7 +628,7 @@ async function refreshJobs(silent = false) {
       stopJobsPolling();
     }
   } finally {
-    if (!silent) jobsLoading.value = false;
+    if (!silent && jobsLoadingSeq === seq && props.reportId === reportId) jobsLoading.value = false;
   }
 }
 
@@ -651,10 +674,19 @@ async function openJobEvents(job: ProcessingJob) {
 
 watch(() => props.reportId, (reportId) => {
   stopJobsPolling();
+  jobsSeq += 1;
+  jobsLoadingSeq = 0;
+  ocrSeq += 1;
   selectedJobs.value = [];
+  jobsLoading.value = false;
+  jobsPollFailures = 0;
   jobsError.value = "";
   processingExpanded.value = false;
   ocrSheetOpen.value = false;
+  ocrPages.value = [];
+  ocrReportId.value = null;
+  ocrLoading.value = false;
+  ocrError.value = "";
   editOpen.value = false;
   editOriginalIndex.value = 0;
   if (!reportId) {

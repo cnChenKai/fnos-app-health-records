@@ -1,7 +1,9 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createError } from "h3";
 import { getDatabase } from "../database/client";
+import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
 import { aiProviderCatalog, normalizeAiProvider, type AiProviderKey } from "./ai-provider";
 
@@ -135,7 +137,7 @@ function normalizeBaseUrl(value: unknown, fallback: string) {
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
     return parsed.toString().replace(/\/+$/, "");
   } catch {
-    throw new Error("AI API 地址无效");
+    throw createError({ statusCode: 400, statusMessage: "AI API 地址无效" });
   }
 }
 
@@ -233,13 +235,84 @@ export async function testAiConnection(input: Partial<AiSettings> = {}) {
   const current = resolveProvider(provider, parsed);
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
-  if (!apiKey || !textModel) throw new Error(`请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`);
+  if (!apiKey || !textModel) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`
+    });
+  }
+  const baseUrl = normalizeBaseUrl(input.baseUrl, current.baseUrl);
   const started = Date.now();
-  const response = await fetch(`${normalizeBaseUrl(input.baseUrl, current.baseUrl)}/chat/completions`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: textModel, messages: [{ role: "user", content: "reply ok" }], max_tokens: 4 })
-  });
-  if (!response.ok) throw new Error(`AI 服务返回 ${response.status}`);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: textModel, messages: [{ role: "user", content: "reply ok" }], max_tokens: 4 }),
+      signal: AbortSignal.timeout(15000)
+    });
+  } catch (cause) {
+    const error = cause as Error & { code?: string; cause?: { code?: string; message?: string } };
+    const code = error.code || error.cause?.code || "";
+    const detail = [code, error.message, error.cause?.message].filter(Boolean).join(" · ");
+    const timedOut = error.name === "TimeoutError" || error.name === "AbortError"
+      || /TIMEOUT|TIMEDOUT/i.test(`${code} ${detail}`);
+    const dnsFailed = /ENOTFOUND|EAI_AGAIN/i.test(`${code} ${detail}`);
+    const tlsFailed = /CERT|TLS|SSL|SELF_SIGNED/i.test(`${code} ${detail}`);
+    await writeLog("warn", "ai-connection-test-failed", {
+      provider,
+      host: new URL(baseUrl).host,
+      model: textModel,
+      errorCode: code,
+      detail: detail.slice(0, 600)
+    });
+    const statusMessage = timedOut
+      ? "连接 AI 服务超时，请检查 NAS 外网连接、代理或服务地址"
+      : dnsFailed
+        ? "NAS 无法解析 AI 服务域名，请检查 DNS 和外网连接"
+        : tlsFailed
+          ? "AI 服务 TLS 证书校验失败，请检查 NAS 时间、证书或代理设置"
+          : "NAS 无法连接 AI 服务，请检查外网连接、代理、DNS 和 API 地址";
+    throw createError({ statusCode: timedOut ? 504 : 502, statusMessage });
+  }
+  if (!response.ok) {
+    let upstreamDetail = "";
+    try {
+      const text = (await response.text()).trim();
+      if (text) {
+        try {
+          const payload = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
+          upstreamDetail = String(
+            typeof payload.error === "object" ? payload.error?.message || "" : payload.error || payload.message || ""
+          ).trim();
+        } catch {
+          upstreamDetail = text;
+        }
+      }
+    } catch {
+      // The upstream status is still enough to provide an actionable error.
+    }
+    await writeLog("warn", "ai-connection-test-rejected", {
+      provider,
+      host: new URL(baseUrl).host,
+      model: textModel,
+      upstreamStatus: response.status,
+      detail: upstreamDetail.slice(0, 600)
+    });
+    const summary = response.status === 401 || response.status === 403
+      ? "AI 服务认证失败，请检查 API Key 和账号权限"
+      : response.status === 404
+        ? "AI API 地址或文本模型不存在"
+        : response.status === 429
+          ? "AI 服务请求受限，请检查调用频率、额度或余额"
+          : response.status >= 500
+            ? "AI 服务暂时不可用"
+            : "AI 服务拒绝了测试请求，请检查模型名称和接口兼容性";
+    const suffix = upstreamDetail ? `：${upstreamDetail.slice(0, 240)}` : "";
+    throw createError({
+      statusCode: 502,
+      statusMessage: `${summary}（上游 ${response.status}）${suffix}`
+    });
+  }
   return { ok: true, provider, model: textModel, elapsedMs: Date.now() - started };
 }

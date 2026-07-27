@@ -3,6 +3,7 @@ import App from "./App.vue";
 import router from "./router";
 import { useToast } from "./composables/useToast";
 import { describeTechnical } from "./utils/error";
+import { reportClientSystemError } from "./utils/api";
 import "./styles.css";
 
 const app = createApp(App);
@@ -10,10 +11,12 @@ const app = createApp(App);
 /* 全局兜底：任何漏网的同步渲染错误或未捕获 rejection 都留痕并提示，杜绝“点了没反应” */
 app.config.errorHandler = (error, instance, info) => {
   console.error("[health-records] 未处理的界面错误", { error, info, component: instance?.$?.type?.name });
+  reportClientSystemError("vue", error);
 };
 
 window.addEventListener("unhandledrejection", (event) => {
   console.error("[health-records] 未处理的异步异常", event.reason);
+  reportClientSystemError("promise", event.reason);
   useToast().show(`操作未生效，请重试（${describeTechnical(event.reason)}）`, 3600);
 });
 

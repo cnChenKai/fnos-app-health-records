@@ -12,6 +12,8 @@ export type AppRuntimeConfig = {
   appPort: number | null;
   logLevel: string;
   logDir: string;
+  logMaxBytes: number;
+  logMaxFiles: number;
   storageDir: string;
   servicePort: number;
   ocrPythonBin: string;
@@ -23,6 +25,12 @@ type PersistedRuntimeConfig = {
   servicePort?: number;
   directPort?: number;
 };
+
+function boundedInteger(value: string | undefined, fallback: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
+}
 
 function persistedConfig(storageDir: string): PersistedRuntimeConfig {
   const path = join(storageDir, "config", "runtime.json");
@@ -57,6 +65,8 @@ export function getAppConfig(): AppRuntimeConfig {
       : Number(process.env.NITRO_PORT || process.env.PORT || templateConfig.localDevPort),
     logLevel: process.env.LOG_LEVEL || templateConfig.logLevel,
     logDir: process.env.LOG_DIR || (isDevelopment ? join(developmentDataDir, "logs") : `/var/apps/${appName}/var/log`),
+    logMaxBytes: boundedInteger(process.env.APP_LOG_MAX_BYTES, 5 * 1024 * 1024, 256 * 1024, 100 * 1024 * 1024),
+    logMaxFiles: boundedInteger(process.env.APP_LOG_MAX_FILES, 5, 1, 20),
     storageDir,
     servicePort: Number(process.env.SERVICE_PORT || stored.servicePort || stored.directPort || templateConfig.localDevPort),
     ocrPythonBin: process.env.OCR_PYTHON_BIN || join(storageDir, "ocr-venv", "bin", "python"),

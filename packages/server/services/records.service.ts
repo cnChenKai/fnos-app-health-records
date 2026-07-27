@@ -1702,6 +1702,8 @@ const auditActionTitles: Record<string, string> = {
   "maintenance.regenerate_report_titles": "批量清理报告标题",
   "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图",
   "maintenance.normalize_indicators": "重新归一化历史指标",
+  "system.logs_clear": "清理系统日志",
+  "system.diagnostics_export": "导出系统诊断包",
 };
 
 const auditTargetLabels: Record<string, string> = {
@@ -1712,6 +1714,7 @@ const auditTargetLabels: Record<string, string> = {
   member: "家庭成员",
   backup: "备份",
   observation: "指标",
+  system_log: "系统日志",
 };
 
 /** 审计 detail 中的状态值统一翻译成中文，覆盖提醒/通知/报告三类状态 */
@@ -1804,6 +1807,13 @@ function userAuditDescription(
   if (typeof detail.movedPages === "number") parts.push(`合并 ${detail.movedPages} 页`);
   if (typeof detail.reportCount === "number") parts.push(`${detail.reportCount} 份报告`);
   if (typeof detail.memberCount === "number") parts.push(`${detail.memberCount} 位成员`);
+  if (typeof detail.deletedFiles === "number") parts.push(`清理 ${detail.deletedFiles} 个日志文件`);
+  if (typeof detail.freedBytes === "number") {
+    const freed = detail.freedBytes < 1024 * 1024
+      ? `${Math.round(detail.freedBytes / 1024)} KB`
+      : `${(detail.freedBytes / 1024 / 1024).toFixed(1)} MB`;
+    parts.push(`释放 ${freed}`);
+  }
   if (typeof detail.safetyBackupId === "string") parts.push(`安全备份 ${shortAuditId(detail.safetyBackupId)}`);
   if (typeof detail.updated === "number") parts.push(`更新 ${detail.updated} 条`);
   if (typeof detail.status === "string") parts.push(`状态 ${auditStatusLabels[detail.status] || detail.status}`);

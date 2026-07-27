@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
-import { Cpu, Database, Download, LoaderCircle, Save } from "@lucide/vue";
+import { CheckCircle2, Cpu, Database, Download, LoaderCircle, Save } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
@@ -229,6 +229,7 @@ onActivated(syncStatusPolling);
           @click="installOcr"
         >
           <LoaderCircle v-if="ocr?.installing" class="spin-icon" :size="17" />
+          <CheckCircle2 v-else-if="ocr?.available" :size="17" />
           <Download v-else :size="17" />
           {{ ocr?.available ? "OCR 已安装" : ocr?.installing ? "正在安装" : "安装 OCR 环境" }}
         </button>

@@ -40,3 +40,16 @@ export async function request<T>(path: string, init?: RequestInit) {
   }
   return payload.data;
 }
+
+export function reportClientSystemError(source: "vue" | "promise", cause: unknown) {
+  const detail = describeTechnical(cause).slice(0, 500);
+  if (!detail) return;
+  void fetch(apiUrl("audit/system/client"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source, detail }),
+    keepalive: true
+  }).catch(() => {
+    // A disconnected server cannot receive its own frontend diagnostic event.
+  });
+}

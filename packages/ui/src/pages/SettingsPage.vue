@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Bell, Bot, ChevronRight, ChevronsUpDown, ClipboardList, DatabaseBackup, GitMerge, Info, ServerCog, SunMoon, Trash2, UsersRound, Wrench } from "@lucide/vue";
+import { Bell, Bot, ChevronRight, ChevronsUpDown, ClipboardList, DatabaseBackup, GitMerge, Info, ScrollText, ServerCog, SunMoon, Trash2, UsersRound, Wrench } from "@lucide/vue";
 import FormSelect from "../components/FormSelect.vue";
 import MemberSwitcher from "../components/MemberSwitcher.vue";
 import { useAppContext } from "../composables/useAppContext";
@@ -57,6 +57,7 @@ const reminderBadge = computed(() => {
       <RouterLink to="/me/data"><DatabaseBackup :size="20" /><div><strong>备份与恢复</strong><span>成员清单导出，管理员可完整备份和恢复</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/audit"><ClipboardList :size="20" /><div><strong>用户操作日志</strong><span>报告、成员、提醒和维护操作记录</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/ai-audit"><Bot :size="20" /><div><strong>AI 审计</strong><span>调用次数、失败、耗时和 Token 消耗</span></div><ChevronRight :size="18" /></RouterLink>
+      <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/system-logs"><ScrollText :size="20" /><div><strong>系统日志</strong><span>运行异常、日志占用与清理</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/maintenance"><Wrench :size="20" /><div><strong>维护工具</strong><span>PDF 高清图与指标趋势整理</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/runtime"><ServerCog :size="20" /><div><strong>运行与识别</strong><span>OCR 环境、端口与任务队列</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/ai"><Bot :size="20" /><div><strong>AI 解析模型</strong><span>模型地址、密钥与视觉增强</span></div><ChevronRight :size="18" /></RouterLink>

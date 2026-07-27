@@ -137,3 +137,68 @@ test("tests the selected provider with unsaved form values", async () => {
     }
   });
 });
+
+test("returns a client error when AI test configuration is incomplete", async () => {
+  await withDatabase(async () => {
+    await assert.rejects(
+      () => testAiConnection({ provider: "deepseek", apiKey: "", textModel: "deepseek-chat" }),
+      (error: unknown) => {
+        const value = error as { status?: number; statusText?: string; message?: string };
+        return value.status === 400 && `${value.statusText} ${value.message}`.includes("API Key");
+      }
+    );
+  });
+});
+
+test("returns an actionable error when the AI provider rejects credentials", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      error: { message: "invalid api key" }
+    }), { status: 401 });
+    try {
+      await assert.rejects(
+        () => testAiConnection({
+          provider: "deepseek",
+          apiKey: "invalid-key",
+          textModel: "deepseek-chat"
+        }),
+        (error: unknown) => {
+          const value = error as { status?: number; statusText?: string; message?: string };
+          const detail = `${value.statusText} ${value.message}`;
+          return value.status === 502
+            && detail.includes("认证失败")
+            && detail.includes("invalid api key");
+        }
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("returns an actionable error when the NAS cannot resolve the AI host", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      const cause = Object.assign(new Error("getaddrinfo ENOTFOUND api.example.com"), { code: "ENOTFOUND" });
+      throw new TypeError("fetch failed", { cause });
+    };
+    try {
+      await assert.rejects(
+        () => testAiConnection({
+          provider: "deepseek",
+          baseUrl: "https://api.example.com",
+          apiKey: "test-key",
+          textModel: "deepseek-chat"
+        }),
+        (error: unknown) => {
+          const value = error as { status?: number; statusText?: string; message?: string };
+          return value.status === 502 && `${value.statusText} ${value.message}`.includes("DNS");
+        }
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

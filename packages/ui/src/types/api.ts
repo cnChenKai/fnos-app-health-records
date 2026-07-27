@@ -413,3 +413,29 @@ export type AiAuditSummary = {
   nextCursor: string | null;
   hasMore: boolean;
 };
+
+export type SystemLogItem = {
+  id: string;
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  category: string;
+  title: string;
+  detail: string;
+  metadata: string[];
+};
+
+export type SystemLogPage = {
+  items: SystemLogItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  filter: "important" | "all";
+  stats: {
+    totalBytes: number;
+    currentFileBytes: number;
+    fileCount: number;
+    archiveCount: number;
+    maxFileBytes: number;
+    maxArchiveFiles: number;
+    maxTotalBytes: number;
+  };
+};
