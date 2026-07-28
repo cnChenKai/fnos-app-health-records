@@ -198,7 +198,7 @@ npm run pack:fpk
 设备：
 
 ```bash
-appcenter-cli install-fpk fnos-app-health-records.fpk
+appcenter-cli install-fpk fnos-app-health-records-<version>.fpk
 appcenter-cli start fnos-app-health-records
 appcenter-cli stop fnos-app-health-records
 ```

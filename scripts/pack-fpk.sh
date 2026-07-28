@@ -19,8 +19,15 @@ fi
 
 mkdir -p "${DIST_DIR}"
 APP_NAME="$(awk -F= '$1 == "appname" { print $2 }' "${PACKAGE_DIR}/manifest")"
+APP_VERSION="$(node -p "require('./package.json').version")"
+if [[ ! "${APP_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+  echo "Invalid package version: ${APP_VERSION}" >&2
+  exit 1
+fi
 ROOT_FPK="${ROOT_DIR}/${APP_NAME}.fpk"
+DIST_FPK="${DIST_DIR}/${APP_NAME}-${APP_VERSION}.fpk"
 rm -f "${ROOT_FPK}"
+rm -f "${DIST_DIR}/${APP_NAME}.fpk" "${DIST_DIR}/${APP_NAME}-"*.fpk
 (
   cd "${ROOT_DIR}"
   "${FNPACK_BIN}" build --directory "${PACKAGE_DIR}"
@@ -29,6 +36,6 @@ if [ ! -f "${ROOT_FPK}" ]; then
   echo "fnpack did not produce ${APP_NAME}.fpk" >&2
   exit 1
 fi
-find "${ROOT_DIR}" -maxdepth 1 -name '*.fpk' -exec mv {} "${DIST_DIR}/" \;
+mv "${ROOT_FPK}" "${DIST_FPK}"
 
-echo "Generated fpk files in ${DIST_DIR}"
+echo "Generated ${DIST_FPK}"

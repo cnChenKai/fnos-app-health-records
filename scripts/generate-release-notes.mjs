@@ -52,7 +52,7 @@ ${bulletLines(highlights)}
 ## 发布产物
 
 - \`dist/app.tgz\`：fnOS 应用载荷归档
-- \`dist/*.fpk\`：可安装 fnOS 应用包
+- \`dist/${template.appName}-${version}.fpk\`：可安装 fnOS 应用包
 
 ## 数据库升级
 

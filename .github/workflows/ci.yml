@@ -14,14 +14,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Read package metadata
+        id: package
+        run: node -p "'version=' + require('./package.json').version" >> "$GITHUB_OUTPUT"
       - run: npm run release:ci
-      - name: Upload app.tgz artifact
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fnos-app-health-records-artifacts
+          name: fnos-app-health-records-${{ steps.package.outputs.version }}-artifacts
           path: |
             dist/app.tgz
-            dist/*.fpk
+            dist/fnos-app-health-records-${{ steps.package.outputs.version }}.fpk
             .fnos-build/package/manifest
             .fnos-build/package/ICON.PNG
           if-no-files-found: error

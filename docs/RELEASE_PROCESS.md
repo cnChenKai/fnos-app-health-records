@@ -200,7 +200,7 @@ npm run release:ci
 必须检查：
 
 - `npm run release:ci` 通过。
-- 该命令会依次执行发布元数据校验、数据库迁移校验、单元测试、类型检查、fnpack 下载、构建、包结构校验和 `.fpk` 打包。
+- 该命令会依次执行发布元数据校验、数据库迁移校验、单元测试、类型检查、fnpack 下载、构建、包结构校验和 `.fpk` 打包；最终安装包按 `fnos-app-health-records-<package.version>.fpk` 命名。
 - `.fnos-build/package/manifest` 中 `version` 与 `package.json` 一致。
 - `.fnos-build/package/manifest` 中 `sub_version` 符合预期。
 - `ICON.PNG`、`ICON_256.PNG`、`ICON_512.PNG` 尺寸正确。
@@ -268,7 +268,7 @@ npm run pack:app
   -> 回写 manifest checksum
   -> 校验 fnOS 包结构
 npm run pack:fpk
-  -> 使用 fnpack 生成 dist/*.fpk
+  -> 使用 fnpack 生成 dist/fnos-app-health-records-<version>.fpk
 ```
 
 注意：
