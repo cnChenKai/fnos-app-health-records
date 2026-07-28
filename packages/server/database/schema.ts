@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS indicator_catalog (
   trend_enabled INTEGER NOT NULL DEFAULT 1 CHECK (trend_enabled IN (0, 1)),
   explanation TEXT,
   source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'user')),
+  ai_managed INTEGER NOT NULL DEFAULT 0 CHECK (ai_managed IN (0, 1)),
   builtin_version TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -207,6 +208,8 @@ CREATE TABLE IF NOT EXISTS observation_normalizations (
   canonical_name TEXT,
   canonical_value REAL,
   canonical_unit TEXT,
+  canonical_category TEXT,
+  canonical_explanation TEXT,
   confidence REAL NOT NULL DEFAULT 0,
   quality TEXT NOT NULL CHECK (quality IN ('high', 'medium', 'low', 'excluded')),
   matched_by TEXT NOT NULL,

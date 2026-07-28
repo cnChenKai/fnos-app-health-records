@@ -1,10 +1,15 @@
 /* 修改内置指标、别名、单位或趋势规则时必须递增版本，启动维护会据此自动回填历史数据。 */
-export const builtinIndicatorVersion = "2026.07.27.1";
+import { trendPlacementFor, type TrendGroupKey, type TrendSubgroupKey } from "./trend-taxonomy";
+
+export const builtinIndicatorVersion = "2026.07.28.2";
 
 export type BuiltinIndicator = {
   canonicalKey: string;
   displayName: string;
   category: string;
+  groupKey: TrendGroupKey;
+  subgroupKey: TrendSubgroupKey | null;
+  itemOrder: number;
   specimen: "blood" | "urine" | "serum" | "plasma" | "whole_blood" | "other";
   defaultUnit: string | null;
   valueType: "numeric" | "text" | "positive_negative";
@@ -15,7 +20,9 @@ export type BuiltinIndicator = {
   explanation: string;
 };
 
-export const builtinIndicators: BuiltinIndicator[] = [
+type BuiltinIndicatorDefinition = Omit<BuiltinIndicator, "groupKey" | "subgroupKey" | "itemOrder">;
+
+const builtinIndicatorDefinitions: BuiltinIndicatorDefinition[] = [
   {
     canonicalKey: "cbc_wbc",
     displayName: "白细胞计数",
@@ -24,10 +31,146 @@ export const builtinIndicators: BuiltinIndicator[] = [
     defaultUnit: "10^9/L",
     valueType: "numeric",
     trendEnabled: true,
-    aliases: ["WBC", "白细胞", "白细胞数", "白细胞计数", "白血球"],
+    aliases: [
+      "WBC", "白细胞", "白细胞数", "白细胞数目", "白细胞总数", "白细胞总数目",
+      "白细胞计数", "白血球", "白细胞数目WBC", "白细胞计数WBC"
+    ],
     allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
     sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
     explanation: "反映血液中白细胞数量，常用于观察感染、炎症等相关变化。"
+  },
+  {
+    canonicalKey: "cbc_neutrophil_percentage",
+    displayName: "中性粒细胞百分比",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "%",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: [
+      "NEUT%", "NEU%", "中性粒细胞%", "中性粒细胞比率", "中性粒细胞比例",
+      "中性粒细胞百分比", "中性粒细胞百分率", "中性粒细胞百分数"
+    ],
+    allowedUnits: ["%"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示中性粒细胞在白细胞中的占比，通常结合白细胞计数和中性粒细胞绝对值一起观察。"
+  },
+  {
+    canonicalKey: "cbc_neutrophil_count",
+    displayName: "中性粒细胞绝对值",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "10^9/L",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["NEUT#", "NEU#", "中性粒细胞绝对值", "中性粒细胞数", "中性粒细胞计数"],
+    allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示血液中中性粒细胞的实际数量，与中性粒细胞百分比含义不同。"
+  },
+  {
+    canonicalKey: "cbc_lymphocyte_percentage",
+    displayName: "淋巴细胞百分比",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "%",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["LYM%", "LYMPH%", "淋巴细胞%", "淋巴细胞比率", "淋巴细胞比例", "淋巴细胞百分比", "淋巴细胞百分率"],
+    allowedUnits: ["%"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示淋巴细胞在白细胞中的占比，通常结合淋巴细胞绝对值一起观察。"
+  },
+  {
+    canonicalKey: "cbc_lymphocyte_count",
+    displayName: "淋巴细胞绝对值",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "10^9/L",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["LYM#", "LYMPH#", "淋巴细胞绝对值", "淋巴细胞数", "淋巴细胞计数"],
+    allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示血液中淋巴细胞的实际数量，与淋巴细胞百分比含义不同。"
+  },
+  {
+    canonicalKey: "cbc_monocyte_percentage",
+    displayName: "单核细胞百分比",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "%",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["MON%", "MONO%", "单核细胞%", "单核细胞比率", "单核细胞比例", "单核细胞百分比", "单核细胞百分率"],
+    allowedUnits: ["%"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示单核细胞在白细胞中的占比，通常结合单核细胞绝对值一起观察。"
+  },
+  {
+    canonicalKey: "cbc_monocyte_count",
+    displayName: "单核细胞绝对值",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "10^9/L",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["MON#", "MONO#", "单核细胞绝对值", "单核细胞数", "单核细胞计数"],
+    allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示血液中单核细胞的实际数量，与单核细胞百分比含义不同。"
+  },
+  {
+    canonicalKey: "cbc_eosinophil_percentage",
+    displayName: "嗜酸性粒细胞百分比",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "%",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["EO%", "EOS%", "嗜酸细胞%", "嗜酸性粒细胞%", "嗜酸细胞比率", "嗜酸性粒细胞百分比", "嗜酸性粒细胞百分率"],
+    allowedUnits: ["%"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示嗜酸性粒细胞在白细胞中的占比，通常结合绝对值一起观察。"
+  },
+  {
+    canonicalKey: "cbc_eosinophil_count",
+    displayName: "嗜酸性粒细胞绝对值",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "10^9/L",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["EO#", "EOS#", "嗜酸细胞绝对值", "嗜酸性粒细胞绝对值", "嗜酸细胞数", "嗜酸性粒细胞计数"],
+    allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示血液中嗜酸性粒细胞的实际数量，与百分比含义不同。"
+  },
+  {
+    canonicalKey: "cbc_basophil_percentage",
+    displayName: "嗜碱性粒细胞百分比",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "%",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["BAS%", "BASO%", "嗜碱细胞%", "嗜碱性粒细胞%", "嗜碱细胞比率", "嗜碱性粒细胞百分比", "嗜碱性粒细胞百分率"],
+    allowedUnits: ["%"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示嗜碱性粒细胞在白细胞中的占比，通常结合绝对值一起观察。"
+  },
+  {
+    canonicalKey: "cbc_basophil_count",
+    displayName: "嗜碱性粒细胞绝对值",
+    category: "血常规",
+    specimen: "whole_blood",
+    defaultUnit: "10^9/L",
+    valueType: "numeric",
+    trendEnabled: true,
+    aliases: ["BAS#", "BASO#", "嗜碱细胞绝对值", "嗜碱性粒细胞绝对值", "嗜碱细胞数", "嗜碱性粒细胞计数"],
+    allowedUnits: ["10^9/L", "×10^9/L", "10*9/L", "10^3/μL"],
+    sectionHints: ["血常规", "全血细胞", "五分类", "三分类"],
+    explanation: "表示血液中嗜碱性粒细胞的实际数量，与百分比含义不同。"
   },
   {
     canonicalKey: "cbc_rbc",
@@ -680,3 +823,13 @@ export const builtinIndicators: BuiltinIndicator[] = [
     explanation: "尿常规状态型指标，不默认作为折线趋势展示。"
   }
 ];
+
+export const builtinIndicators: BuiltinIndicator[] = builtinIndicatorDefinitions.map((indicator, index) => {
+  const group = trendPlacementFor({ category: indicator.category });
+  return {
+    ...indicator,
+    groupKey: group.groupKey,
+    subgroupKey: group.subgroupKey,
+    itemOrder: index + 1
+  };
+});

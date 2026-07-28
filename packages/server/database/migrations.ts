@@ -332,6 +332,47 @@ export const databaseMigrations: DatabaseMigration[] = [
           ON user_trend_pins(user_id, member_id, created_at DESC);
       `);
     }
+  },
+  {
+    version: 13,
+    name: "add_trend_indicator_metadata",
+    checksum: "manual:013-add-trend-indicator-metadata",
+    up: (db) => {
+      const columns = tableColumnNames(db, "observation_normalizations");
+      if (!columns.has("canonical_category")) {
+        db.exec("ALTER TABLE observation_normalizations ADD COLUMN canonical_category TEXT");
+      }
+      if (!columns.has("canonical_explanation")) {
+        db.exec("ALTER TABLE observation_normalizations ADD COLUMN canonical_explanation TEXT");
+      }
+      db.exec(`
+        UPDATE observation_normalizations
+        SET
+          canonical_category = COALESCE(
+            canonical_category,
+            (SELECT category FROM indicator_catalog WHERE id = observation_normalizations.indicator_id)
+          ),
+          canonical_explanation = COALESCE(
+            canonical_explanation,
+            (SELECT explanation FROM indicator_catalog WHERE id = observation_normalizations.indicator_id)
+          )
+        WHERE indicator_id IS NOT NULL;
+      `);
+    }
+  },
+  {
+    version: 14,
+    name: "add_ai_managed_indicator_catalog_flag",
+    checksum: "manual:014-add-ai-managed-indicator-catalog-flag",
+    up: (db) => {
+      const columns = tableColumnNames(db, "indicator_catalog");
+      if (!columns.has("ai_managed")) {
+        db.exec(`
+          ALTER TABLE indicator_catalog
+          ADD COLUMN ai_managed INTEGER NOT NULL DEFAULT 0 CHECK (ai_managed IN (0, 1))
+        `);
+      }
+    }
   }
 ];
 

@@ -90,3 +90,98 @@ test("backfills stale builtin indicator normalizations once per dictionary versi
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test("replaces historical AI splits for common CBC aliases during dictionary backfill", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-cbc-alias-backfill-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES ('cbc-user', '管理员', 1)").run();
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('cbc-member', '本人', 'self', 'cbc-user')
+    `).run();
+    db.prepare(`
+      INSERT INTO reports (id, member_id, title, report_type, status, report_issued_at, created_by)
+      VALUES ('cbc-report', 'cbc-member', '历史血常规', 'laboratory', 'ready', '2025-01-04', 'cbc-user')
+    `).run();
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES (?, 'cbc-report', '血常规', ?, ?, ?, ?, ?)
+    `);
+    insertObservation.run("cbc-backfill-neut", "中性粒细胞比率", "中性粒细胞比率", "52.1%", 52.1, "%");
+    insertObservation.run("cbc-backfill-wbc", "白细胞数目(WBC)", "白细胞数目(WBC)", "6.2", 6.2, "10^9/L");
+    const insertNormalization = db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, indicator_id, canonical_key, canonical_name, canonical_value, canonical_unit,
+        confidence, quality, matched_by, match_reason, excluded_reason, version
+      ) VALUES (?, NULL, ?, ?, ?, ?, 0.93, 'high', 'ai_suggestion', '历史 AI 归一化', NULL, 'indicator-normalization-old')
+    `);
+    insertNormalization.run(
+      "cbc-backfill-neut", "ai:numeric:中性粒细胞比率", "中性粒细胞比率", 52.1, "%"
+    );
+    insertNormalization.run(
+      "cbc-backfill-wbc", "ai:numeric:白细胞数目wbc", "白细胞数目(WBC)", 6.2, "10^9/L"
+    );
+    db.prepare(`
+      INSERT INTO user_trend_pins (user_id, member_id, indicator_key, unit_key)
+      VALUES
+        ('cbc-user', 'cbc-member', 'ai:numeric:中性粒细胞比率', '%'),
+        ('cbc-user', 'cbc-member', 'ai:numeric:白细胞数目wbc', '10^9/L')
+    `).run();
+    db.prepare(`
+      INSERT INTO app_settings (setting_key, value_json)
+      VALUES ('maintenance.indicator_dictionary_version', '"old-version"')
+    `).run();
+
+    const result = runIndicatorDictionaryBackfillIfNeeded();
+    assert.ok(result);
+    assert.equal(result.updated, 2);
+    assert.equal(result.pinsMigrated, 2);
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey, canonical_name AS canonicalName,
+        matched_by AS matchedBy, version
+      FROM observation_normalizations
+      ORDER BY observation_id
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string;
+      canonicalName: string;
+      matchedBy: string;
+      version: string;
+    }>;
+    assert.deepEqual(rows.map((row) => ({
+      ...row,
+      version: row.version === `indicator-normalization-${builtinIndicatorVersion}` ? "current" : row.version
+    })), [
+      {
+        observationId: "cbc-backfill-neut",
+        canonicalKey: "cbc_neutrophil_percentage",
+        canonicalName: "中性粒细胞百分比",
+        matchedBy: "builtin_alias",
+        version: "current"
+      },
+      {
+        observationId: "cbc-backfill-wbc",
+        canonicalKey: "cbc_wbc",
+        canonicalName: "白细胞计数",
+        matchedBy: "builtin_alias",
+        version: "current"
+      }
+    ]);
+    const pins = db.prepare(`
+      SELECT indicator_key AS indicatorKey, unit_key AS unitKey
+      FROM user_trend_pins
+      ORDER BY indicator_key
+    `).all() as Array<{ indicatorKey: string; unitKey: string }>;
+    assert.deepEqual(pins.map((pin) => ({ ...pin })), [
+      { indicatorKey: "cbc_neutrophil_percentage", unitKey: "%" },
+      { indicatorKey: "cbc_wbc", unitKey: "10^9/L" }
+    ]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});

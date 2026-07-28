@@ -28,6 +28,9 @@ import { schemaVersion } from "../database/schema";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import { requestWorker } from "./ocr-worker-client";
 import { isGenericReportTitle } from "./ai-extraction.service";
+import { builtinIndicators } from "../domain/indicator-dictionary/builtin-indicators";
+import { trendPlacementFor, type TrendPlacement } from "../domain/indicator-dictionary/trend-taxonomy";
+import { convertUnit } from "./indicator-normalization.service";
 import { getJobRunnerStatus, isReportJobActive, startJobRunner, stopJobRunner } from "./job-runner.service";
 import { enqueueFileGarbage } from "./file-gc.service";
 import { rebindRestoredGatewayAdministrator } from "./restore-identity.service";
@@ -1354,6 +1357,103 @@ function sourcePagesForTrendPoints(keys: Set<string>) {
   }]));
 }
 
+type TrendAttentionLevel = "abnormal" | "near_boundary";
+type TrendAttentionBoundary = "upper" | "lower";
+
+export function classifyTrendAttention(point: {
+  numericValue: number;
+  referenceLow: number | null;
+  referenceHigh: number | null;
+  abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+}) {
+  const rawLow = Number.isFinite(point.referenceLow) ? point.referenceLow : null;
+  const rawHigh = Number.isFinite(point.referenceHigh) ? point.referenceHigh : null;
+  const invalidRange = rawLow !== null && rawHigh !== null && rawHigh <= rawLow;
+  const low = invalidRange ? null : rawLow;
+  const high = invalidRange ? null : rawHigh;
+  const below = low !== null && point.numericValue < low;
+  const above = high !== null && point.numericValue > high;
+  const explicitAbnormal = ["high", "low", "abnormal"].includes(point.abnormalFlag || "");
+  if (explicitAbnormal) {
+    const boundary: TrendAttentionBoundary | null = point.abnormalFlag === "high"
+      ? "upper"
+      : point.abnormalFlag === "low" ? "lower" : null;
+    return {
+      level: "abnormal" as TrendAttentionLevel,
+      boundary,
+      reason: point.abnormalFlag === "high"
+        ? "原报告标记偏高"
+        : point.abnormalFlag === "low" ? "原报告标记偏低" : "原报告标记异常",
+      conflict: false
+    };
+  }
+  if (invalidRange) {
+    return { level: null, boundary: null, reason: null, conflict: true };
+  }
+  if (point.abnormalFlag === "normal" && (below || above)) {
+    return {
+      level: null,
+      boundary: null,
+      reason: null,
+      conflict: true
+    };
+  }
+  if (below || above) {
+    return {
+      level: "abnormal" as TrendAttentionLevel,
+      boundary: above ? "upper" as TrendAttentionBoundary : "lower" as TrendAttentionBoundary,
+      reason: above ? "数值高于报告参考上限" : "数值低于报告参考下限",
+      conflict: false
+    };
+  }
+
+  let boundary: TrendAttentionBoundary | null = null;
+  if (low !== null && high !== null && high > low && point.numericValue >= low && point.numericValue <= high) {
+    const span = high - low;
+    const lowerDistance = (point.numericValue - low) / span;
+    const upperDistance = (high - point.numericValue) / span;
+    if (Math.min(lowerDistance, upperDistance) <= 0.1) {
+      boundary = lowerDistance <= upperDistance ? "lower" : "upper";
+    }
+  } else if (high !== null && high !== 0 && point.numericValue <= high) {
+    if ((high - point.numericValue) / Math.abs(high) <= 0.1) boundary = "upper";
+  } else if (low !== null && low !== 0 && point.numericValue >= low) {
+    if ((point.numericValue - low) / Math.abs(low) <= 0.1) boundary = "lower";
+  }
+  return boundary
+    ? {
+        level: "near_boundary" as TrendAttentionLevel,
+        boundary,
+        reason: boundary === "upper" ? "本次结果接近报告参考上限" : "本次结果接近报告参考下限",
+        conflict: false
+      }
+    : { level: null, boundary: null, reason: null, conflict: false };
+}
+
+function trustedTrendAliases() {
+  const rows = getDatabase().prepare(`
+    SELECT c.canonical_key AS canonicalKey, a.alias_name AS aliasName
+    FROM indicator_aliases a
+    JOIN indicator_catalog c ON c.id = a.indicator_id
+    WHERE a.enabled = 1
+      AND a.source IN ('builtin', 'user')
+      AND a.confidence >= 0.9
+    ORDER BY c.canonical_key, a.alias_name
+  `).all() as Array<{ canonicalKey: string; aliasName: string }>;
+  const aliases = new Map<string, Set<string>>();
+  for (const row of rows) {
+    if (!aliases.has(row.canonicalKey)) aliases.set(row.canonicalKey, new Set());
+    aliases.get(row.canonicalKey)!.add(row.aliasName);
+  }
+  return aliases;
+}
+
+function placementVoteKey(value: TrendPlacement) {
+  return `${value.groupKey}\u0000${value.subgroupKey || ""}`;
+}
+
+const builtinTrendByKey = new Map(builtinIndicators.map((indicator) => [indicator.canonicalKey, indicator]));
+
 export function listTrendSeries(user: RequestUser, memberId?: string) {
   if (!user.authenticated) return [];
   if (memberId) assertMemberAccess(user, memberId);
@@ -1374,6 +1474,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       o.unit,
       o.result_text AS resultText,
       o.numeric_value AS numericValue,
+      o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh,
       o.reference_text AS referenceText,
       o.abnormal_flag AS abnormalFlag,
       o.evidence_json AS evidenceJson,
@@ -1381,11 +1483,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       n.canonical_name AS canonicalName,
       n.canonical_value AS canonicalValue,
       n.canonical_unit AS canonicalUnit,
+      n.canonical_category AS normalizationCategory,
+      n.canonical_explanation AS normalizationExplanation,
       n.quality AS normalizationQuality,
       n.confidence AS normalizationConfidence,
       n.match_reason AS normalizationReason,
       n.excluded_reason AS normalizationExcludedReason,
-      c.explanation AS canonicalExplanation,
+      c.category AS catalogCategory,
+      c.explanation AS catalogExplanation,
       r.id AS reportId,
       r.title AS reportTitle,
       r.report_type AS reportType,
@@ -1410,6 +1515,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     unit: string | null;
     resultText: string;
     numericValue: number | null;
+    referenceLow: number | null;
+    referenceHigh: number | null;
     referenceText: string | null;
     abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
     evidenceJson: string;
@@ -1417,11 +1524,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     canonicalName: string | null;
     canonicalValue: number | null;
     canonicalUnit: string | null;
+    normalizationCategory: string | null;
+    normalizationExplanation: string | null;
     normalizationQuality: "high" | "medium" | "low" | "excluded" | null;
     normalizationConfidence: number | null;
     normalizationReason: string | null;
     normalizationExcludedReason: string | null;
-    canonicalExplanation: string | null;
+    catalogCategory: string | null;
+    catalogExplanation: string | null;
     reportId: string;
     reportTitle: string;
     reportType: string;
@@ -1447,7 +1557,18 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
       trendConfidence: usesCanonical ? row.normalizationConfidence : null,
       trendReason: usesCanonical ? row.normalizationReason : "未归一化，按原始名称和单位保守展示",
-      trendExplanation: usesCanonical ? row.canonicalExplanation : null,
+      trendCategory: usesCanonical ? (row.normalizationCategory || row.catalogCategory) : null,
+      trendExplanation: usesCanonical ? (row.normalizationExplanation || row.catalogExplanation) : null,
+      trendReferenceLow: numericValue === null || row.referenceLow === null
+        ? null
+        : usesCanonical
+          ? convertUnit(row.canonicalKey!, row.referenceLow, normalizeTrendUnit(row.unit), row.canonicalUnit)
+          : row.referenceLow,
+      trendReferenceHigh: numericValue === null || row.referenceHigh === null
+        ? null
+        : usesCanonical
+          ? convertUnit(row.canonicalKey!, row.referenceHigh, normalizeTrendUnit(row.unit), row.canonicalUnit)
+          : row.referenceHigh,
       evidencePageNumber: evidence?.pageNumber || null,
       evidenceQuote: evidence?.quote || null
     };
@@ -1465,6 +1586,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       .map((row) => `${row.reportId}:${row.evidencePageNumber}`)
   );
   const sourcePages = sourcePagesForTrendPoints(pageKeys);
+  const trustedAliases = trustedTrendAliases();
   const excludedByKey = new Map<string, Array<{
     observationId: string;
     reportId: string;
@@ -1516,6 +1638,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     quality: string;
     confidence: number | null;
     explanation: string | null;
+    explanationConfidence: number;
+    fixedPlacement: TrendPlacement | null;
+    placementVotes: Map<string, { placement: TrendPlacement; count: number; maxConfidence: number }>;
+    itemOrder: number;
     matchReasons: Set<string>;
     rawNames: Set<string>;
     excludedPoints: Array<{
@@ -1551,6 +1677,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       itemName: string;
       resultText: string;
       numericValue: number;
+      referenceLow: number | null;
+      referenceHigh: number | null;
       referenceText: string | null;
       abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
       evidenceQuote: string | null;
@@ -1568,6 +1696,12 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   }>();
   for (const row of pointsWithEvidence) {
     const key = `${row.trendKey}\u0000${row.trendUnit || ""}`;
+    const builtin = builtinTrendByKey.get(row.trendKey) || null;
+    const rowPlacement = trendPlacementFor({
+      category: builtin?.category || row.trendCategory,
+      sectionName: row.sectionName,
+      reportType: row.reportType
+    });
     if (!groups.has(key)) {
       groups.set(key, {
         indicatorKey: row.trendKey,
@@ -1576,7 +1710,13 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         sectionName: row.sectionName,
         quality: row.trendQuality,
         confidence: row.trendConfidence,
-        explanation: row.trendExplanation,
+        explanation: builtin?.explanation || row.trendExplanation,
+        explanationConfidence: builtin ? 1 : Number(row.trendConfidence || 0),
+        fixedPlacement: builtin
+          ? trendPlacementFor({ category: builtin.category })
+          : null,
+        placementVotes: new Map(),
+        itemOrder: builtin?.itemOrder ?? 9999,
         matchReasons: new Set(),
         rawNames: new Set(),
         excludedPoints: excludedByKey.get(key) || [],
@@ -1584,6 +1724,22 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       });
     }
     const group = groups.get(key)!;
+    const voteKey = placementVoteKey(rowPlacement);
+    const existingVote = group.placementVotes.get(voteKey);
+    if (existingVote) {
+      existingVote.count += 1;
+      existingVote.maxConfidence = Math.max(existingVote.maxConfidence, Number(row.trendConfidence || 0));
+    } else {
+      group.placementVotes.set(voteKey, {
+        placement: rowPlacement,
+        count: 1,
+        maxConfidence: Number(row.trendConfidence || 0)
+      });
+    }
+    if (!builtin && row.trendExplanation && Number(row.trendConfidence || 0) > group.explanationConfidence) {
+      group.explanation = row.trendExplanation;
+      group.explanationConfidence = Number(row.trendConfidence || 0);
+    }
     if (row.trendReason) group.matchReasons.add(row.trendReason);
     group.rawNames.add(row.itemName);
     const sourcePage = row.evidencePageNumber
@@ -1601,6 +1757,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       itemName: row.itemName,
       resultText: row.resultText,
       numericValue: row.trendNumericValue!,
+      referenceLow: row.trendReferenceLow,
+      referenceHigh: row.trendReferenceHigh,
       referenceText: row.referenceText,
       abnormalFlag: row.abnormalFlag,
       evidenceQuote: row.evidenceQuote,
@@ -1668,15 +1826,44 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const values = points.map((point) => point.numericValue);
     const latest = points.at(-1) || null;
     const previous = points.length > 1 ? points.at(-2) || null : null;
+    const placement = group.fixedPlacement || [...group.placementVotes.values()]
+      .sort((left, right) =>
+        right.count - left.count
+        || right.maxConfidence - left.maxConfidence
+        || left.placement.groupOrder - right.placement.groupOrder
+        || left.placement.subgroupOrder - right.placement.subgroupOrder
+      )[0]?.placement || trendPlacementFor({});
+    const attention = latest
+      ? classifyTrendAttention({
+          numericValue: latest.numericValue,
+          referenceLow: latest.referenceLow,
+          referenceHigh: latest.referenceHigh,
+          abnormalFlag: latest.abnormalFlag
+        })
+      : { level: null, boundary: null, reason: null, conflict: false };
     return {
       indicatorKey: group.indicatorKey,
       name: group.name,
       unit: group.unit,
       pinned: pinnedKeys.has(`${group.indicatorKey}\u0000${group.unit || ""}`),
+      groupKey: placement.groupKey,
+      groupName: placement.groupName,
+      groupOrder: placement.groupOrder,
+      subgroupKey: placement.subgroupKey,
+      subgroupName: placement.subgroupName,
+      subgroupOrder: placement.subgroupOrder,
+      itemOrder: group.itemOrder,
       sectionName: group.sectionName,
       quality: group.quality,
       confidence: group.confidence,
       explanation: group.explanation,
+      searchAliases: [...(trustedAliases.get(group.indicatorKey) || [])]
+        .filter((alias) => alias !== group.name)
+        .slice(0, 20),
+      attentionLevel: attention.level,
+      attentionReason: attention.reason,
+      attentionBoundary: attention.boundary,
+      attentionConflict: attention.conflict,
       matchReasons: [...group.matchReasons].slice(0, 3),
       sourceNames: [...group.rawNames].slice(0, 8),
       excludedPoints: group.excludedPoints
@@ -1694,7 +1881,9 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     };
   }).sort((left, right) =>
     Number(right.pinned) - Number(left.pinned)
-    || String(right.lastDate || "").localeCompare(String(left.lastDate || ""))
+    || left.groupOrder - right.groupOrder
+    || left.subgroupOrder - right.subgroupOrder
+    || left.itemOrder - right.itemOrder
     || left.name.localeCompare(right.name, "zh-CN")
     || String(left.unit || "").localeCompare(String(right.unit || ""), "zh-CN")
   );

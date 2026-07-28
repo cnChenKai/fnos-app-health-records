@@ -1196,6 +1196,7 @@ test("uses AI fallback for indicators that are not in the builtin catalog", asyn
             observationId: "ai-fallback-numeric",
             canonicalName: "示例新数值指标",
             category: "特殊检查",
+            explanation: "用于观察示例数值随时间的变化。",
             valueType: "numeric",
             trendEnabled: true,
             canonicalUnit: "ng/mL",
@@ -1207,11 +1208,12 @@ test("uses AI fallback for indicators that are not in the builtin catalog", asyn
             observationId: "ai-fallback-text",
             canonicalName: "示例新影像发现",
             category: "影像所见",
+            explanation: "记录报告中的示例影像文字发现。",
             valueType: "text",
             trendEnabled: false,
             canonicalUnit: null,
             canonicalValue: null,
-            confidence: 0.9,
+            confidence: 0.93,
             reason: "AI 判断为文字性发现，不适合趋势"
           }
         ],
@@ -1228,8 +1230,9 @@ test("uses AI fallback for indicators that are not in the builtin catalog", asyn
 
     const rows = db.prepare(`
       SELECT observation_id AS observationId, canonical_key AS canonicalKey, canonical_name AS canonicalName,
-        canonical_value AS canonicalValue, canonical_unit AS canonicalUnit, quality, matched_by AS matchedBy,
-        excluded_reason AS excludedReason
+        canonical_value AS canonicalValue, canonical_unit AS canonicalUnit,
+        canonical_category AS canonicalCategory, canonical_explanation AS canonicalExplanation,
+        quality, matched_by AS matchedBy, excluded_reason AS excludedReason
       FROM observation_normalizations
       WHERE observation_id LIKE 'ai-fallback-%'
       ORDER BY observation_id
@@ -1239,6 +1242,8 @@ test("uses AI fallback for indicators that are not in the builtin catalog", asyn
       canonicalName: string | null;
       canonicalValue: number | null;
       canonicalUnit: string | null;
+      canonicalCategory: string | null;
+      canonicalExplanation: string | null;
       quality: string;
       matchedBy: string;
       excludedReason: string | null;
@@ -1246,7 +1251,9 @@ test("uses AI fallback for indicators that are not in the builtin catalog", asyn
     const byId = new Map(rows.map((row) => [row.observationId, row]));
     assert.equal(byId.get("ai-fallback-numeric")?.canonicalName, "示例新数值指标");
     assert.equal(byId.get("ai-fallback-numeric")?.quality, "high");
-    assert.equal(byId.get("ai-fallback-numeric")?.matchedBy, "ai_suggestion");
+    assert.equal(byId.get("ai-fallback-numeric")?.matchedBy, "ai_catalog_created");
+    assert.equal(byId.get("ai-fallback-numeric")?.canonicalCategory, "特殊检查");
+    assert.equal(byId.get("ai-fallback-numeric")?.canonicalExplanation, "用于观察示例数值随时间的变化。");
     assert.equal(byId.get("ai-fallback-text")?.canonicalName, "示例新影像发现");
     assert.equal(byId.get("ai-fallback-text")?.quality, "excluded");
     assert.match(byId.get("ai-fallback-text")?.excludedReason || "", /不适合进入折线趋势/);
@@ -1300,6 +1307,7 @@ test("keeps parenthetical measurement conditions distinct in AI normalization", 
         observationId: item.observationId,
         canonicalName: item.itemName,
         category: "血粘度",
+        explanation: "记录不同测量条件下的全血粘度。",
         valueType: "numeric",
         trendEnabled: true,
         canonicalUnit: "MPa.s",
@@ -1366,7 +1374,6 @@ test("maintenance indicator normalization only fills uncategorized observations"
         12.5, 'ng/mL', 0.93, 'high', 'ai_suggestion', '历史 AI 归一化结果', NULL, 'indicator-normalization-old'
       )
     `).run();
-
     let aiCalls = 0;
     const result = await normalizeAllObservationsWithAiFallback(manager, async () => {
       aiCalls += 1;
@@ -1427,6 +1434,10 @@ test("maintenance full renormalization clears and rebuilds all normalizations", 
         6.24, 'MPa.s', 0.93, 'high', 'ai_suggestion', '历史误并结果', NULL, 'indicator-normalization-old'
       )
     `).run();
+    db.prepare(`
+      INSERT INTO user_trend_pins (user_id, member_id, indicator_key, unit_key)
+      VALUES (?, 'records-member', 'ai:numeric:全血粘度', 'MPa.s')
+    `).run(manager.id);
 
     let aiCalls = 0;
     const result = await normalizeAllObservationsWithAiFallback(manager, async (input) => {
@@ -1439,6 +1450,7 @@ test("maintenance full renormalization clears and rebuilds all normalizations", 
           observationId: item.observationId,
           canonicalName: item.itemName,
           category: "血粘度",
+          explanation: "记录不同测量条件下的全血粘度。",
           valueType: "numeric" as const,
           trendEnabled: true,
           canonicalUnit: "MPa.s",
@@ -1455,6 +1467,7 @@ test("maintenance full renormalization clears and rebuilds all normalizations", 
 
     assert.equal(aiCalls, 1);
     assert.equal(result.ai?.applied, 1);
+    assert.equal(result.pinsMigrated, 1);
     const row = db.prepare(`
       SELECT canonical_key AS canonicalKey, canonical_name AS canonicalName
       FROM observation_normalizations
@@ -1462,6 +1475,12 @@ test("maintenance full renormalization clears and rebuilds all normalizations", 
     `).get() as { canonicalKey: string; canonicalName: string };
     assert.equal(row.canonicalName, "全血粘度（高切）");
     assert.match(row.canonicalKey, /高切/);
+    const pin = db.prepare(`
+      SELECT indicator_key AS indicatorKey, unit_key AS unitKey
+      FROM user_trend_pins WHERE user_id = ? AND member_id = 'records-member'
+    `).get(manager.id) as { indicatorKey: string; unitKey: string };
+    assert.equal(pin.indicatorKey, row.canonicalKey);
+    assert.equal(pin.unitKey, "MPa.s");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -1506,6 +1525,7 @@ test("maintenance indicator AI fallback is included in AI audit", async () => {
         observationId: input.items[0].observationId,
         canonicalName: "AI 审计指标",
         category: "特殊检查",
+        explanation: "用于验证 AI 指标说明持久化。",
         valueType: "numeric",
         trendEnabled: true,
         canonicalUnit: "U/L",

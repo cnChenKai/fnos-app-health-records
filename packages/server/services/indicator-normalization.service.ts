@@ -7,7 +7,7 @@ import { getAiSettings } from "./ai-settings.service";
 import { configuredRequestTimeout, fetchWithTimeout } from "../utils/outbound-request";
 
 const normalizationVersion = `indicator-normalization-${builtinIndicatorVersion}`;
-const aiNormalizationPromptVersion = "indicator-normalization-ai-v2";
+const aiNormalizationPromptVersion = "indicator-normalization-ai-v4";
 const maxAiFallbackItems = 50;
 
 type ObservationRow = {
@@ -62,6 +62,8 @@ export type NormalizationResult = {
   canonicalName: string | null;
   canonicalValue: number | null;
   canonicalUnit: string | null;
+  canonicalCategory: string | null;
+  canonicalExplanation: string | null;
   confidence: number;
   quality: "high" | "medium" | "low" | "excluded";
   matchedBy: string;
@@ -77,6 +79,7 @@ export type IndicatorNormalizationMaintenanceResult = {
   low: number;
   excluded: number;
   unknown: number;
+  pinsMigrated?: number;
   ai?: {
     reports: number;
     suggested: number;
@@ -97,6 +100,7 @@ export type BuiltinIndicatorBackfillResult = {
   updated: number;
   unmatched: number;
   preserved: number;
+  pinsMigrated: number;
   version: string;
 };
 
@@ -114,8 +118,10 @@ export type IndicatorNormalizationIssue = {
 
 export type AiIndicatorCandidate = {
   observationId: string;
+  existingCanonicalKey?: string | null;
   canonicalName: string | null;
   category: string | null;
+  explanation: string | null;
   valueType: "numeric" | "text" | "positive_negative" | null;
   trendEnabled: boolean | null;
   canonicalUnit: string | null;
@@ -138,7 +144,15 @@ export type AiIndicatorNormalizationResult = {
 export type AiIndicatorNormalizationInput = {
   reportId: string;
   reportType: string;
-  hospitalName: string | null;
+  catalogCandidates: Array<{
+    canonicalKey: string;
+    displayName: string;
+    category: string;
+    defaultUnit: string | null;
+    valueType: "numeric" | "text" | "positive_negative";
+    trendEnabled: boolean;
+    aliases: string[];
+  }>;
   items: Array<{
     observationId: string;
     sectionName: string | null;
@@ -162,6 +176,49 @@ function compactIndicatorKey(value: string | null | undefined) {
     .replace(/[：:，,。.;；、_\-]/g, "")
     .replace(/[＋]/g, "+")
     .trim();
+}
+
+const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率/i;
+const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
+
+/**
+ * 生成跨机构通用名称候选。只拆解形如 WBC、NEUT%、ALT 的指标代码，
+ * 不移除空腹/餐后、高切/低切、百分比/绝对值等医学条件。
+ */
+export function indicatorNameCandidates(value: string | null | undefined) {
+  const raw = (value || "").normalize("NFKC").trim();
+  if (!raw) return [];
+  const candidates = new Set<string>();
+  const add = (candidate: string | null | undefined) => {
+    const compact = compactIndicatorKey(candidate);
+    if (compact) candidates.add(compact);
+  };
+  const brackets = [...raw.matchAll(/[（(]([^（）()]*)[）)]/g)];
+  const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || ""));
+  if (protectedBracket) candidates.add(compactAiIndicatorKey(raw));
+  else add(raw);
+
+  let withoutCodes = raw;
+  for (const match of brackets) {
+    const content = (match[1] || "").trim();
+    if (!indicatorCodePattern.test(content)) continue;
+    add(content);
+    withoutCodes = withoutCodes.replace(match[0], " ");
+  }
+  if (withoutCodes !== raw) add(withoutCodes);
+
+  const prefixCode = raw.match(/^\s*([A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?)\s*[-:：/\\]?\s*([\u3400-\u9fff].*)$/);
+  if (prefixCode) {
+    add(prefixCode[1]);
+    add(prefixCode[2]);
+  }
+  const suffixCode = raw.match(/^(.+?[\u3400-\u9fff）)])\s*[-:：/\\]?\s*([A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?)\s*$/);
+  if (suffixCode) {
+    add(suffixCode[1]);
+    add(suffixCode[2]);
+  }
+  if (indicatorCodePattern.test(raw)) add(raw);
+  return [...candidates];
 }
 
 /** AI 归一化键保留括号内容：括号内的测量条件（如 高切/低切/中切）是指标本体，剥掉会把不同测量并为一个趋势系列 */
@@ -268,6 +325,29 @@ function aiCanonicalKey(candidate: AiIndicatorCandidate) {
   return name ? `ai:${valueType}:${name}` : null;
 }
 
+function canConvertIndicatorUnit(canonicalKey: string, fromUnit: string, toUnit: string) {
+  if (fromUnit === toUnit) return true;
+  const pair = `${fromUnit}->${toUnit}`;
+  if (["body_weight"].includes(canonicalKey) && ["g->kg", "kg->g"].includes(pair)) return true;
+  if (["body_height", "body_waist_circumference"].includes(canonicalKey) && ["m->cm", "cm->m"].includes(pair)) return true;
+  if (["cm->mm", "mm->cm"].includes(pair)) return true;
+  if (["lipid_tc", "lipid_hdl_c", "lipid_ldl_c", "lipid_tg", "glucose_fasting"].includes(canonicalKey)
+    && ["mg/dL->mmol/L", "mmol/L->mg/dL"].includes(pair)) return true;
+  if (canonicalKey === "cbc_hgb" && ["g/dL->g/L", "g/L->g/dL"].includes(pair)) return true;
+  return false;
+}
+
+function catalogUnitCompatible(row: ObservationRow, indicator: IndicatorRow) {
+  const rawUnit = normalizeUnit(row.unit);
+  const defaultUnit = normalizeUnit(indicator.defaultUnit);
+  if (!rawUnit || !defaultUnit) return true;
+  const builtin = builtinIndicators.find((item) => item.canonicalKey === indicator.canonicalKey) || null;
+  const allowedUnits = new Set((builtin?.allowedUnits || []).map(normalizeUnit).filter(Boolean));
+  return allowedUnits.has(rawUnit)
+    || rawUnit === defaultUnit
+    || canConvertIndicatorUnit(indicator.canonicalKey, rawUnit, defaultUnit);
+}
+
 function textHasAny(value: string, hints: string[]) {
   const compact = compactIndicatorKey(value);
   return hints.some((hint) => compact.includes(compactIndicatorKey(hint)));
@@ -278,7 +358,7 @@ function allowedUnitsFor(indicator: BuiltinIndicator | null, row: IndicatorRow |
   return new Set((builtin?.allowedUnits || []).map((unit) => normalizeUnit(unit)).filter(Boolean));
 }
 
-function convertUnit(canonicalKey: string, value: number, fromUnit: string | null, toUnit: string | null) {
+export function convertUnit(canonicalKey: string, value: number, fromUnit: string | null, toUnit: string | null) {
   if (value === null || !fromUnit || !toUnit || fromUnit === toUnit) return value;
   const lipidKeys = new Set(["lipid_tc", "lipid_hdl_c", "lipid_ldl_c"]);
   if (lipidKeys.has(canonicalKey) && fromUnit === "mg/dL" && toUnit === "mmol/L") return value / 38.67;
@@ -380,7 +460,7 @@ function candidateAliases(row: ObservationRow) {
     `${row.itemName}${row.itemCode || ""}`,
     `${row.normalizedName || ""}${row.itemCode || ""}`
   ];
-  const names = new Set(baseNames.map(compactIndicatorKey).filter(Boolean));
+  const names = new Set(baseNames.flatMap(indicatorNameCandidates).filter(Boolean));
   for (const name of [...names]) {
     const withoutTirads = name
       .replace(/c?tirads\d+[a-z]?类?/gi, "")
@@ -400,6 +480,46 @@ function candidateAliases(row: ObservationRow) {
   `).all(...names) as AliasRow[];
 }
 
+export function globalIndicatorCatalogForAi(): AiIndicatorNormalizationInput["catalogCandidates"] {
+  ensureBuiltinIndicatorCatalog();
+  const db = getDatabase();
+  const indicators = db.prepare(`
+    SELECT id, canonical_key AS canonicalKey, display_name AS displayName, category,
+      default_unit AS defaultUnit, value_type AS valueType, trend_enabled AS trendEnabled
+    FROM indicator_catalog
+    ORDER BY CASE source WHEN 'builtin' THEN 0 ELSE 1 END, display_name, canonical_key
+  `).all() as Array<{
+    id: string;
+    canonicalKey: string;
+    displayName: string;
+    category: string;
+    defaultUnit: string | null;
+    valueType: "numeric" | "text" | "positive_negative";
+    trendEnabled: number;
+  }>;
+  const aliases = db.prepare(`
+    SELECT indicator_id AS indicatorId, alias_name AS aliasName
+    FROM indicator_aliases
+    WHERE enabled = 1 AND scope = 'global'
+    ORDER BY confidence DESC, alias_name
+  `).all() as Array<{ indicatorId: string; aliasName: string }>;
+  const aliasesByIndicator = new Map<string, string[]>();
+  for (const alias of aliases) {
+    const current = aliasesByIndicator.get(alias.indicatorId) || [];
+    if (!current.includes(alias.aliasName)) current.push(alias.aliasName);
+    aliasesByIndicator.set(alias.indicatorId, current);
+  }
+  return indicators.map((indicator) => ({
+    canonicalKey: indicator.canonicalKey,
+    displayName: indicator.displayName,
+    category: indicator.category,
+    defaultUnit: normalizeUnit(indicator.defaultUnit),
+    valueType: indicator.valueType,
+    trendEnabled: indicator.trendEnabled === 1,
+    aliases: (aliasesByIndicator.get(indicator.id) || []).slice(0, 30)
+  }));
+}
+
 function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
   const aliases = candidateAliases(row);
   if (!aliases.length) {
@@ -410,6 +530,8 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
       canonicalName: null,
       canonicalValue: null,
       canonicalUnit: null,
+      canonicalCategory: null,
+      canonicalExplanation: null,
       confidence: 0,
       quality: "low",
       matchedBy: "none",
@@ -424,7 +546,12 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
   for (const alias of aliases) {
     const builtin = builtinIndicators.find((item) => item.canonicalKey === alias.canonicalKey) || null;
     const allowedUnits = allowedUnitsFor(builtin, alias);
-    const unitCompatible = !rawUnit || allowedUnits.size === 0 || allowedUnits.has(rawUnit) || rawUnit === normalizeUnit(alias.defaultUnit);
+    const defaultUnit = normalizeUnit(alias.defaultUnit);
+    const unitCompatible = !rawUnit
+      || (!defaultUnit && allowedUnits.size === 0)
+      || allowedUnits.has(rawUnit)
+      || rawUnit === defaultUnit
+      || Boolean(defaultUnit && canConvertIndicatorUnit(alias.canonicalKey, rawUnit, defaultUnit));
     const hasSectionHint = builtin ? textHasAny(context, builtin.sectionHints) : false;
     let score = 55;
     const reasons = [`名称命中「${alias.aliasName}」`];
@@ -467,6 +594,8 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
     canonicalName: selected.alias.displayName,
     canonicalValue,
     canonicalUnit,
+    canonicalCategory: selected.alias.category,
+    canonicalExplanation: selected.alias.explanation,
     confidence: Math.max(0, Math.min(1, selected.score / 100)),
     quality,
     matchedBy: selected.alias.scope === "global" ? "builtin_alias" : `${selected.alias.scope}_alias`,
@@ -481,16 +610,21 @@ export function normalizeObservation(row: ObservationRow): NormalizationResult {
 }
 
 function indicatorAiSystemPrompt() {
-  return `你是健康报告指标归一化助手，只能基于输入里的指标事实做命名归一化，不得诊断、不得解释疾病风险、不得生成治疗建议。
+  return `你是健康报告指标归一化助手，只能基于输入里的指标事实做命名归一化和通俗指标说明，不得诊断、不得解释个人疾病风险、不得预测异常、不得生成治疗或用药建议。
 返回 JSON 对象，不要 Markdown，格式为：
-{"candidates":[{"observationId":"原ID","canonicalName":"标准名称或null","category":"分类或null","valueType":"numeric|text|positive_negative","trendEnabled":true/false,"canonicalUnit":"标准单位或null","canonicalValue":数值或null,"confidence":0到1,"reason":"简短依据"}]}
+{"candidates":[{"observationId":"原ID","existingCanonicalKey":"输入目录中的标准Key或null","canonicalName":"标准名称或null","category":"分类或null","explanation":"不超过80字的通俗指标说明或null","valueType":"numeric|text|positive_negative","trendEnabled":true/false,"canonicalUnit":"标准单位或null","canonicalValue":数值或null,"confidence":0到1,"reason":"简短依据"}]}
 规则：
 1. observationId 必须原样来自输入，不能新增 ID。
-2. 只有明确是单一数值指标时 valueType=numeric 且 trendEnabled=true，例如 BMI、尿酸、内膜厚度、病毒核酸定量。
-3. 影像/超声/心电/耳鼻喉的文字发现、定性筛查、阳性发现、分级描述，valueType 应为 text 或 positive_negative，trendEnabled=false。
-4. canonicalName 使用中文常用医学报告名称，去掉左右侧、程度、分级、括号里的“定性”等修饰，保留指标本体；但括号内如果是测量条件或方法（如 高切/低切/中切、空腹/餐后、卧位/立位、吸气/呼气）必须原样保留，属于不同指标，不得省略、不得互相合并。
-5. 如果无法确定标准名称，canonicalName=null，confidence 不高于 0.5。
-6. 不输出姓名、身份证、电话、住址。`;
+2. 必须先从 catalogCandidates 选择同一医学指标；能复用时返回其 existingCanonicalKey、displayName、category、defaultUnit 和 valueType，不得仅因机构写法或英文缩写不同创建新名称。
+3. 百分比与绝对值、空腹与餐后、直接与间接、高切与低切等属于不同指标；单位不兼容时不得复用同一个 existingCanonicalKey。
+4. 只有明确是单一数值指标时 valueType=numeric 且 trendEnabled=true，例如 BMI、尿酸、病毒核酸定量。
+5. 影像/超声/心电/耳鼻喉的文字发现、定性筛查、阳性发现、分级描述，valueType 应为 text 或 positive_negative，trendEnabled=false。
+6. canonicalName 使用中文常用医学报告名称；高切/低切、空腹/餐后、卧位/立位、百分比/绝对值等测量条件必须保留。
+7. 如果无法确定标准名称，existingCanonicalKey=null、canonicalName=null，confidence 不高于 0.5。
+8. category 优先使用：基础测量、内科检查、外科检查、眼科检查、耳鼻喉检查、口腔检查、妇科检查、血常规、尿常规、肝功能、肾功能、血脂、血糖、电解质、甲状腺功能、感染及免疫、功能检查、影像检查、其他检查。
+9. explanation 只说明“该指标是什么、通常用于观察什么”，不得结合本次结果下结论；无法可靠说明时返回 null。
+10. 医院名称不参与指标归一化；同一医学指标必须跨机构使用同一个 existingCanonicalKey。
+11. 不输出姓名、身份证、电话、住址。`;
 }
 
 function parseAiJsonContent(content: string) {
@@ -498,7 +632,11 @@ function parseAiJsonContent(content: string) {
   return JSON.parse(clean) as unknown;
 }
 
-function normalizeAiIndicatorCandidates(value: unknown, allowedIds: Set<string>): AiIndicatorCandidate[] {
+function normalizeAiIndicatorCandidates(
+  value: unknown,
+  allowedIds: Set<string>,
+  allowedCanonicalKeys: Set<string>
+): AiIndicatorCandidate[] {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   const rows = Array.isArray(source.candidates) ? source.candidates : [];
   return rows.slice(0, maxAiFallbackItems).flatMap((item) => {
@@ -508,11 +646,16 @@ function normalizeAiIndicatorCandidates(value: unknown, allowedIds: Set<string>)
     if (!observationId || !allowedIds.has(observationId)) return [];
     const valueType = textValue(row.valueType, 40);
     const canonicalName = textValue(row.canonicalName, 120);
+    const requestedCanonicalKey = textValue(row.existingCanonicalKey, 160);
     const confidence = numberValue(row.confidence);
     return [{
       observationId,
+      existingCanonicalKey: requestedCanonicalKey && allowedCanonicalKeys.has(requestedCanonicalKey)
+        ? requestedCanonicalKey
+        : null,
       canonicalName,
       category: textValue(row.category, 80),
+      explanation: textValue(row.explanation, 500),
       valueType: valueType && ["numeric", "text", "positive_negative"].includes(valueType)
         ? valueType as AiIndicatorCandidate["valueType"]
         : null,
@@ -565,7 +708,11 @@ export const requestAiIndicatorNormalization: AiIndicatorExecutor = async (input
   let parsed: unknown;
   try { parsed = parseAiJsonContent(content); }
   catch { throw Object.assign(new Error("AI 指标归一化返回内容不是有效 JSON"), { code: "AI_NORMALIZE_INVALID_JSON" }); }
-  const candidates = normalizeAiIndicatorCandidates(parsed, new Set(input.items.map((item) => item.observationId)));
+  const candidates = normalizeAiIndicatorCandidates(
+    parsed,
+    new Set(input.items.map((item) => item.observationId)),
+    new Set(input.catalogCandidates.map((item) => item.canonicalKey))
+  );
   return {
     provider: new URL(settings.baseUrl).host,
     model: payload.model || settings.textModel,
@@ -578,18 +725,76 @@ export const requestAiIndicatorNormalization: AiIndicatorExecutor = async (input
   };
 };
 
+function migrateTrendPinsAfterNormalizationChange(input: {
+  memberId: string | null;
+  oldCanonicalKey: string | null;
+  oldCanonicalUnit: string | null;
+  newCanonicalKey: string | null;
+  newCanonicalUnit: string | null;
+}) {
+  if (!input.memberId || !input.oldCanonicalKey || !input.newCanonicalKey) return 0;
+  const oldUnitKey = input.oldCanonicalUnit || "";
+  const newUnitKey = input.newCanonicalUnit || "";
+  if (input.oldCanonicalKey === input.newCanonicalKey && oldUnitKey === newUnitKey) return 0;
+  const db = getDatabase();
+  const remaining = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM observation_normalizations n
+    JOIN observations o ON o.id = n.observation_id
+    JOIN reports r ON r.id = o.report_id
+    WHERE r.member_id = ?
+      AND n.canonical_key = ?
+      AND COALESCE(n.canonical_unit, '') = ?
+  `).get(input.memberId, input.oldCanonicalKey, oldUnitKey) as { count: number };
+  if (Number(remaining.count) > 0) return 0;
+  const inserted = db.prepare(`
+    INSERT OR IGNORE INTO user_trend_pins (
+      user_id, member_id, indicator_key, unit_key, created_at, updated_at
+    )
+    SELECT user_id, member_id, ?, ?, created_at, CURRENT_TIMESTAMP
+    FROM user_trend_pins
+    WHERE member_id = ? AND indicator_key = ? AND unit_key = ?
+  `).run(
+    input.newCanonicalKey,
+    newUnitKey,
+    input.memberId,
+    input.oldCanonicalKey,
+    oldUnitKey
+  );
+  db.prepare(`
+    DELETE FROM user_trend_pins
+    WHERE member_id = ? AND indicator_key = ? AND unit_key = ?
+  `).run(input.memberId, input.oldCanonicalKey, oldUnitKey);
+  return Number(inserted.changes);
+}
+
 function upsertNormalization(result: NormalizationResult) {
-  getDatabase().prepare(`
+  const db = getDatabase();
+  const previous = db.prepare(`
+    SELECT n.canonical_key AS canonicalKey, n.canonical_unit AS canonicalUnit, r.member_id AS memberId
+    FROM observation_normalizations n
+    JOIN observations o ON o.id = n.observation_id
+    JOIN reports r ON r.id = o.report_id
+    WHERE n.observation_id = ?
+  `).get(result.observationId) as {
+    canonicalKey: string | null;
+    canonicalUnit: string | null;
+    memberId: string;
+  } | undefined;
+  db.prepare(`
     INSERT INTO observation_normalizations (
       observation_id, indicator_id, canonical_key, canonical_name, canonical_value, canonical_unit,
-      confidence, quality, matched_by, match_reason, excluded_reason, version, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      canonical_category, canonical_explanation, confidence, quality, matched_by, match_reason,
+      excluded_reason, version, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(observation_id) DO UPDATE SET
       indicator_id = excluded.indicator_id,
       canonical_key = excluded.canonical_key,
       canonical_name = excluded.canonical_name,
       canonical_value = excluded.canonical_value,
       canonical_unit = excluded.canonical_unit,
+      canonical_category = excluded.canonical_category,
+      canonical_explanation = excluded.canonical_explanation,
       confidence = excluded.confidence,
       quality = excluded.quality,
       matched_by = excluded.matched_by,
@@ -604,6 +809,8 @@ function upsertNormalization(result: NormalizationResult) {
     result.canonicalName,
     result.canonicalValue,
     result.canonicalUnit,
+    result.canonicalCategory,
+    result.canonicalExplanation,
     result.confidence,
     result.quality,
     result.matchedBy,
@@ -611,6 +818,13 @@ function upsertNormalization(result: NormalizationResult) {
     result.excludedReason,
     normalizationVersion
   );
+  return migrateTrendPinsAfterNormalizationChange({
+    memberId: previous?.memberId || null,
+    oldCanonicalKey: previous?.canonicalKey || null,
+    oldCanonicalUnit: normalizeUnit(previous?.canonicalUnit),
+    newCanonicalKey: result.canonicalKey,
+    newCanonicalUnit: normalizeUnit(result.canonicalUnit)
+  });
 }
 
 function observationRowsForReport(reportId: string) {
@@ -711,12 +925,13 @@ export function backfillBuiltinIndicatorNormalizations(): BuiltinIndicatorBackfi
     updated: 0,
     unmatched: 0,
     preserved: 0,
+    pinsMigrated: 0,
     version: builtinIndicatorVersion
   };
   for (const row of rows) {
     const normalized = normalizeObservationWithReadyCatalog(row);
     if (normalized.canonicalKey) {
-      upsertNormalization(normalized);
+      result.pinsMigrated += upsertNormalization(normalized);
       result.updated += 1;
       continue;
     }
@@ -755,26 +970,210 @@ function fallbackExcludedReason(row: ObservationRow, candidate: AiIndicatorCandi
   return null;
 }
 
-function aiResultToNormalization(row: ObservationRow, candidate: AiIndicatorCandidate): NormalizationResult | null {
-  if (!candidate.canonicalName || (candidate.confidence ?? 0) < 0.7) return null;
-  const canonicalKey = aiCanonicalKey(candidate);
+function indicatorByCanonicalKey(canonicalKey: string | null | undefined) {
   if (!canonicalKey) return null;
+  return (getDatabase().prepare(`
+    SELECT id, canonical_key AS canonicalKey, display_name AS displayName, category, specimen,
+      default_unit AS defaultUnit, value_type AS valueType, trend_enabled AS trendEnabled, explanation
+    FROM indicator_catalog
+    WHERE canonical_key = ?
+  `).get(canonicalKey) as IndicatorRow | undefined) || null;
+}
+
+function findExistingCatalogIndicator(row: ObservationRow, candidate: AiIndicatorCandidate) {
+  const candidateNames = [
+    candidate.canonicalName,
+    row.normalizedName,
+    row.itemName,
+    row.itemCode
+  ].flatMap(indicatorNameCandidates);
+  const names = [...new Set(candidateNames.filter(Boolean))];
+  if (!names.length) return null;
+  const placeholders = names.map(() => "?").join(",");
+  const matches = getDatabase().prepare(`
+    SELECT c.id, c.canonical_key AS canonicalKey, c.display_name AS displayName, c.category, c.specimen,
+      c.default_unit AS defaultUnit, c.value_type AS valueType, c.trend_enabled AS trendEnabled,
+      c.explanation, a.normalized_alias AS normalizedAlias, a.confidence,
+      CASE c.source WHEN 'builtin' THEN 0 ELSE 1 END AS sourceOrder
+    FROM indicator_aliases a
+    JOIN indicator_catalog c ON c.id = a.indicator_id
+    WHERE a.enabled = 1 AND a.scope = 'global' AND a.normalized_alias IN (${placeholders})
+    ORDER BY sourceOrder, a.confidence DESC, c.display_name
+  `).all(...names) as Array<IndicatorRow & {
+    normalizedAlias: string;
+    confidence: number;
+    sourceOrder: number;
+  }>;
+  const compatible = matches.filter((match) => catalogUnitCompatible(row, match));
+  for (const name of names) {
+    const matched = compatible.find((item) => item.normalizedAlias === name);
+    if (matched) return matched;
+  }
+  return null;
+}
+
+function hasIncompatibleCatalogNameMatch(row: ObservationRow, candidate: AiIndicatorCandidate) {
+  const names = [...new Set([
+    candidate.canonicalName,
+    row.normalizedName,
+    row.itemName,
+    row.itemCode
+  ].flatMap(indicatorNameCandidates).filter(Boolean))];
+  if (!names.length) return false;
+  const placeholders = names.map(() => "?").join(",");
+  const matches = getDatabase().prepare(`
+    SELECT DISTINCT c.id, c.canonical_key AS canonicalKey, c.display_name AS displayName, c.category,
+      c.specimen, c.default_unit AS defaultUnit, c.value_type AS valueType,
+      c.trend_enabled AS trendEnabled, c.explanation
+    FROM indicator_aliases a
+    JOIN indicator_catalog c ON c.id = a.indicator_id
+    WHERE a.enabled = 1 AND a.scope = 'global' AND a.normalized_alias IN (${placeholders})
+  `).all(...names) as IndicatorRow[];
+  return matches.length > 0 && matches.every((match) => !catalogUnitCompatible(row, match));
+}
+
+function createAiManagedIndicator(row: ObservationRow, candidate: AiIndicatorCandidate) {
+  if (!candidate.canonicalName
+    || !candidate.valueType
+    || candidate.trendEnabled === null
+    || candidate.trendEnabled === undefined
+    || (candidate.confidence ?? 0) < 0.92) return null;
+  const baseKey = aiCanonicalKey(candidate);
+  if (!baseKey) return null;
+  const db = getDatabase();
   const rawUnit = normalizeUnit(row.unit);
   const canonicalUnit = normalizeUnit(candidate.canonicalUnit) || rawUnit;
+  let canonicalKey = baseKey;
+  const collision = indicatorByCanonicalKey(canonicalKey);
+  if (collision && !catalogUnitCompatible(row, collision)) {
+    const unitKey = compactAiIndicatorKey(canonicalUnit || "unitless");
+    canonicalKey = `${baseKey}:${unitKey || "unitless"}`;
+  }
+  const existing = indicatorByCanonicalKey(canonicalKey);
+  if (existing) return catalogUnitCompatible(row, existing) ? existing : null;
+  const indicatorId = createId("indicator");
+  db.prepare(`
+    INSERT INTO indicator_catalog (
+      id, canonical_key, display_name, category, specimen, default_unit, value_type,
+      trend_enabled, explanation, source, ai_managed, builtin_version, updated_at
+    ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, 'user', 1, NULL, CURRENT_TIMESTAMP)
+  `).run(
+    indicatorId,
+    canonicalKey,
+    candidate.canonicalName,
+    candidate.category || "其他检查",
+    canonicalUnit,
+    candidate.valueType,
+    candidate.trendEnabled ? 1 : 0,
+    candidate.explanation
+  );
+  return indicatorByCanonicalKey(canonicalKey);
+}
+
+function upsertGlobalAiAliases(indicatorId: string, row: ObservationRow, candidate: AiIndicatorCandidate) {
+  const confidence = Math.max(0, Math.min(1, candidate.confidence ?? 0));
+  if (confidence < 0.92) return 0;
+  const rawAliases = [
+    candidate.canonicalName,
+    row.itemName,
+    row.normalizedName,
+    row.itemCode
+  ].filter((value): value is string => Boolean(value?.trim()));
+  const aliases = new Map<string, string>();
+  for (const aliasName of rawAliases) {
+    for (const normalizedAlias of indicatorNameCandidates(aliasName)) {
+      if (normalizedAlias.length < 2) continue;
+      if (!aliases.has(normalizedAlias)) aliases.set(normalizedAlias, aliasName.trim());
+    }
+  }
+  const db = getDatabase();
+  const findAlias = db.prepare(`
+    SELECT id, indicator_id AS indicatorId, source
+    FROM indicator_aliases
+    WHERE normalized_alias = ? AND scope = 'global' AND enabled = 1
+    ORDER BY confidence DESC
+  `);
+  const insertAlias = db.prepare(`
+    INSERT INTO indicator_aliases (
+      id, indicator_id, alias_name, normalized_alias, scope, source, confidence, enabled, updated_at
+    ) VALUES (?, ?, ?, ?, 'global', 'ai_suggestion', ?, 1, CURRENT_TIMESTAMP)
+  `);
+  const updateAlias = db.prepare(`
+    UPDATE indicator_aliases
+    SET alias_name = ?, confidence = MAX(confidence, ?), updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND source = 'ai_suggestion'
+  `);
+  let changed = 0;
+  for (const [normalizedAlias, aliasName] of aliases) {
+    const existing = findAlias.all(normalizedAlias) as Array<{
+      id: string;
+      indicatorId: string;
+      source: string;
+    }>;
+    if (existing.some((alias) => alias.indicatorId !== indicatorId)) continue;
+    const same = existing.find((alias) => alias.indicatorId === indicatorId);
+    if (same) {
+      if (same.source === "ai_suggestion") changed += Number(updateAlias.run(aliasName, confidence, same.id).changes);
+      continue;
+    }
+    changed += Number(insertAlias.run(createId("alias"), indicatorId, aliasName, normalizedAlias, confidence).changes);
+  }
+  return changed;
+}
+
+function aiResultToNormalization(row: ObservationRow, candidate: AiIndicatorCandidate): NormalizationResult | null {
+  if ((candidate.confidence ?? 0) < 0.7) return null;
+  let indicator = indicatorByCanonicalKey(candidate.existingCanonicalKey);
+  const rejectedExistingCanonicalKey = Boolean(indicator && !catalogUnitCompatible(row, indicator));
+  let matchedBy = "ai_catalog";
+  let matchReason = candidate.reason || "AI 从全局指标目录中选择了同一医学指标";
+  if (rejectedExistingCanonicalKey) {
+    indicator = null;
+    matchReason = "AI 返回的全局指标单位不兼容，已拒绝复用";
+  }
+  if (!indicator) {
+    indicator = findExistingCatalogIndicator(row, candidate);
+    if (indicator) {
+      matchedBy = "ai_catalog_alias";
+      matchReason = candidate.reason || "AI 建议名称命中已有全局指标别名";
+    }
+  }
+  if (!indicator) {
+    if (rejectedExistingCanonicalKey || hasIncompatibleCatalogNameMatch(row, candidate)) return null;
+    indicator = createAiManagedIndicator(row, candidate);
+    matchedBy = "ai_catalog_created";
+    matchReason = candidate.reason || "AI 高置信识别为新指标，已加入全局指标目录";
+  }
+  if (!indicator) return null;
+  if (!catalogUnitCompatible(row, indicator)) return null;
+  const rawUnit = normalizeUnit(row.unit);
+  const canonicalUnit = normalizeUnit(indicator.defaultUnit) || normalizeUnit(candidate.canonicalUnit) || rawUnit;
   const numericValue = candidate.canonicalValue ?? row.numericValue ?? parseNumericResultText(row.resultText);
-  const quality = fallbackQuality(row, candidate);
+  const catalogCandidate: AiIndicatorCandidate = {
+    ...candidate,
+    canonicalName: indicator.displayName,
+    category: indicator.category,
+    explanation: indicator.explanation,
+    valueType: indicator.valueType,
+    trendEnabled: indicator.trendEnabled === 1,
+    canonicalUnit
+  };
+  const quality = fallbackQuality(row, catalogCandidate);
+  upsertGlobalAiAliases(indicator.id, row, catalogCandidate);
   return {
     observationId: row.id,
-    indicatorId: null,
-    canonicalKey,
-    canonicalName: candidate.canonicalName,
-    canonicalValue: numericValue === null ? null : convertUnit(canonicalKey, numericValue, rawUnit, canonicalUnit),
+    indicatorId: indicator.id,
+    canonicalKey: indicator.canonicalKey,
+    canonicalName: indicator.displayName,
+    canonicalValue: numericValue === null ? null : convertUnit(indicator.canonicalKey, numericValue, rawUnit, canonicalUnit),
     canonicalUnit,
+    canonicalCategory: indicator.category,
+    canonicalExplanation: indicator.explanation,
     confidence: Math.max(0, Math.min(1, candidate.confidence ?? 0)),
     quality,
-    matchedBy: "ai_suggestion",
-    matchReason: candidate.reason || "AI 根据指标名称、单位、结果和报告上下文建议归一化",
-    excludedReason: quality === "excluded" ? fallbackExcludedReason(row, candidate) : null
+    matchedBy,
+    matchReason,
+    excludedReason: quality === "excluded" ? fallbackExcludedReason(row, catalogCandidate) : null
   };
 }
 
@@ -886,7 +1285,7 @@ export async function normalizeReportObservationsWithAiFallback(
   const input: AiIndicatorNormalizationInput = {
     reportId,
     reportType: report.reportType,
-    hospitalName: report.hospitalName,
+    catalogCandidates: globalIndicatorCatalogForAi(),
     items: rows.map((row) => ({
       observationId: row.id,
       sectionName: row.sectionName,
@@ -943,7 +1342,7 @@ async function normalizePendingReportObservationsWithAiFallback(
   const input: AiIndicatorNormalizationInput = {
     reportId,
     reportType: report.reportType,
-    hospitalName: report.hospitalName,
+    catalogCandidates: globalIndicatorCatalogForAi(),
     items: rows.map((row) => ({
       observationId: row.id,
       sectionName: row.sectionName,
@@ -1021,6 +1420,72 @@ export function normalizeAllObservations(user: RequestUser): IndicatorNormalizat
   return total;
 }
 
+type TrendPinMigrationSnapshot = {
+  observationId: string;
+  memberId: string;
+  canonicalKey: string;
+  canonicalUnit: string | null;
+};
+
+function snapshotTrendPinMappings(): TrendPinMigrationSnapshot[] {
+  return getDatabase().prepare(`
+    SELECT n.observation_id AS observationId, r.member_id AS memberId,
+      n.canonical_key AS canonicalKey, n.canonical_unit AS canonicalUnit
+    FROM observation_normalizations n
+    JOIN observations o ON o.id = n.observation_id
+    JOIN reports r ON r.id = o.report_id
+    WHERE n.canonical_key IS NOT NULL
+  `).all() as TrendPinMigrationSnapshot[];
+}
+
+function migrateTrendPinsFromFullNormalization(snapshot: TrendPinMigrationSnapshot[]) {
+  if (!snapshot.length) return 0;
+  const oldByObservation = new Map(snapshot.map((row) => [row.observationId, row]));
+  const mappings = new Map<string, {
+    memberId: string;
+    oldCanonicalKey: string;
+    oldCanonicalUnit: string | null;
+    targets: Set<string>;
+  }>();
+  const current = getDatabase().prepare(`
+    SELECT n.observation_id AS observationId, n.canonical_key AS canonicalKey,
+      n.canonical_unit AS canonicalUnit
+    FROM observation_normalizations n
+    WHERE n.canonical_key IS NOT NULL
+  `).all() as Array<{
+    observationId: string;
+    canonicalKey: string;
+    canonicalUnit: string | null;
+  }>;
+  for (const row of current) {
+    const old = oldByObservation.get(row.observationId);
+    if (!old) continue;
+    const sourceKey = JSON.stringify([old.memberId, old.canonicalKey, normalizeUnit(old.canonicalUnit) || ""]);
+    const targetKey = JSON.stringify([row.canonicalKey, normalizeUnit(row.canonicalUnit) || ""]);
+    const mapping = mappings.get(sourceKey) || {
+      memberId: old.memberId,
+      oldCanonicalKey: old.canonicalKey,
+      oldCanonicalUnit: normalizeUnit(old.canonicalUnit),
+      targets: new Set<string>()
+    };
+    mapping.targets.add(targetKey);
+    mappings.set(sourceKey, mapping);
+  }
+  let migrated = 0;
+  for (const mapping of mappings.values()) {
+    if (mapping.targets.size !== 1) continue;
+    const [newCanonicalKey, newCanonicalUnit] = JSON.parse([...mapping.targets][0]) as [string, string];
+    migrated += migrateTrendPinsAfterNormalizationChange({
+      memberId: mapping.memberId,
+      oldCanonicalKey: mapping.oldCanonicalKey,
+      oldCanonicalUnit: mapping.oldCanonicalUnit,
+      newCanonicalKey,
+      newCanonicalUnit: newCanonicalUnit || null
+    });
+  }
+  return migrated;
+}
+
 export async function normalizeAllObservationsWithAiFallback(
   user: RequestUser,
   executor: AiIndicatorExecutor = requestAiIndicatorNormalization,
@@ -1032,6 +1497,7 @@ export async function normalizeAllObservationsWithAiFallback(
 ): Promise<IndicatorNormalizationMaintenanceResult> {
   if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
+  const trendPinSnapshot = options?.full ? snapshotTrendPinMappings() : [];
   /* 全量重跑：清空已有归一化结果（含 AI 兜底写错的），让字典和 AI 兜底重新整理所有指标 */
   if (options?.full) {
     getDatabase().prepare("DELETE FROM observation_normalizations").run();
@@ -1077,6 +1543,7 @@ export async function normalizeAllObservationsWithAiFallback(
       result: total
     });
   }
+  if (options?.full) total.pinsMigrated = migrateTrendPinsFromFullNormalization(trendPinSnapshot);
   getDatabase().prepare(`
     INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
     VALUES (?, ?, 'maintenance.normalize_indicators', 'observation', NULL, ?)

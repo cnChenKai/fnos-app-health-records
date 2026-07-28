@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { Activity, ChartNoAxesCombined, ChevronRight, FileText, Pin, Search } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  Activity,
+  ChartNoAxesCombined,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  FileText,
+  Pin,
+  Search,
+  X
+} from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
+import { matchTrendSearch } from "../utils/trends";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
 import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
@@ -19,6 +30,11 @@ const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
 const query = ref("");
 const groupFilter = ref("all");
+const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
+const collapsedGroups = ref(new Set<string>());
+const attentionPreviewExpanded = ref(false);
+const detailPopoverStyle = ref<Record<string, string>>({});
+const detailPopoverPlacement = ref<"above" | "below">("below");
 const previewReportId = ref<string | null>(null);
 const activeDetailKey = ref<string | null>(null);
 const pinPendingKeys = ref(new Set<string>());
@@ -44,36 +60,134 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
   }];
 });
 
-const groupOptions = [
+const groupOptions = computed(() => [
   { value: "all", label: "全部分组" },
-  { value: "blood", label: "血常规" },
-  { value: "liver", label: "肝功能" },
-  { value: "renal", label: "肾功能" },
-  { value: "lipid", label: "血脂" },
-  { value: "glucose", label: "血糖" },
-  { value: "urine", label: "尿常规" },
-  { value: "thyroid", label: "甲状腺" },
-  { value: "ultrasound", label: "超声/影像" },
-  { value: "infectious", label: "感染筛查" },
-  { value: "other", label: "其他" }
+  ...Array.from(new Map(
+    [...series.value]
+      .sort(compareTrendSeries)
+      .map((item) => [item.groupKey, { value: item.groupKey, label: item.groupName }])
+  ).values())
+]);
+const groupLabels = computed(() => Object.fromEntries(groupOptions.value.map((item) => [item.value, item.label])));
+const attentionOptions = [
+  { value: "all", label: "全部状态" },
+  { value: "attention", label: "需要关注" },
+  { value: "abnormal", label: "报告已标异常" },
+  { value: "near_boundary", label: "接近参考边界" },
+  { value: "unflagged", label: "未列入关注" }
 ];
 
-const groupLabels = Object.fromEntries(groupOptions.map((item) => [item.value, item.label]));
+function matchingAlias(item: TrendSeries) {
+  return matchTrendSearch(item, query.value).alias;
+}
+
 const filteredSeries = computed(() => {
-  const keyword = query.value.trim().toLocaleLowerCase();
   return series.value.filter((item) => {
-    const group = trendGroup(item);
-    if (groupFilter.value !== "all" && group !== groupFilter.value) return false;
-    if (!keyword) return true;
-    return [item.name, item.sectionName, item.unit, ...item.sourceNames]
-      .some((value) => value?.toLocaleLowerCase().includes(keyword));
+    if (groupFilter.value !== "all" && item.groupKey !== groupFilter.value) return false;
+    if (attentionFilter.value === "attention" && !item.attentionLevel) return false;
+    if (attentionFilter.value === "unflagged" && item.attentionLevel) return false;
+    if (
+      attentionFilter.value !== "all"
+      && attentionFilter.value !== "attention"
+      && attentionFilter.value !== "unflagged"
+      && item.attentionLevel !== attentionFilter.value
+    ) return false;
+    return matchTrendSearch(item, query.value).matches;
   });
 });
+
+type TrendSection = {
+  key: string;
+  name: string;
+  order: number;
+  pinned: boolean;
+  items: TrendSeries[];
+  abnormalCount: number;
+  subgroups: Array<{ key: string; name: string; order: number; items: TrendSeries[] }>;
+};
+
+const trendSections = computed<TrendSection[]>(() => {
+  const result: TrendSection[] = [];
+  const pinned = filteredSeries.value.filter((item) => item.pinned).sort(compareTrendSeries);
+  if (pinned.length) {
+    result.push({
+      key: "pinned",
+      name: "我的关注",
+      order: 0,
+      pinned: true,
+      items: pinned,
+      abnormalCount: pinned.filter((item) => item.attentionLevel === "abnormal").length,
+      subgroups: []
+    });
+  }
+  const standardItems = filteredSeries.value.filter((item) => !item.pinned);
+  const grouped = new Map<string, TrendSection>();
+  for (const item of standardItems) {
+    if (!grouped.has(item.groupKey)) {
+      grouped.set(item.groupKey, {
+        key: item.groupKey,
+        name: item.groupName,
+        order: item.groupOrder,
+        pinned: false,
+        items: [],
+        abnormalCount: 0,
+        subgroups: []
+      });
+    }
+    const section = grouped.get(item.groupKey)!;
+    section.items.push(item);
+    if (item.attentionLevel === "abnormal") section.abnormalCount += 1;
+  }
+  for (const section of grouped.values()) {
+    section.items.sort(compareTrendSeries);
+    if (section.key === "laboratory") {
+      const subgroups = new Map<string, { key: string; name: string; order: number; items: TrendSeries[] }>();
+      for (const item of section.items) {
+        const key = item.subgroupKey || "laboratory_other";
+        if (!subgroups.has(key)) {
+          subgroups.set(key, {
+            key,
+            name: item.subgroupName || "其他检验",
+            order: item.subgroupOrder,
+            items: []
+          });
+        }
+        subgroups.get(key)!.items.push(item);
+      }
+      section.subgroups = [...subgroups.values()].sort((left, right) => left.order - right.order);
+    }
+    result.push(section);
+  }
+  return result.sort((left, right) => left.order - right.order);
+});
+
+const attentionItems = computed(() => series.value
+  .filter((item) => item.attentionLevel)
+  .sort((left, right) =>
+    Number(right.attentionLevel === "abnormal") - Number(left.attentionLevel === "abnormal")
+    || compareTrendSeries(left, right)
+  ));
+const attentionCounts = computed(() => ({
+  abnormal: attentionItems.value.filter((item) => item.attentionLevel === "abnormal").length,
+  nearBoundary: attentionItems.value.filter((item) => item.attentionLevel === "near_boundary").length
+}));
+const attentionPreview = computed(() => attentionItems.value.slice(0, 5));
+const hasActiveFilters = computed(() =>
+  Boolean(query.value.trim()) || groupFilter.value !== "all" || attentionFilter.value !== "all"
+);
+
 const filterSummary = computed(() => {
   if (!series.value.length) return "";
-  const group = groupFilter.value === "all" ? "" : ` · ${groupLabels[groupFilter.value] || "当前分组"}`;
+  const group = groupFilter.value === "all" ? "" : ` · ${groupLabels.value[groupFilter.value] || "当前分组"}`;
   const keyword = query.value.trim() ? ` · “${query.value.trim()}”` : "";
-  return `显示 ${filteredSeries.value.length} / ${series.value.length} 项${group}${keyword}`;
+  const attention = attentionFilter.value === "abnormal"
+    ? " · 报告已标异常"
+    : attentionFilter.value === "near_boundary"
+      ? " · 接近参考边界"
+      : attentionFilter.value === "attention"
+        ? " · 需要关注"
+        : attentionFilter.value === "unflagged" ? " · 未列入关注" : "";
+  return `显示 ${filteredSeries.value.length} / ${series.value.length} 项${group}${attention}${keyword}`;
 });
 
 async function load(memberId: string, silent = false) {
@@ -90,7 +204,9 @@ async function load(memberId: string, silent = false) {
 
 function compareTrendSeries(left: TrendSeries, right: TrendSeries) {
   return Number(right.pinned) - Number(left.pinned)
-    || String(right.lastDate || "").localeCompare(String(left.lastDate || ""))
+    || left.groupOrder - right.groupOrder
+    || left.subgroupOrder - right.subgroupOrder
+    || left.itemOrder - right.itemOrder
     || left.name.localeCompare(right.name, "zh-CN")
     || String(left.unit || "").localeCompare(String(right.unit || ""), "zh-CN");
 }
@@ -201,18 +317,67 @@ function qualityLabel(value: TrendSeries["quality"]) {
   }[value] || "原始展示";
 }
 
-function trendGroup(item: TrendSeries) {
-  const text = [item.sectionName, item.name, ...item.sourceNames].filter(Boolean).join(" ").toLocaleLowerCase();
-  if (/血常规|血液常规|全血|白细胞|红细胞|血红蛋白|血小板|中性粒|淋巴|单核|嗜酸|嗜碱|cbc/.test(text)) return "blood";
-  if (/肝功能|谷丙|谷草|转氨酶|胆红素|白蛋白|球蛋白|总蛋白|碱性磷酸酶|谷氨酰|肝/.test(text)) return "liver";
-  if (/肾功能|肌酐|尿素|尿酸|胱抑素|肾小球|肾/.test(text)) return "renal";
-  if (/血脂|胆固醇|甘油三酯|低密度|高密度|载脂蛋白|脂蛋白/.test(text)) return "lipid";
-  if (/血糖|葡萄糖|糖化血红蛋白|胰岛素|c肽|glu|hba1c/.test(text)) return "glucose";
-  if (/尿常规|尿液|尿蛋白|尿糖|尿酮|尿胆|尿潜血|尿比重|尿ph|白细胞酯酶/.test(text)) return "urine";
-  if (/甲状腺|tsh|游离三碘|游离甲状腺素|甲状腺素|促甲状腺|甲功/.test(text)) return "thyroid";
-  if (/超声|影像|彩超|ct|磁共振|mri|dr|x线|结节|斑块|脂肪肝|钙化灶|内膜|卵巢|子宫/.test(text)) return "ultrasound";
-  if (/乙肝|丙肝|梅毒|艾滋|hiv|hbsag|抗体|抗原|病毒|dna|rna|感染/.test(text)) return "infectious";
-  return "other";
+function attentionLabel(item: TrendSeries) {
+  return item.attentionLevel === "abnormal" ? "报告已标异常" : "接近参考边界";
+}
+
+function latestPoint(item: TrendSeries) {
+  return item.points[item.points.length - 1] || null;
+}
+
+function referenceSummary(point: TrendPoint | null) {
+  if (!point) return "参考范围待整理";
+  if (point.referenceText) return `参考 ${point.referenceText}`;
+  if (point.referenceLow !== null && point.referenceHigh !== null) {
+    return `参考 ${formatNumber(point.referenceLow)} - ${formatNumber(point.referenceHigh)}`;
+  }
+  if (point.referenceHigh !== null) return `参考 ≤ ${formatNumber(point.referenceHigh)}`;
+  if (point.referenceLow !== null) return `参考 ≥ ${formatNumber(point.referenceLow)}`;
+  return "参考范围待整理";
+}
+
+function cardDomId(item: TrendSeries) {
+  const value = seriesKey(item);
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `trend-card-${(hash >>> 0).toString(36)}`;
+}
+
+function sectionClusters(section: TrendSection) {
+  return section.subgroups.length
+    ? section.subgroups
+    : [{ key: `${section.key}-all`, name: "", order: 0, items: section.items }];
+}
+
+function groupExpanded(section: TrendSection) {
+  return Boolean(query.value.trim() || attentionFilter.value !== "all")
+    || !collapsedGroups.value.has(section.key);
+}
+
+function toggleGroup(section: TrendSection) {
+  const next = new Set(collapsedGroups.value);
+  if (next.has(section.key)) next.delete(section.key);
+  else next.add(section.key);
+  collapsedGroups.value = next;
+}
+
+function selectAttention(level: "attention" | "abnormal" | "near_boundary") {
+  attentionFilter.value = attentionFilter.value === level ? "all" : level;
+}
+
+async function focusTrendItem(item: TrendSeries) {
+  query.value = "";
+  groupFilter.value = "all";
+  attentionFilter.value = "all";
+  const sectionKey = item.pinned ? "pinned" : item.groupKey;
+  const next = new Set(collapsedGroups.value);
+  next.delete(sectionKey);
+  collapsedGroups.value = next;
+  await nextTick();
+  document.getElementById(cardDomId(item))?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function deltaText(item: TrendSeries) {
@@ -265,9 +430,48 @@ function detailsOpen(item: TrendSeries) {
   return activeDetailKey.value === seriesKey(item);
 }
 
-function toggleDetails(item: TrendSeries) {
+function closeDetails() {
+  activeDetailKey.value = null;
+  detailPopoverStyle.value = {};
+}
+
+function toggleDetails(item: TrendSeries, event: MouseEvent) {
   const key = seriesKey(item);
-  activeDetailKey.value = activeDetailKey.value === key ? null : key;
+  if (activeDetailKey.value === key) {
+    closeDetails();
+    return;
+  }
+
+  const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const mobile = window.matchMedia("(max-width: 760px)").matches;
+  const horizontalMargin = mobile ? 12 : 16;
+  const topInset = mobile ? 70 : 12;
+  const bottomInset = mobile ? 82 : 12;
+  const gap = 8;
+  const width = Math.min(360, window.innerWidth - horizontalMargin * 2);
+  const preferredHeight = Math.min(mobile ? 560 : 420, window.innerHeight * (mobile ? 0.66 : 0.62));
+  const availableBelow = window.innerHeight - bottomInset - anchor.bottom - gap;
+  const availableAbove = anchor.top - topInset - gap;
+  const placement = availableBelow >= Math.min(preferredHeight, 260) || availableBelow >= availableAbove
+    ? "below"
+    : "above";
+  const availableHeight = placement === "below" ? availableBelow : availableAbove;
+  const maxHeight = Math.max(96, Math.min(preferredHeight, availableHeight));
+  const left = Math.max(
+    horizontalMargin,
+    Math.min(anchor.right - width, window.innerWidth - horizontalMargin - width)
+  );
+
+  detailPopoverPlacement.value = placement;
+  detailPopoverStyle.value = {
+    left: `${left}px`,
+    width: `${width}px`,
+    maxHeight: `${maxHeight}px`,
+    ...(placement === "below"
+      ? { top: `${anchor.bottom + gap}px`, bottom: "auto" }
+      : { top: "auto", bottom: `${window.innerHeight - anchor.top + gap}px` })
+  };
+  activeDetailKey.value = key;
 }
 
 function openReport(reportId: string) {
@@ -313,9 +517,12 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   load(memberId).catch(() => {});
 }, { immediate: true });
 
-watch([query, groupFilter], () => {
-  activeDetailKey.value = null;
+watch([query, groupFilter, attentionFilter], () => {
+  closeDetails();
 });
+
+onMounted(() => window.addEventListener("resize", closeDetails, { passive: true }));
+onBeforeUnmount(() => window.removeEventListener("resize", closeDetails));
 </script>
 
 <template>
@@ -328,29 +535,108 @@ watch([query, groupFilter], () => {
     </p>
     <EmptyState v-else-if="!series.length" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
     <template v-else>
+      <section v-if="attentionItems.length" class="trend-attention-panel">
+        <header class="trend-attention-header">
+          <div>
+            <span class="item-icon alert"><CircleAlert :size="19" /></span>
+            <div><strong>需要关注</strong><small>依据最新报告的异常标记和参考范围整理</small></div>
+          </div>
+          <div class="trend-attention-actions">
+            <button type="button" @click="selectAttention('attention')">查看全部</button>
+            <button
+              v-if="attentionPreview.length"
+              class="trend-attention-expand"
+              type="button"
+              :title="attentionPreviewExpanded ? '收起关注指标' : '展开关注指标'"
+              :aria-label="attentionPreviewExpanded ? '收起关注指标' : '展开关注指标'"
+              :aria-expanded="attentionPreviewExpanded"
+              @click="attentionPreviewExpanded = !attentionPreviewExpanded"
+            >
+              <ChevronDown :size="17" :class="{ collapsed: !attentionPreviewExpanded }" />
+            </button>
+          </div>
+        </header>
+        <div class="trend-attention-stats">
+          <button
+            type="button"
+            :class="{ active: attentionFilter === 'abnormal' }"
+            @click="selectAttention('abnormal')"
+          >
+            <strong>{{ attentionCounts.abnormal }}</strong><span>报告已标异常</span>
+          </button>
+          <button
+            type="button"
+            :class="{ active: attentionFilter === 'near_boundary' }"
+            @click="selectAttention('near_boundary')"
+          >
+            <strong>{{ attentionCounts.nearBoundary }}</strong><span>接近参考边界</span>
+          </button>
+        </div>
+        <div v-if="attentionPreviewExpanded" class="trend-attention-list">
+          <button
+            v-for="item in attentionPreview"
+            :key="`attention-${seriesKey(item)}`"
+            type="button"
+            @click="focusTrendItem(item)"
+          >
+            <span><strong>{{ item.name }}</strong><small>{{ item.attentionReason }}</small></span>
+            <span class="trend-attention-value">{{ formatNumber(item.latestValue) }}{{ item.unit || "" }}<ChevronRight :size="16" /></span>
+          </button>
+        </div>
+      </section>
       <div class="trend-filter-row">
         <label class="search-field trend-search-field">
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
         </label>
-        <FormSelect v-model="groupFilter" class="trend-group-select records-filter-select" :options="groupOptions" aria-label="类型分组" />
+        <FormSelect v-model="groupFilter" class="trend-group-select records-filter-select" :options="groupOptions" aria-label="体检分组" />
+        <FormSelect v-model="attentionFilter" class="trend-status-select records-filter-select" :options="attentionOptions" aria-label="指标状态" />
       </div>
-      <p class="trend-filter-summary">{{ filterSummary }}</p>
+      <p v-if="hasActiveFilters" class="trend-filter-summary">{{ filterSummary }}</p>
       <EmptyState
         v-if="!filteredSeries.length"
         title="没有符合条件的指标"
-        description="换个指标名或类型分组试试，也可以等待更多报告完成整理。"
+        description="换个指标名、体检分组或指标状态试试，也可以等待更多报告完成整理。"
       />
-      <div v-else class="trend-list">
-        <article v-for="item in filteredSeries" :key="`${item.indicatorKey}-${item.unit}`" class="trend-card">
+      <div v-else class="trend-sections">
+        <section v-for="section in trendSections" :key="section.key" class="trend-section">
+          <button
+            class="trend-section-header"
+            type="button"
+            :aria-expanded="groupExpanded(section)"
+            @click="toggleGroup(section)"
+          >
+            <span>
+              <Pin v-if="section.pinned" :size="18" fill="currentColor" />
+              <strong>{{ section.name }}</strong>
+              <small>{{ section.items.length }} 项</small>
+              <em v-if="section.abnormalCount">{{ section.abnormalCount }} 项异常</em>
+            </span>
+            <ChevronDown :size="19" :class="{ collapsed: !groupExpanded(section) }" />
+          </button>
+          <div v-if="groupExpanded(section)" class="trend-section-body">
+            <section v-for="cluster in sectionClusters(section)" :key="cluster.key" class="trend-subsection">
+              <h3 v-if="cluster.name">{{ cluster.name }}<small>{{ cluster.items.length }} 项</small></h3>
+              <div class="trend-list">
+                <article
+                  v-for="item in cluster.items"
+                  :id="cardDomId(item)"
+                  :key="`${item.indicatorKey}-${item.unit}`"
+                  class="trend-card"
+                  :class="item.attentionLevel ? ['attention', item.attentionLevel] : []"
+                >
           <header class="trend-card-header">
             <span class="item-icon"><Activity :size="19" /></span>
             <div>
               <div class="trend-title-row">
                 <strong>{{ item.name }}</strong>
                 <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
+                <em v-if="item.attentionLevel" class="trend-attention-badge" :class="item.attentionLevel">
+                  {{ attentionLabel(item) }}
+                </em>
               </div>
-              <span>{{ item.sectionName || "未分组" }} · {{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
+              <span>{{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
+              <small v-if="matchingAlias(item)" class="trend-match-alias">匹配名称：{{ matchingAlias(item) }}</small>
             </div>
             <button
               class="trend-pin-button"
@@ -404,38 +690,63 @@ watch([query, groupFilter], () => {
                 class="trend-detail-toggle"
                 type="button"
                 :aria-expanded="detailsOpen(item)"
-                @click="toggleDetails(item)"
+                @click="toggleDetails(item, $event)"
               >
                 整理详情
                 <template v-if="item.excludedPoints.length"> · {{ item.excludedPoints.length }}</template>
               </button>
-              <section v-if="detailsOpen(item)" class="trend-normalization-popover">
-                <div v-if="item.explanation">
-                  <span>指标说明</span>
-                  <p>{{ item.explanation }}</p>
-                </div>
-                <div>
-                  <span>整理依据</span>
-                  <p v-if="item.matchReasons.length">{{ item.matchReasons.join("；") }}</p>
-                  <p v-else>按原始名称和单位展示。</p>
-                </div>
-                <div>
-                  <span>已纳入名称</span>
-                  <p>{{ item.sourceNames.length ? item.sourceNames.join("、") : "暂无" }}</p>
-                </div>
-                <div v-if="item.excludedPoints.length">
-                  <span>相似但未纳入</span>
-                  <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
-                    <div>
-                      <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
-                      <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
-                    </div>
-                    <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
-                    <button type="button" @click="openReport(point.reportId)">报告</button>
-                  </article>
-                </div>
-                <p v-else class="preview-hint">暂无被系统保守排除的相似指标。</p>
-              </section>
+              <Teleport to="body">
+                <div v-if="detailsOpen(item)" class="trend-detail-popover-backdrop" @click="closeDetails"></div>
+                <section
+                  v-if="detailsOpen(item)"
+                  class="trend-normalization-popover"
+                  :class="`placement-${detailPopoverPlacement}`"
+                  :style="detailPopoverStyle"
+                  role="dialog"
+                  aria-label="指标整理详情"
+                  @click.stop
+                >
+                  <header class="trend-normalization-popover-header">
+                    <strong>整理详情</strong>
+                    <button type="button" title="关闭" aria-label="关闭整理详情" @click="closeDetails">
+                      <X :size="17" />
+                    </button>
+                  </header>
+                  <div>
+                    <span>指标说明</span>
+                    <p>{{ item.explanation || "暂未形成可靠说明，可查看原报告或等待指标字典更新。" }}</p>
+                  </div>
+                  <div>
+                    <span>本次结果</span>
+                    <p>
+                      {{ formatNumber(item.latestValue) }}{{ item.unit || "" }}
+                      · {{ referenceSummary(latestPoint(item)) }}
+                      <template v-if="item.attentionReason"> · {{ item.attentionReason }}</template>
+                    </p>
+                  </div>
+                  <p class="trend-detail-part-title">系统整理信息</p>
+                  <div>
+                    <span>整理依据</span>
+                    <p v-if="item.matchReasons.length">{{ item.matchReasons.join("；") }}</p>
+                    <p v-else>按原始名称和单位展示。</p>
+                  </div>
+                  <div>
+                    <span>已纳入名称</span>
+                    <p>{{ item.sourceNames.length ? item.sourceNames.join("、") : "暂无" }}</p>
+                  </div>
+                  <div v-if="item.excludedPoints.length">
+                    <span>相似但未纳入</span>
+                    <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
+                      <div>
+                        <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
+                        <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
+                      </div>
+                      <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
+                      <button type="button" @click="openReport(point.reportId)">报告</button>
+                    </article>
+                  </div>
+                </section>
+              </Teleport>
             </div>
           </div>
           <div class="trend-points">
@@ -451,7 +762,11 @@ watch([query, groupFilter], () => {
               </button>
             </article>
           </div>
-        </article>
+                </article>
+              </div>
+            </section>
+          </div>
+        </section>
       </div>
     </template>
     <ReportDetailModal :open="Boolean(previewReportId)" :report-id="previewReportId" @close="previewReportId = null" @updated="reloadTrends" />
