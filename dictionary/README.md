@@ -126,3 +126,8 @@ https://timor-m.github.io/fnos-app-health-records/
 
 同步步骤在密钥缺失或推送失败时会让发布工作流失败，避免 GitHub Pages 与国内镜像
 静默产生不同 revision。
+
+`Dictionary Pages` Workflow 在首次运行时会请求自动启用 GitHub Pages，并将构建来源
+设置为 GitHub Actions。如果组织策略或仓库权限禁止自动启用，需要由仓库管理员进入
+`Settings → Pages → Build and deployment`，将 `Source` 手动设置为 `GitHub Actions`，
+然后重新运行 Workflow。

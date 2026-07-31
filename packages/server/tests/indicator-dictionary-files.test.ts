@@ -58,9 +58,6 @@ test("publishes confirmed specialty aliases through the remote dictionary", () =
   const taxonomy = JSON.parse(
     readFileSync(resolve(rootDir, "dictionary/remote/taxonomy.json"), "utf8")
   ) as { revision: number };
-  const manifest = JSON.parse(
-    readFileSync(resolve(rootDir, "dictionary/remote/manifest.json"), "utf8")
-  ) as { revision: number };
   const keys = new Set(indicators.indicators.map((indicator) => indicator.canonicalKey));
   for (const key of [
     "tumor_afp",
@@ -83,7 +80,6 @@ test("publishes confirmed specialty aliases through the remote dictionary", () =
   assert.ok(tpo?.aliases.includes("Anti-thyroid peroxidase antibody"));
   assert.ok(tpo?.aliases.includes("TPOAb"));
   assert.equal(indicators.revision, taxonomy.revision);
-  assert.equal(indicators.revision, manifest.revision);
 });
 
 test("derives trend placement from the core taxonomy JSON", () => {
@@ -122,8 +118,13 @@ test("builds compact Pages JSON and hashes the published bytes", () => {
     assert.equal(manifestContent.trim(), JSON.stringify(JSON.parse(manifestContent)));
 
     const manifest = JSON.parse(manifestContent) as {
+      revision: number;
       files: Record<string, { path: string; sha256: string; bytes: number }>;
     };
+    const sourceIndicators = JSON.parse(
+      readFileSync(resolve(rootDir, "dictionary/remote/indicators.json"), "utf8")
+    ) as { revision: number };
+    assert.equal(manifest.revision, sourceIndicators.revision);
     for (const file of Object.values(manifest.files)) {
       const content = readFileSync(resolve(outputDir, file.path));
       assert.equal(content.byteLength, file.bytes);
