@@ -279,7 +279,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     assert.equal(fallbackCheck.sourceUrl, "https://timor-m.github.io/fnos-app-health-records/");
     assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "timor-m.github.io"]);
     assert.deepEqual(getIndicatorDictionaryStatus(admin).remoteBaseUrls, [
-      "https://gitee.com/Timor-M/health-records-dictionary/raw/main/",
+      "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
       "https://timor-m.github.io/fnos-app-health-records/"
     ]);
   } finally {

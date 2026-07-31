@@ -88,7 +88,7 @@ Ed25519 对清单载荷签名。
 国内镜像仓库固定为：
 
 ```text
-https://gitee.com/Timor-M/health-records-dictionary
+https://gitee.com/timor-m/health-records-dictionary
 ```
 
 Workflow 只同步以下三个运行时文件，不同步应用源码：
@@ -106,7 +106,7 @@ indicators.json
 国内镜像基础地址为：
 
 ```text
-https://gitee.com/Timor-M/health-records-dictionary/raw/main/
+https://gitee.com/timor-m/health-records-dictionary/raw/main/
 ```
 
 应用未配置自定义地址时按以下顺序下载：

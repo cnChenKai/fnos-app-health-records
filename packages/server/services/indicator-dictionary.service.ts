@@ -96,7 +96,7 @@ type SnapshotRow = {
 };
 
 const defaultRemoteBaseUrls = [
-  "https://gitee.com/Timor-M/health-records-dictionary/raw/main/",
+  "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
   "https://timor-m.github.io/fnos-app-health-records/"
 ];
 const maxManifestBytes = 256 * 1024;

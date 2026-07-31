@@ -51,7 +51,7 @@ jobs:
       - name: Sync dictionary snapshot to Gitee
         env:
           GITEE_DICTIONARY_SSH_KEY: ${{ secrets.GITEE_DICTIONARY_SSH_KEY }}
-          GITEE_DICTIONARY_REPOSITORY: Timor-M/health-records-dictionary
+          GITEE_DICTIONARY_REPOSITORY: timor-m/health-records-dictionary
         run: |
           if [ -z "$GITEE_DICTIONARY_SSH_KEY" ]; then
             echo "::error::Missing GitHub Actions secret GITEE_DICTIONARY_SSH_KEY"
