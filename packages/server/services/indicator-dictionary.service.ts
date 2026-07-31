@@ -220,6 +220,11 @@ function validateDocuments(layer: DictionaryLayer, documents: DictionaryDocument
     throw new Error("taxonomy.json 与 indicators.json revision 不一致");
   }
   const categoryKeys = new Set(documents.taxonomy.categories.map((item) => item.key));
+  if (layer === "remote") {
+    for (const category of (coreTaxonomy as unknown as TaxonomyDocument).categories) {
+      categoryKeys.add(category.key);
+    }
+  }
   const keys = new Set<string>();
   for (const indicator of documents.indicators.indicators) {
     if (keys.has(indicator.canonicalKey)) throw new Error(`重复指标 Key：${indicator.canonicalKey}`);
@@ -725,16 +730,33 @@ function remoteBaseUrls() {
 }
 
 async function fetchBytes(url: URL, maximumBytes: number) {
-  const response = await fetchWithTimeout(url, {
-    headers: { Accept: "application/json" },
-    redirect: "error"
-  }, {
-    timeoutMs: requestTimeoutMs,
-    timeoutCode: "DICTIONARY_TIMEOUT",
-    timeoutMessage: "远程指标字典请求超时",
-    networkCode: "DICTIONARY_NETWORK_ERROR",
-    networkMessage: "无法连接远程指标字典"
-  });
+  let requestUrl = url;
+  let response: Response | null = null;
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount += 1) {
+    response = await fetchWithTimeout(requestUrl, {
+      headers: { Accept: "application/json" },
+      redirect: "manual"
+    }, {
+      timeoutMs: requestTimeoutMs,
+      timeoutCode: "DICTIONARY_TIMEOUT",
+      timeoutMessage: "远程指标字典请求超时",
+      networkCode: "DICTIONARY_NETWORK_ERROR",
+      networkMessage: "无法连接远程指标字典"
+    });
+    if (response.status < 300 || response.status >= 400) break;
+    const location = response.headers.get("location");
+    if (!location) throw new Error("远程指标字典重定向缺少目标地址");
+    const redirectedUrl = new URL(location, requestUrl);
+    const sameOrigin = redirectedUrl.origin === requestUrl.origin;
+    const officialGiteeRaw = requestUrl.hostname === "gitee.com"
+      && redirectedUrl.hostname === "raw.giteeusercontent.com";
+    if (redirectedUrl.protocol !== "https:" || (!sameOrigin && !officialGiteeRaw)) {
+      throw new Error(`远程指标字典拒绝不受信任的重定向：${redirectedUrl.host}`);
+    }
+    requestUrl = redirectedUrl;
+    response = null;
+  }
+  if (!response) throw new Error("远程指标字典重定向次数过多");
   if (!response.ok) throw new Error(`远程指标字典请求失败（HTTP ${response.status}）`);
   const declaredLength = Number(response.headers.get("content-length") || 0);
   if (declaredLength > maximumBytes) throw new Error("远程指标字典文件超过大小限制");

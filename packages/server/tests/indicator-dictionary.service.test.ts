@@ -113,6 +113,28 @@ function remoteBundle(revision: number, includePendingAlias: boolean) {
   };
 }
 
+function remoteBundleUsingCoreCategory(revision: number) {
+  const bundle = remoteBundle(revision, true);
+  const taxonomy = JSON.parse(new TextDecoder().decode(bundle.taxonomyBytes));
+  taxonomy.groups = [];
+  taxonomy.categories = [];
+  const indicators = JSON.parse(new TextDecoder().decode(bundle.indicatorsBytes));
+  indicators.indicators[0].categoryKey = "laboratory_other";
+  bundle.taxonomyBytes = jsonBytes(taxonomy);
+  bundle.indicatorsBytes = jsonBytes(indicators);
+  bundle.manifest.files.taxonomy = {
+    ...bundle.manifest.files.taxonomy,
+    sha256: hash(bundle.taxonomyBytes),
+    bytes: bundle.taxonomyBytes.byteLength
+  };
+  bundle.manifest.files.indicators = {
+    ...bundle.manifest.files.indicators,
+    sha256: hash(bundle.indicatorsBytes),
+    bytes: bundle.indicatorsBytes.byteLength
+  };
+  return bundle;
+}
+
 test("installs, upgrades and rolls back remote dictionaries while preserving unmatched-name history", async () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-remote-dictionary-"));
   const originalFetch = globalThis.fetch;
@@ -120,6 +142,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
   process.env.INDICATOR_DICTIONARY_URL = "https://dictionary.test/";
   let bundle = remoteBundle(1, false);
   let corruptIndicatorsHash = false;
+  let redirectGiteeRaw = false;
   const failedHosts = new Set<string>();
   const requestedHosts: string[] = [];
   globalThis.fetch = (async (input) => {
@@ -129,6 +152,14 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     const url = new URL(requestUrl);
     requestedHosts.push(url.host);
     if (failedHosts.has(url.host)) return new Response("unavailable", { status: 503 });
+    if (redirectGiteeRaw && url.host === "gitee.com") {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: `https://raw.giteeusercontent.com${url.pathname}`
+        }
+      });
+    }
     const pathname = url.pathname;
     if (pathname.endsWith("/manifest.json")) {
       const manifest = structuredClone(bundle.manifest);
@@ -282,6 +313,14 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
       "https://timor-m.github.io/fnos-app-health-records/"
     ]);
+
+    failedHosts.clear();
+    redirectGiteeRaw = true;
+    bundle = remoteBundleUsingCoreCategory(5);
+    requestedHosts.length = 0;
+    const giteeCheck = await checkRemoteIndicatorDictionary(admin);
+    assert.equal(giteeCheck.sourceUrl, "https://gitee.com/timor-m/health-records-dictionary/raw/main/");
+    assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "raw.giteeusercontent.com"]);
   } finally {
     globalThis.fetch = originalFetch;
     closeDatabaseForTests();
