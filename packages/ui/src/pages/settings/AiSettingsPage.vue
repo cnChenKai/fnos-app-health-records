@@ -5,13 +5,14 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;
   defaultBaseUrl: string;
   defaultTextModel: string;
   defaultVisionModel: string;
+  modelHint?: string;
 };
 type AiProviderSettings = {
   visionEnabled: boolean;
@@ -21,12 +22,26 @@ type AiProviderSettings = {
   apiKeyConfigured: boolean;
   apiKeyMasked: string;
 };
+type AiTaskOption = {
+  key: string;
+  label: string;
+  description: string;
+  implemented: boolean;
+};
+type AiTaskBinding = {
+  provider: AiProviderKey | "";
+  model: string;
+  inherited: boolean;
+  implemented: boolean;
+};
 type AiSettings = AiProviderSettings & {
   enabled: boolean;
   provider: AiProviderKey;
   apiKey: string;
   providerSettings: Record<AiProviderKey, AiProviderSettings>;
   providers: AiProviderOption[];
+  tasks: AiTaskOption[];
+  taskBindings: Record<string, AiTaskBinding>;
 };
 
 const ai = ref<AiSettings>({
@@ -34,13 +49,15 @@ const ai = ref<AiSettings>({
   provider: "deepseek",
   visionEnabled: false,
   baseUrl: "https://api.deepseek.com",
-  textModel: "deepseek-chat",
+  textModel: "deepseek-v4-flash",
   visionModel: "",
   apiKey: "",
   apiKeyConfigured: false,
   apiKeyMasked: "",
   providerSettings: {} as Record<AiProviderKey, AiProviderSettings>,
-  providers: []
+  providers: [],
+  tasks: [],
+  taskBindings: {}
 });
 const message = ref("");
 const loading = ref(true);
@@ -48,8 +65,30 @@ const loadError = ref("");
 const saving = ref(false);
 const testing = ref(false);
 const currentProvider = computed(() => ai.value.providers.find((item) => item.key === ai.value.provider));
+const implementedTasks = computed(() => ai.value.tasks.filter((task) => task.implemented));
+
+function editableSettings(value: AiSettings) {
+  return {
+    ...value,
+    taskBindings: Object.fromEntries(Object.entries(value.taskBindings || {}).map(([key, binding]) => [
+      key,
+      binding.inherited
+        ? { ...binding, provider: "" as const, model: "" }
+        : binding
+    ]))
+  };
+}
 
 function aiBody() {
+  const taskBindings = Object.fromEntries(implementedTasks.value.map((task) => {
+    const binding = ai.value.taskBindings[task.key];
+    return [
+      task.key,
+      !binding?.provider
+        ? null
+        : { provider: binding.provider, ...(binding.model.trim() ? { model: binding.model.trim() } : {}) }
+    ];
+  }));
   return {
     enabled: ai.value.enabled,
     provider: ai.value.provider,
@@ -57,6 +96,7 @@ function aiBody() {
     baseUrl: ai.value.baseUrl,
     textModel: ai.value.textModel,
     visionModel: ai.value.visionModel,
+    taskBindings,
     ...(ai.value.apiKey.trim() ? { apiKey: ai.value.apiKey.trim() } : {})
   };
 }
@@ -78,7 +118,10 @@ function changeProvider() {
 async function save() {
   saving.value = true; message.value = "";
   try {
-    ai.value = await request<AiSettings>("ai/settings", { method: "PUT", body: JSON.stringify(aiBody()) });
+    ai.value = editableSettings(await request<AiSettings>("ai/settings", {
+      method: "PUT",
+      body: JSON.stringify(aiBody())
+    }));
     message.value = `${currentProvider.value?.label || "AI"} 配置已保存`;
   }
   catch (error) { message.value = error instanceof Error ? error.message : "保存失败"; }
@@ -100,7 +143,7 @@ async function loadSettings() {
   loading.value = true;
   loadError.value = "";
   try {
-    ai.value = await request<AiSettings>("ai/settings");
+    ai.value = editableSettings(await request<AiSettings>("ai/settings"));
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "AI 配置加载失败";
   } finally {
@@ -124,8 +167,28 @@ onMounted(() => { void loadSettings(); });
         <label><span>AI 服务商</span><FormSelect v-model="ai.provider" :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))" aria-label="AI 服务商" @change="changeProvider" /></label>
         <label class="toggle-row"><div><strong>视觉增强</strong><span>复杂表格可发送处理后的页面副本</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" /></label>
         <label><span>API 地址</span><input v-model.trim="ai.baseUrl" :placeholder="currentProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
-        <div class="form-grid"><label><span>文本模型</span><input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" /></label><label><span>视觉模型</span><input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '按需填写支持图片的模型'" /></label></div>
+        <div class="form-grid"><label><span>文本模型</span><input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" /><small v-if="currentProvider?.modelHint" class="field-hint">{{ currentProvider.modelHint }}</small></label><label><span>视觉模型</span><input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '按需填写支持图片的模型'" /></label></div>
         <label><span>API Key</span><input v-model="ai.apiKey" type="password" autocomplete="new-password" :placeholder="ai.apiKeyConfigured ? `已配置 ${ai.apiKeyMasked}` : '输入 API Key'" /></label>
+        <section v-if="implementedTasks.length" class="ai-task-bindings">
+          <header><strong>场景模型</strong><span>默认继承上方模型，也可为单个场景独立指定</span></header>
+          <article v-for="task in implementedTasks" :key="task.key">
+            <div><strong>{{ task.label }}</strong><span>{{ task.description }}</span></div>
+            <FormSelect
+              v-model="ai.taskBindings[task.key].provider"
+              :options="[
+                { value: '', label: '继承默认模型' },
+                ...ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))
+              ]"
+              :aria-label="`${task.label}服务商`"
+            />
+            <input
+              v-if="ai.taskBindings[task.key].provider"
+              v-model.trim="ai.taskBindings[task.key].model"
+              placeholder="留空使用该服务商默认文本模型"
+              :aria-label="`${task.label}模型`"
+            />
+          </article>
+        </section>
         <p v-if="message" class="form-message">{{ message }}</p>
         <div class="form-actions"><button type="button" :disabled="saving || testing" @click="test"><LoaderCircle v-if="testing" class="spin-icon" :size="17" /><TestTubeDiagonal v-else :size="17" />{{ testing ? "正在测试" : "测试连接" }}</button><button class="primary-button" type="button" :disabled="saving || testing" @click="save"><LoaderCircle v-if="saving" class="spin-icon" :size="17" /><Save v-else :size="17" />{{ saving ? "正在保存" : "保存" }}</button></div>
       </div>

@@ -1,0 +1,33 @@
+name: Dictionary Validate
+
+on:
+  pull_request:
+    paths:
+      - "dictionary/**"
+      - "scripts/dictionary/**"
+      - "package.json"
+      - "package-lock.json"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dictionary-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate dictionary snapshots
+        run: npm run dictionary:validate

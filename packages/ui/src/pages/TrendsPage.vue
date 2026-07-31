@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import {
   Activity,
   ChartNoAxesCombined,
   ChevronDown,
   ChevronRight,
-  CircleAlert,
   FileText,
   Pin,
   Search,
@@ -25,6 +25,7 @@ import { useToast } from "../composables/useToast";
 import type { TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
 
 const app = useAppContext();
+const route = useRoute();
 const loading = ref(true);
 const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
@@ -32,7 +33,6 @@ const query = ref("");
 const groupFilter = ref("all");
 const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
 const collapsedGroups = ref(new Set<string>());
-const attentionPreviewExpanded = ref(false);
 const detailPopoverStyle = ref<Record<string, string>>({});
 const detailPopoverPlacement = ref<"above" | "below">("below");
 const previewReportId = ref<string | null>(null);
@@ -161,20 +161,15 @@ const trendSections = computed<TrendSection[]>(() => {
   return result.sort((left, right) => left.order - right.order);
 });
 
-const attentionItems = computed(() => series.value
-  .filter((item) => item.attentionLevel)
-  .sort((left, right) =>
-    Number(right.attentionLevel === "abnormal") - Number(left.attentionLevel === "abnormal")
-    || compareTrendSeries(left, right)
-  ));
-const attentionCounts = computed(() => ({
-  abnormal: attentionItems.value.filter((item) => item.attentionLevel === "abnormal").length,
-  nearBoundary: attentionItems.value.filter((item) => item.attentionLevel === "near_boundary").length
-}));
-const attentionPreview = computed(() => attentionItems.value.slice(0, 5));
 const hasActiveFilters = computed(() =>
   Boolean(query.value.trim()) || groupFilter.value !== "all" || attentionFilter.value !== "all"
 );
+
+const trendCountSubtitle = computed(() => {
+  if (!series.value.length) return "";
+  const pointCount = series.value.reduce((sum, item) => sum + item.pointCount, 0);
+  return `共 ${series.value.length} 项指标${pointCount ? ` · ${pointCount} 个数据点` : ""}`;
+});
 
 const filterSummary = computed(() => {
   if (!series.value.length) return "";
@@ -317,10 +312,6 @@ function qualityLabel(value: TrendSeries["quality"]) {
   }[value] || "原始展示";
 }
 
-function attentionLabel(item: TrendSeries) {
-  return item.attentionLevel === "abnormal" ? "报告已标异常" : "接近参考边界";
-}
-
 function latestPoint(item: TrendSeries) {
   return item.points[item.points.length - 1] || null;
 }
@@ -334,6 +325,19 @@ function referenceSummary(point: TrendPoint | null) {
   if (point.referenceHigh !== null) return `参考 ≤ ${formatNumber(point.referenceHigh)}`;
   if (point.referenceLow !== null) return `参考 ≥ ${formatNumber(point.referenceLow)}`;
   return "参考范围待整理";
+}
+
+function trendValueRange(item: TrendSeries) {
+  if (item.pointCount < 2 || item.minValue === null || item.maxValue === null) return null;
+  if (item.minValue === item.maxValue) return null;
+  return `${formatNumber(item.minValue)} - ${formatNumber(item.maxValue)}${item.unit || ""}`;
+}
+
+function trendDateRange(item: TrendSeries) {
+  if (item.pointCount < 2 || !item.firstDate || !item.lastDate) return null;
+  const first = formatDate(item.firstDate);
+  const last = formatDate(item.lastDate);
+  return first !== last ? `${first} 至 ${last}` : null;
 }
 
 function cardDomId(item: TrendSeries) {
@@ -362,22 +366,6 @@ function toggleGroup(section: TrendSection) {
   if (next.has(section.key)) next.delete(section.key);
   else next.add(section.key);
   collapsedGroups.value = next;
-}
-
-function selectAttention(level: "attention" | "abnormal" | "near_boundary") {
-  attentionFilter.value = attentionFilter.value === level ? "all" : level;
-}
-
-async function focusTrendItem(item: TrendSeries) {
-  query.value = "";
-  groupFilter.value = "all";
-  attentionFilter.value = "all";
-  const sectionKey = item.pinned ? "pinned" : item.groupKey;
-  const next = new Set(collapsedGroups.value);
-  next.delete(sectionKey);
-  collapsedGroups.value = next;
-  await nextTick();
-  document.getElementById(cardDomId(item))?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function deltaText(item: TrendSeries) {
@@ -521,13 +509,46 @@ watch([query, groupFilter, attentionFilter], () => {
   closeDetails();
 });
 
-onMounted(() => window.addEventListener("resize", closeDetails, { passive: true }));
-onBeforeUnmount(() => window.removeEventListener("resize", closeDetails));
+watch(trendCountSubtitle, (subtitle) => app.setTopbarSubtitle("trends", subtitle), { immediate: true });
+
+function activateTopbarSearch() {
+  app.setTopbarSearch({
+    key: "trends",
+    model: query,
+    placeholder: "搜索指标",
+    expandedPlaceholder: "搜索指标名称"
+  });
+}
+
+function nextRouteUsesTopbarSearch() {
+  return route.path === "/records" || route.path === "/trends" || route.path.startsWith("/trends/");
+}
+
+onMounted(() => {
+  window.addEventListener("resize", closeDetails, { passive: true });
+  activateTopbarSearch();
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", closeDetails);
+  app.clearTopbarSubtitle("trends");
+  app.clearTopbarSearch("trends");
+});
+onActivated(() => {
+  app.setTopbarSubtitle("trends", trendCountSubtitle.value);
+  activateTopbarSearch();
+});
+onDeactivated(() => {
+  if (!nextRouteUsesTopbarSearch()) app.clearTopbarSearch("trends");
+});
 </script>
 
 <template>
   <section ref="root" class="plain-page">
     <div class="page-intro"><div><h2>指标趋势</h2><p>仅比较相同指标和兼容单位</p></div><span class="page-intro-badge"><ChartNoAxesCombined :size="22" /></span></div>
+    <nav class="trend-view-switch" aria-label="趋势视图">
+      <RouterLink to="/trends" aria-current="page">指标趋势</RouterLink>
+      <RouterLink to="/trends/morphology">形态变化</RouterLink>
+    </nav>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
     <p v-else-if="loadError" class="inline-panel-error">
@@ -535,57 +556,8 @@ onBeforeUnmount(() => window.removeEventListener("resize", closeDetails));
     </p>
     <EmptyState v-else-if="!series.length" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
     <template v-else>
-      <section v-if="attentionItems.length" class="trend-attention-panel">
-        <header class="trend-attention-header">
-          <div>
-            <span class="item-icon alert"><CircleAlert :size="19" /></span>
-            <div><strong>需要关注</strong><small>依据最新报告的异常标记和参考范围整理</small></div>
-          </div>
-          <div class="trend-attention-actions">
-            <button type="button" @click="selectAttention('attention')">查看全部</button>
-            <button
-              v-if="attentionPreview.length"
-              class="trend-attention-expand"
-              type="button"
-              :title="attentionPreviewExpanded ? '收起关注指标' : '展开关注指标'"
-              :aria-label="attentionPreviewExpanded ? '收起关注指标' : '展开关注指标'"
-              :aria-expanded="attentionPreviewExpanded"
-              @click="attentionPreviewExpanded = !attentionPreviewExpanded"
-            >
-              <ChevronDown :size="17" :class="{ collapsed: !attentionPreviewExpanded }" />
-            </button>
-          </div>
-        </header>
-        <div class="trend-attention-stats">
-          <button
-            type="button"
-            :class="{ active: attentionFilter === 'abnormal' }"
-            @click="selectAttention('abnormal')"
-          >
-            <strong>{{ attentionCounts.abnormal }}</strong><span>报告已标异常</span>
-          </button>
-          <button
-            type="button"
-            :class="{ active: attentionFilter === 'near_boundary' }"
-            @click="selectAttention('near_boundary')"
-          >
-            <strong>{{ attentionCounts.nearBoundary }}</strong><span>接近参考边界</span>
-          </button>
-        </div>
-        <div v-if="attentionPreviewExpanded" class="trend-attention-list">
-          <button
-            v-for="item in attentionPreview"
-            :key="`attention-${seriesKey(item)}`"
-            type="button"
-            @click="focusTrendItem(item)"
-          >
-            <span><strong>{{ item.name }}</strong><small>{{ item.attentionReason }}</small></span>
-            <span class="trend-attention-value">{{ formatNumber(item.latestValue) }}{{ item.unit || "" }}<ChevronRight :size="16" /></span>
-          </button>
-        </div>
-      </section>
       <div class="trend-filter-row">
-        <label class="search-field trend-search-field">
+        <label class="search-field trend-search-field page-search-field">
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
         </label>
@@ -631,9 +603,6 @@ onBeforeUnmount(() => window.removeEventListener("resize", closeDetails));
               <div class="trend-title-row">
                 <strong>{{ item.name }}</strong>
                 <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
-                <em v-if="item.attentionLevel" class="trend-attention-badge" :class="item.attentionLevel">
-                  {{ attentionLabel(item) }}
-                </em>
               </div>
               <span>{{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
               <small v-if="matchingAlias(item)" class="trend-match-alias">匹配名称：{{ matchingAlias(item) }}</small>
@@ -681,9 +650,9 @@ onBeforeUnmount(() => window.removeEventListener("resize", closeDetails));
             </div>
           </div>
           <div class="trend-range">
-            <div class="trend-range-copy">
-              <span>范围 {{ formatNumber(item.minValue) }} - {{ formatNumber(item.maxValue) }}{{ item.unit || "" }}</span>
-              <span>{{ formatDate(item.firstDate) }} 至 {{ formatDate(item.lastDate) }}</span>
+            <div v-if="trendValueRange(item) || trendDateRange(item)" class="trend-range-copy">
+              <span v-if="trendValueRange(item)">变化区间 {{ trendValueRange(item) }}</span>
+              <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
             </div>
             <div class="trend-detail-popover-wrap">
               <button

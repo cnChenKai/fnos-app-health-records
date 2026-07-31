@@ -6,10 +6,12 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import {
   getAiSettings,
+  getAiTaskSettings,
   saveAiSettings,
   testAiConnection
 } from "../services/ai-settings.service.ts";
 import { isAiExtractionConfigured } from "../services/ai-extraction.service.ts";
+import { executeAiTask } from "../services/ai-task.service.ts";
 
 async function withDatabase(run: () => Promise<void> | void) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-settings-"));
@@ -110,6 +112,97 @@ test("retains independent provider configurations when switching models", async 
   });
 });
 
+test("retains independent OpenAI and Doubao configurations when switching providers", async () => {
+  await withDatabase(() => {
+    saveAiSettings({
+      enabled: true,
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      textModel: "gpt-4.1-mini",
+      visionModel: "gpt-4.1-mini",
+      apiKey: "openai-secret-key"
+    });
+    const doubao = saveAiSettings({
+      enabled: true,
+      provider: "doubao",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      textModel: "ep-doubao-text",
+      visionModel: "ep-doubao-vision",
+      apiKey: "doubao-secret-key"
+    });
+
+    assert.equal(doubao.providerSettings.openai.textModel, "gpt-4.1-mini");
+    assert.equal(doubao.providerSettings.openai.apiKeyConfigured, true);
+    assert.equal(doubao.providerSettings.doubao.textModel, "ep-doubao-text");
+    assert.equal(doubao.providerSettings.doubao.apiKeyConfigured, true);
+
+    const openai = saveAiSettings({
+      provider: "openai",
+      baseUrl: doubao.providerSettings.openai.baseUrl,
+      textModel: doubao.providerSettings.openai.textModel,
+      visionModel: doubao.providerSettings.openai.visionModel
+    });
+    assert.equal(openai.provider, "openai");
+    assert.equal(openai.apiKeyConfigured, true);
+    assert.equal(openai.providerSettings.doubao.textModel, "ep-doubao-text");
+
+    const stored = (getDatabase().prepare(
+      "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
+    ).get() as { valueJson: string }).valueJson;
+    assert.equal(stored.includes("openai-secret-key"), false);
+    assert.equal(stored.includes("doubao-secret-key"), false);
+  });
+});
+
+test("routes an AI task to its own provider and model without duplicating credentials", async () => {
+  await withDatabase(() => {
+    saveAiSettings({
+      enabled: true,
+      provider: "deepseek",
+      baseUrl: "https://deepseek.example.com/v1",
+      textModel: "deepseek-default",
+      apiKey: "deepseek-secret"
+    });
+    saveAiSettings({
+      enabled: true,
+      provider: "qwen",
+      baseUrl: "https://qwen.example.com/v1",
+      textModel: "qwen-default",
+      apiKey: "qwen-secret",
+      taskBindings: {
+        report_extraction: { provider: "qwen", model: "qwen-report-structurer" }
+      }
+    });
+
+    const reportTask = getAiTaskSettings("report_extraction", true);
+    assert.deepEqual({
+      provider: reportTask.provider,
+      baseUrl: reportTask.baseUrl,
+      model: reportTask.model,
+      apiKey: reportTask.apiKey,
+      inherited: reportTask.inherited
+    }, {
+      provider: "qwen",
+      baseUrl: "https://qwen.example.com/v1",
+      model: "qwen-report-structurer",
+      apiKey: "qwen-secret",
+      inherited: false
+    });
+
+    const stored = JSON.parse((getDatabase().prepare(
+      "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
+    ).get() as { valueJson: string }).valueJson) as Record<string, unknown>;
+    assert.equal(JSON.stringify(stored).includes("qwen-secret"), false);
+
+    const reset = saveAiSettings({
+      provider: "qwen",
+      taskBindings: { report_extraction: null }
+    });
+    assert.equal(reset.taskBindings.report_extraction.inherited, true);
+    assert.equal(getAiTaskSettings("report_extraction", false).model, "qwen-default");
+  });
+});
+
 test("tests the selected provider with unsaved form values", async () => {
   await withDatabase(async () => {
     const originalFetch = globalThis.fetch;
@@ -138,10 +231,116 @@ test("tests the selected provider with unsaved form values", async () => {
   });
 });
 
+test("uses OpenAI-compatible endpoints for OpenAI and Doubao connection tests", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; model: string; authorization: string | null }> = [];
+    globalThis.fetch = async (input, init) => {
+      const body = JSON.parse(String(init?.body || "{}")) as { model: string };
+      requests.push({
+        url: String(input),
+        model: body.model,
+        authorization: new Headers(init?.headers).get("authorization")
+      });
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: "ok" } }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      await testAiConnection({
+        provider: "openai",
+        apiKey: "openai-test-key",
+        textModel: "gpt-4.1-mini"
+      });
+      await testAiConnection({
+        provider: "doubao",
+        apiKey: "doubao-test-key",
+        textModel: "ep-doubao-text"
+      });
+      assert.deepEqual(requests, [
+        {
+          url: "https://api.openai.com/v1/chat/completions",
+          model: "gpt-4.1-mini",
+          authorization: "Bearer openai-test-key"
+        },
+        {
+          url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+          model: "ep-doubao-text",
+          authorization: "Bearer doubao-test-key"
+        }
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("uses the Kimi-compatible temperature for connection tests", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    let requestBody: Record<string, unknown> = {};
+    let requestedUrl = "";
+    globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        model: "kimi-k3",
+        choices: [{ finish_reason: "stop", message: { content: "ok" } }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const result = await testAiConnection({
+        provider: "kimi",
+        baseUrl: "https://api.kimi.com/coding",
+        textModel: "kimi-k3",
+        apiKey: "kimi-test-key"
+      });
+      assert.equal(result.provider, "kimi");
+      assert.equal(requestedUrl, "https://api.kimi.com/coding/v1/chat/completions");
+      assert.equal(requestBody.temperature, 1);
+      assert.equal(requestBody.max_tokens, 4);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("uses the Kimi-compatible temperature for configured AI tasks", async () => {
+  await withDatabase(async () => {
+    saveAiSettings({
+      enabled: true,
+      provider: "kimi",
+      baseUrl: "https://api.moonshot.ai/v1",
+      textModel: "kimi-k3",
+      apiKey: "kimi-task-key"
+    });
+    const originalFetch = globalThis.fetch;
+    let requestBody: Record<string, unknown> = {};
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        choices: [{ finish_reason: "stop", message: { content: "{}" } }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      await executeAiTask("report_extraction", {
+        messages: [{ role: "user", content: "test" }],
+        temperature: 0,
+        responseFormat: "json_object",
+        maxOutputTokens: 128,
+        timeoutMs: 15_000
+      });
+      assert.equal(requestBody.temperature, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 test("returns a client error when AI test configuration is incomplete", async () => {
   await withDatabase(async () => {
     await assert.rejects(
-      () => testAiConnection({ provider: "deepseek", apiKey: "", textModel: "deepseek-chat" }),
+      () => testAiConnection({ provider: "deepseek", apiKey: "", textModel: "deepseek-v4-flash" }),
       (error: unknown) => {
         const value = error as { status?: number; statusText?: string; message?: string };
         return value.status === 400 && `${value.statusText} ${value.message}`.includes("API Key");
@@ -161,7 +360,7 @@ test("returns an actionable error when the AI provider rejects credentials", asy
         () => testAiConnection({
           provider: "deepseek",
           apiKey: "invalid-key",
-          textModel: "deepseek-chat"
+          textModel: "deepseek-v4-flash"
         }),
         (error: unknown) => {
           const value = error as { status?: number; statusText?: string; message?: string };
@@ -190,7 +389,7 @@ test("returns an actionable error when the NAS cannot resolve the AI host", asyn
           provider: "deepseek",
           baseUrl: "https://api.example.com",
           apiKey: "test-key",
-          textModel: "deepseek-chat"
+          textModel: "deepseek-v4-flash"
         }),
         (error: unknown) => {
           const value = error as { status?: number; statusText?: string; message?: string };

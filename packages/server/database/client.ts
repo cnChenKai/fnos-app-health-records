@@ -3,7 +3,12 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { getAppConfig } from "../utils/runtime-config";
-import { databaseMigrations, tableColumnNames } from "./migrations";
+import {
+  databaseMigrations,
+  ensureClinicalFactColumns,
+  repairReportDisplayMetadata,
+  tableColumnNames
+} from "./migrations";
 import { schemaSql, schemaVersion } from "./schema";
 
 let database: DatabaseSync | null = null;
@@ -14,11 +19,22 @@ const countedTables = [
   "reports",
   "report_pages",
   "observations",
+  "morphology_findings",
+  "report_diagnoses",
+  "report_medications",
+  "report_procedures",
+  "vaccination_records",
+  "billing_summaries",
+  "billing_items",
+  "report_structured_sections",
   "processing_jobs",
   "processing_job_events",
   "ai_audit_events",
   "ocr_results",
   "report_extractions",
+  "ai_extraction_units",
+  "ai_extraction_unit_routes",
+  "ai_extraction_attempts",
   "report_field_overrides",
   "reminders",
   "app_notifications",
@@ -168,6 +184,8 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   const { appVersion } = getAppConfig();
   if (isFreshDatabase(db)) {
     db.exec(schemaSql);
+    ensureClinicalFactColumns(db);
+    repairReportDisplayMetadata(db);
     ensureMigrationMetadataColumns(db);
     const upgradeId = beginUpgradeHistory(db, null, appVersion, 0);
     for (const migration of databaseMigrations) recordMigration(db, migration.version, 0);
@@ -211,6 +229,8 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
       });
     }
     db.exec(schemaSql);
+    ensureClinicalFactColumns(db);
+    repairReportDisplayMetadata(db);
     ensureMigrationMetadataColumns(db);
     if (needsUpgradeRecord && !upgradeId && tableExists(db, "app_upgrade_history")) {
       upgradeId = beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion);

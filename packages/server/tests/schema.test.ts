@@ -19,10 +19,16 @@ test("initializes the health records schema with WAL", () => {
     for (const expected of [
       "users", "user_identities", "health_members", "member_permissions", "reports",
       "report_pages", "observations", "processing_jobs", "reminders", "local_accounts",
+      "morphology_findings",
       "auth_sessions", "audit_logs", "report_extractions", "processing_job_events", "app_notifications",
+      "ai_extraction_units", "ai_extraction_unit_routes", "ai_extraction_attempts",
+      "report_diagnoses", "report_medications", "report_procedures",
+      "vaccination_records", "billing_summaries", "billing_items", "report_structured_sections",
       "app_upgrade_history", "indicator_catalog", "indicator_aliases", "observation_normalizations",
       "ai_audit_events", "report_field_overrides", "file_gc_queue", "maintenance_tasks",
-      "user_trend_pins"
+      "user_trend_pins", "indicator_dictionary_snapshots", "indicator_dictionary_state",
+      "indicator_dictionary_updates", "indicator_taxonomy_groups", "indicator_taxonomy_subgroups",
+      "indicator_taxonomy_categories", "indicator_unmatched_names", "indicator_unmatched_occurrences"
     ]) {
       assert.equal(names.has(expected), true, `missing table ${expected}`);
     }
@@ -40,6 +46,11 @@ test("initializes the health records schema with WAL", () => {
     const normalizationColumns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_category"), true);
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_explanation"), true);
+    const organizationIndex = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'index' AND name = 'reports_organization_idx'
+    `).get() as { name: string } | undefined;
+    assert.equal(organizationIndex?.name, "reports_organization_idx");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -170,7 +181,7 @@ test("migrates a v12 normalization row through the latest trend metadata schema"
   }
 });
 
-test("migrates a v13 indicator catalog to the v14 AI managed schema", () => {
+test("migrates a v13 indicator catalog through the latest dictionary schema", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v14-"));
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(join(storageDir, "db"), { recursive: true });
@@ -195,7 +206,266 @@ test("migrates a v13 indicator catalog to the v14 AI managed schema", () => {
       FROM indicator_catalog WHERE id = 'indicator-v13'
     `).get() as { aiManaged: number };
     assert.equal(row.aiManaged, 0);
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 14);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
+    const columns = getDatabase().prepare("PRAGMA table_info(indicator_catalog)").all() as Array<{ name: string }>;
+    assert.equal(columns.some((column) => column.name === "dictionary_snapshot_id"), true);
+    const dictionaryTable = getDatabase().prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'indicator_dictionary_snapshots'
+    `).get();
+    assert.ok(dictionaryTable);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("migrates a genuine v14 database to the latest materialized dictionary schema", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v15-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  legacy.exec(`
+    DROP TABLE indicator_unmatched_occurrences;
+    DROP TABLE indicator_unmatched_names;
+    DROP TABLE indicator_taxonomy_categories;
+    DROP TABLE indicator_taxonomy_subgroups;
+    DROP TABLE indicator_taxonomy_groups;
+    DROP TABLE indicator_dictionary_updates;
+    DROP TABLE indicator_dictionary_state;
+    DROP TABLE indicator_dictionary_snapshots;
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_snapshot_id;
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_revision;
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_layer;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_snapshot_id;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_revision;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_layer;
+    ALTER TABLE indicator_catalog DROP COLUMN section_hints_json;
+    ALTER TABLE indicator_catalog DROP COLUMN allowed_units_json;
+    ALTER TABLE indicator_catalog DROP COLUMN unit_dimension;
+    ALTER TABLE indicator_catalog DROP COLUMN observation_kind;
+    ALTER TABLE indicator_catalog DROP COLUMN item_order;
+    ALTER TABLE indicator_catalog DROP COLUMN category_key;
+  `);
+  for (let version = 1; version <= 14; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.prepare(`
+    INSERT INTO users (id, display_name, is_gateway_admin)
+    VALUES ('user-v14', '旧管理员', 1)
+  `).run();
+  legacy.prepare(`
+    INSERT INTO indicator_catalog (
+      id, canonical_key, display_name, category, source, ai_managed
+    ) VALUES ('indicator-v14', 'legacy_v14_metric', '旧指标', '其他检查', 'user', 0)
+  `).run();
+  legacy.prepare(`
+    INSERT INTO indicator_aliases (
+      id, indicator_id, alias_name, normalized_alias, scope, source, confidence, enabled
+    ) VALUES (
+      'alias-v14', 'indicator-v14', '旧指标别名', '旧指标别名',
+      'global', 'user', 1, 1
+    )
+  `).run();
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
+    const catalogColumns = db.prepare("PRAGMA table_info(indicator_catalog)").all() as Array<{ name: string }>;
+    assert.equal(catalogColumns.some((column) => column.name === "dictionary_snapshot_id"), true);
+    const aliasColumns = db.prepare("PRAGMA table_info(indicator_aliases)").all() as Array<{ name: string }>;
+    assert.equal(aliasColumns.some((column) => column.name === "dictionary_revision"), true);
+    const preserved = db.prepare(`
+      SELECT catalog.display_name AS displayName, aliases.alias_name AS aliasName
+      FROM indicator_catalog catalog
+      JOIN indicator_aliases aliases ON aliases.indicator_id = catalog.id
+      WHERE catalog.id = 'indicator-v14'
+    `).get() as { displayName: string; aliasName: string };
+    assert.deepEqual({ ...preserved }, {
+      displayName: "旧指标",
+      aliasName: "旧指标别名"
+    });
+    const dictionaryTables = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'indicator_dictionary_snapshots',
+        'indicator_dictionary_state',
+        'indicator_dictionary_updates',
+        'indicator_taxonomy_groups',
+        'indicator_taxonomy_subgroups',
+        'indicator_taxonomy_categories',
+        'indicator_unmatched_names',
+        'indicator_unmatched_occurrences'
+      )
+    `).get() as { count: number };
+    assert.equal(dictionaryTables.count, 8);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs an early v15 dictionary catalog without losing existing rows", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v16-repair-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  legacy.exec(`
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_snapshot_id;
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_revision;
+    ALTER TABLE indicator_aliases DROP COLUMN dictionary_layer;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_snapshot_id;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_revision;
+    ALTER TABLE indicator_catalog DROP COLUMN dictionary_layer;
+    ALTER TABLE indicator_catalog DROP COLUMN section_hints_json;
+    ALTER TABLE indicator_catalog DROP COLUMN allowed_units_json;
+    ALTER TABLE indicator_catalog DROP COLUMN unit_dimension;
+    ALTER TABLE indicator_catalog DROP COLUMN observation_kind;
+    ALTER TABLE indicator_catalog DROP COLUMN item_order;
+    ALTER TABLE indicator_catalog DROP COLUMN category_key;
+  `);
+  for (let version = 1; version <= 15; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.prepare(`
+    INSERT INTO indicator_catalog (id, canonical_key, display_name, category)
+    VALUES ('early-v15-indicator', 'early_v15_metric', '早期指标', '其他检查')
+  `).run();
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
+    const columns = db.prepare("PRAGMA table_info(indicator_catalog)").all() as Array<{ name: string }>;
+    assert.equal(columns.some((column) => column.name === "category_key"), true);
+    assert.equal(columns.some((column) => column.name === "dictionary_snapshot_id"), true);
+    const preserved = db.prepare(`
+      SELECT display_name AS displayName FROM indicator_catalog WHERE id = 'early-v15-indicator'
+    `).get() as { displayName: string };
+    assert.equal(preserved.displayName, "早期指标");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("completes an early v16 database with final morphology and AI unit tables without changing the schema version", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v16-final-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  legacy.exec("DROP INDEX reports_organization_idx");
+  legacy.exec("DROP TABLE morphology_findings");
+  legacy.exec("DROP TABLE ai_extraction_unit_routes");
+  legacy.exec("DROP TABLE ai_extraction_attempts");
+  legacy.exec("DROP TABLE ai_extraction_units");
+  legacy.exec("DROP TABLE billing_items");
+  legacy.exec("DROP TABLE billing_summaries");
+  legacy.exec("DROP TABLE vaccination_records");
+  legacy.exec("DROP TABLE report_procedures");
+  legacy.exec("DROP TABLE report_medications");
+  legacy.exec("DROP TABLE report_structured_sections");
+  legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN manual_fields_json");
+  legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN is_deleted");
+  for (let version = 1; version <= schemaVersion; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    const tables = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'morphology_findings', 'ai_extraction_units', 'ai_extraction_unit_routes',
+        'ai_extraction_attempts', 'report_diagnoses', 'report_medications',
+        'report_procedures', 'vaccination_records', 'billing_summaries', 'billing_items',
+        'report_structured_sections'
+      )
+    `).all() as Array<{ name: string }>;
+    assert.deepEqual(new Set(tables.map((table) => table.name)), new Set([
+      "morphology_findings", "ai_extraction_units", "ai_extraction_unit_routes",
+      "ai_extraction_attempts", "report_diagnoses", "report_medications",
+      "report_procedures", "vaccination_records", "billing_summaries", "billing_items",
+      "report_structured_sections"
+    ]));
+    const organizationIndex = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'index' AND name = 'reports_organization_idx'
+    `).get() as { name: string } | undefined;
+    assert.equal(organizationIndex?.name, "reports_organization_idx");
+    for (const table of [
+      "report_diagnoses", "report_medications", "report_procedures",
+      "vaccination_records", "billing_summaries", "billing_items"
+    ]) {
+      const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      assert.equal(columns.some((column) => column.name === "manual_fields_json"), true);
+      assert.equal(columns.some((column) => column.name === "is_deleted"), true);
+    }
+    const migration = db.prepare(`
+      SELECT name, checksum FROM schema_migrations WHERE version = 16
+    `).get() as { name: string; checksum: string };
+    assert.equal(migration.name, "finalize_indicator_dictionary_morphology_and_ai_units");
+    assert.match(migration.checksum, /ai-units/);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs report-type enum values persisted as body parts without changing schema v16", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-v16-report-metadata-repair-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  for (let version = 1; version <= schemaVersion; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.prepare("INSERT INTO users (id, display_name) VALUES ('legacy-user', '旧用户')").run();
+  legacy.prepare(`
+    INSERT INTO health_members (id, display_name, created_by)
+    VALUES ('legacy-member', '本人', 'legacy-user')
+  `).run();
+  legacy.prepare(`
+    INSERT INTO reports (
+      id, member_id, created_by, report_type, report_subtype, title, status, body_parts_json
+    ) VALUES (
+      'legacy-checkup', 'legacy-member', 'legacy-user', 'checkup', 'checkup',
+      '个人健康体检报告', 'ready',
+      '[{"raw":"checkup","name":"checkup","parent":null,"laterality":"unspecified"}]'
+    )
+  `).run();
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    const row = db.prepare(`
+      SELECT report_subtype AS reportSubtype, body_parts_json AS bodyPartsJson
+      FROM reports WHERE id = 'legacy-checkup'
+    `).get() as { reportSubtype: string | null; bodyPartsJson: string };
+    assert.equal(row.reportSubtype, null);
+    assert.deepEqual(JSON.parse(row.bodyPartsJson), [{
+      raw: "综合体检",
+      name: "综合体检",
+      parent: null,
+      laterality: "unspecified"
+    }]);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

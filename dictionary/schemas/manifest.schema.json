@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://timor-m.github.io/fnos-app-health-records/dictionary/schemas/manifest.schema.json",
+  "title": "Health Records Dictionary Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "formatVersion",
+    "revision",
+    "generatedAt",
+    "files",
+    "signature"
+  ],
+  "properties": {
+    "formatVersion": {
+      "const": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taxonomy", "indicators"],
+      "properties": {
+        "taxonomy": {
+          "$ref": "#/$defs/file"
+        },
+        "indicators": {
+          "$ref": "#/$defs/file"
+        }
+      }
+    },
+    "signature": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "keyId", "value"],
+          "properties": {
+            "algorithm": {
+              "const": "ed25519"
+            },
+            "keyId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

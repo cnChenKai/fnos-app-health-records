@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { Bell, Camera, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, UserRound } from "@lucide/vue";
+import { Bell, Camera, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, Search, UserRound, X } from "@lucide/vue";
 import appIcon from "../assets/app-icon.png";
 import MemberSwitcher from "../components/MemberSwitcher.vue";
 import { useAppContext } from "../composables/useAppContext";
@@ -9,6 +9,8 @@ import { useAppContext } from "../composables/useAppContext";
 const app = useAppContext();
 const route = useRoute();
 const memberSheetOpen = ref(false);
+const topbarSearchFocused = ref(false);
+const topbarSearchInput = ref<HTMLInputElement | null>(null);
 
 const accountRole = computed(() => {
   if (!app.session.value?.isGatewayAdmin) return "家庭成员";
@@ -16,7 +18,16 @@ const accountRole = computed(() => {
   return "fnOS 系统管理员";
 });
 const pageTitle = computed(() => (route.meta.title as string) || "健康档案");
-const pageSubtitle = computed(() => app.topbarSubtitle.value || (route.meta.subtitle as string) || "");
+const pageSubtitleKey = computed(() => {
+  if (route.path === "/records") return "records";
+  if (route.path === "/trends") return "trends";
+  return "";
+});
+const pageSubtitle = computed(() => {
+  const key = pageSubtitleKey.value;
+  if (key) return app.topbarSubtitles.value[key] || "";
+  return (route.meta.subtitle as string) || "";
+});
 const memberInitial = computed(() => app.selectedMember.value?.displayName?.slice(0, 1) || "档");
 const reminderBadge = computed(() => {
   const count = app.pendingReminderCount.value;
@@ -27,6 +38,46 @@ function isNavActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`);
 }
 const isMePage = computed(() => route.path === "/me");
+const topbarSearchPageKey = computed(() => {
+  if (route.path === "/records") return "records";
+  if (route.path === "/trends" || route.path.startsWith("/trends/")) return "trends";
+  return "";
+});
+const activeTopbarSearch = computed(() => {
+  const search = app.topbarSearch.value;
+  return search?.key === topbarSearchPageKey.value ? search : null;
+});
+const topbarSearchPlaceholder = computed(() => {
+  const search = activeTopbarSearch.value;
+  if (topbarSearchFocused.value && search?.expandedPlaceholder) return search.expandedPlaceholder;
+  return search?.placeholder
+    || (topbarSearchPageKey.value === "records" ? "搜索档案" : "搜索指标");
+});
+const topbarSearchValue = computed({
+  get: () => activeTopbarSearch.value?.model.value || "",
+  set: (value: string) => {
+    if (activeTopbarSearch.value) app.setTopbarSearchValue(value);
+  }
+});
+
+function submitTopbarSearch() {
+  activeTopbarSearch.value?.submit?.();
+}
+
+function clearTopbarSearch() {
+  topbarSearchValue.value = "";
+  activeTopbarSearch.value?.submit?.();
+}
+
+function cancelTopbarSearch() {
+  clearTopbarSearch();
+  topbarSearchInput.value?.blur();
+  topbarSearchFocused.value = false;
+}
+
+watch([topbarSearchPageKey, () => app.topbarSearch.value?.key], () => {
+  topbarSearchFocused.value = false;
+});
 
 /* 页面缓存（KeepAlive）下的滚动位置记忆：切走前按路径保存，切回时恢复，未访问过的页面回到顶部 */
 const pageScrollPositions = new Map<string, number>();
@@ -86,7 +137,13 @@ const navItems = [
     </aside>
 
     <section class="workspace">
-      <header class="mobile-topbar">
+      <header
+        class="mobile-topbar"
+        :class="{
+          'has-topbar-search': Boolean(topbarSearchPageKey),
+          'topbar-search-focused': topbarSearchFocused
+        }"
+      >
         <template v-if="isMePage">
           <span class="topbar-avatar" aria-hidden="true">{{ sessionInitial }}</span>
           <div class="topbar-heading">
@@ -99,12 +156,49 @@ const navItems = [
           </RouterLink>
         </template>
         <template v-else>
-          <img class="topbar-brand-icon" :src="appIcon" alt="" />
-          <div class="topbar-heading">
+          <img class="topbar-brand-icon topbar-search-context" :src="appIcon" alt="" />
+          <div class="topbar-heading topbar-search-context">
             <strong class="topbar-title">{{ pageTitle }}</strong>
-            <span v-if="pageSubtitle" class="topbar-subtitle">{{ pageSubtitle }}</span>
+            <span
+              v-if="pageSubtitle || pageSubtitleKey"
+              class="topbar-subtitle"
+              :class="{ 'is-placeholder': !pageSubtitle }"
+              :aria-hidden="!pageSubtitle"
+            >{{ pageSubtitle }}</span>
           </div>
-          <button class="member-chip" type="button" @click="memberSheetOpen = true">
+          <div v-if="topbarSearchPageKey" class="topbar-search-tools">
+            <label class="topbar-search-field">
+              <Search :size="17" />
+              <input
+                ref="topbarSearchInput"
+                v-model="topbarSearchValue"
+                :placeholder="topbarSearchPlaceholder"
+                enterkeyhint="search"
+                @focus="topbarSearchFocused = true"
+                @blur="topbarSearchFocused = false"
+                @keydown.enter="submitTopbarSearch"
+                @keydown.esc="cancelTopbarSearch"
+              />
+              <button
+                v-if="topbarSearchValue"
+                type="button"
+                title="清空搜索"
+                aria-label="清空搜索"
+                @mousedown.prevent
+                @click="clearTopbarSearch"
+              >
+                <X :size="15" />
+              </button>
+            </label>
+            <button
+              v-if="topbarSearchFocused"
+              class="topbar-search-cancel"
+              type="button"
+              @mousedown.prevent
+              @click="cancelTopbarSearch"
+            >取消</button>
+          </div>
+          <button v-else class="member-chip" type="button" @click="memberSheetOpen = true">
             <span class="member-chip-avatar" aria-hidden="true">{{ memberInitial }}</span>
             <span class="member-chip-name">{{ app.selectedMember.value?.displayName || "选择成员" }}</span>
             <ChevronsUpDown :size="15" />

@@ -21,16 +21,31 @@ import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { RequestUser } from "../domain/request-user";
-import type { CursorPage, DuplicateReportCandidate, DuplicateReportGroup, Observation, ReportDetail, ReportPage, ReportSummary } from "../domain/health-record";
+import type {
+  CursorPage,
+  DuplicateReportCandidate,
+  DuplicateReportGroup,
+  BillingItem,
+  BillingSummary,
+  MorphologyFinding,
+  Observation,
+  ReportDiagnosis,
+  ReportDetail,
+  ReportMedication,
+  ReportPage,
+  ReportProcedure,
+  ReportStructuredSection,
+  ReportSummary,
+  VaccinationRecord
+} from "../domain/health-record";
 import { getAppConfig } from "../utils/runtime-config";
 import { createId } from "../utils/identifier";
 import { schemaVersion } from "../database/schema";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import { requestWorker } from "./ocr-worker-client";
 import { isGenericReportTitle } from "./ai-extraction.service";
-import { builtinIndicators } from "../domain/indicator-dictionary/builtin-indicators";
 import { trendPlacementFor, type TrendPlacement } from "../domain/indicator-dictionary/trend-taxonomy";
-import { convertUnit } from "./indicator-normalization.service";
+import { convertUnit, ensureBuiltinIndicatorCatalog } from "./indicator-normalization.service";
 import { getJobRunnerStatus, isReportJobActive, startJobRunner, stopJobRunner } from "./job-runner.service";
 import { enqueueFileGarbage } from "./file-gc.service";
 import { rebindRestoredGatewayAdministrator } from "./restore-identity.service";
@@ -40,6 +55,8 @@ import {
   upsertManualReportFieldOverrides,
   type ReportFieldKey
 } from "./report-field-overrides.service";
+import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
+import { reportStructuredSectionLabels } from "./report-structured-section.service";
 
 type ReportCursor = { issuedAt: string | null; id: string };
 export type ReportFilters = {
@@ -53,6 +70,16 @@ export type ReportFilters = {
   ocrQuery?: string;
   trash?: boolean;
 };
+
+const displayDepartmentSql = `
+  COALESCE(
+    r.performing_department,
+    r.visit_department,
+    r.reporting_department,
+    r.ordering_department,
+    CASE WHEN r.report_type = 'checkup' THEN '综合体检' END
+  )
+`;
 
 function decodeCursor(value?: string): ReportCursor | null {
   if (!value) return null;
@@ -256,13 +283,22 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
   );
   const currentBodyPart = normalizeContentKey(current.bodyPart || firstBodyPart(current.bodyPartsJson));
   const currentFileSignature = reportFileSignature(current.id);
+  const localEvidence = new Map(
+    findLocalDuplicateEvidence(current.id).map((candidate) => [candidate.reportId, candidate])
+  );
 
-  if (!currentFileSignature && !currentHospital && !currentDate && !Object.keys(currentIdentifiers).length) return [];
+  if (
+    !currentFileSignature
+    && !currentHospital
+    && !currentDate
+    && !Object.keys(currentIdentifiers).length
+    && !localEvidence.size
+  ) return [];
 
   const rows = getDatabase().prepare(`
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
-      COALESCE(r.performing_department, r.visit_department) AS departmentName,
+      ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
       r.report_issued_at AS reportIssuedAt,
       (SELECT COUNT(*) FROM observations o WHERE o.report_id = r.id AND o.abnormal_flag IN ('high', 'low', 'abnormal')) AS abnormalCount,
@@ -311,6 +347,8 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
     const observationStats = sharedObservationStats(current.id, candidate.id);
     const observationMatches = observationStats.shared;
     if (observationMatches > 0) matchedFields.push(`指标${observationMatches}项`);
+    const localMatch = localEvidence.get(candidate.id);
+    if (localMatch) matchedFields.push(...localMatch.matchedFields);
 
     if (hasSameOriginal) {
       candidates.push({
@@ -329,6 +367,15 @@ function findDuplicateCandidates(current: DuplicateSourceRow): DuplicateReportCa
         confidence: "high" as const,
         matchedFields: [...new Set([...matchedFields, ...identifierMatches.map((key) => `编号:${key}`)])],
         reason: `医疗编号一致（${identifierMatches.join("、")}）`
+      });
+      continue;
+    }
+    if (localMatch) {
+      candidates.push({
+        ...candidate,
+        confidence: localMatch.confidence,
+        matchedFields: [...new Set(matchedFields)],
+        reason: localMatch.reason
       });
       continue;
     }
@@ -356,7 +403,7 @@ function duplicateSourceRowsForMember(user: RequestUser, memberId: string) {
   return getDatabase().prepare(`
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
-      COALESCE(r.performing_department, r.visit_department) AS departmentName,
+      ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
       r.report_issued_at AS reportIssuedAt,
       (SELECT COUNT(*) FROM observations o WHERE o.report_id = r.id AND o.abnormal_flag IN ('high', 'low', 'abnormal')) AS abnormalCount,
@@ -499,7 +546,7 @@ export function listReports(user: RequestUser, limit = 30, memberIdOrFilters?: s
   const rows = getDatabase().prepare(`
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
-      COALESCE(r.performing_department, r.visit_department) AS departmentName,
+      ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
       r.report_issued_at AS reportIssuedAt,
       (SELECT COUNT(*) FROM observations o WHERE o.report_id = r.id AND o.abnormal_flag IN ('high', 'low', 'abnormal')) AS abnormalCount,
@@ -611,7 +658,9 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
   const row = getDatabase().prepare(`
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch, r.city,
-      r.visit_type AS visitType, r.visit_department AS departmentName,
+      r.visit_type AS visitType,
+      ${displayDepartmentSql} AS departmentName,
+      r.visit_department AS visitDepartment,
       r.ordering_department AS orderingDepartment, r.performing_department AS performingDepartment,
       r.reporting_department AS reportingDepartment, r.inpatient_ward AS inpatientWard,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
@@ -630,6 +679,7 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
   `).get(user.id, reportId) as (DuplicateSourceRow & {
     city: string | null;
     visitType: string | null;
+    visitDepartment: string | null;
     orderingDepartment: string | null;
     performingDepartment: string | null;
     reportingDepartment: string | null;
@@ -685,6 +735,255 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
       evidenceJson: undefined
     };
   }) as Observation[];
+  const morphologyFindings = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, section_name AS sectionName, organ, region, laterality,
+      finding_type AS findingType, finding_name AS findingName, presence,
+      finding_count AS findingCount, size_length AS sizeLength, size_width AS sizeWidth,
+      size_height AS sizeHeight, size_unit AS sizeUnit, measurements_json AS measurementsJson,
+      morphology_text AS morphology, attributes_json AS attributesJson,
+      classification_system AS classificationSystem,
+      classification_value AS classificationValue,
+      classification_text AS classificationText, comparison_text AS comparisonText,
+      raw_text AS rawText, evidence_json AS evidenceJson, confidence,
+      tracking_group_id AS trackingGroupId, match_confidence AS matchConfidence,
+      source, manual_fields_json AS manualFieldsJson
+    FROM morphology_findings
+    WHERE report_id = ?
+    ORDER BY section_name, organ, finding_type, id
+    LIMIT 200
+  `).all(reportId).map((item) => {
+    const finding = item as {
+      id: string;
+      reportId: string;
+      sectionName: string | null;
+      organ: string | null;
+      region: string | null;
+      laterality: MorphologyFinding["laterality"];
+      findingType: string;
+      findingName: string;
+      presence: MorphologyFinding["presence"];
+      findingCount: number | null;
+      sizeLength: number | null;
+      sizeWidth: number | null;
+      sizeHeight: number | null;
+      sizeUnit: string | null;
+      measurementsJson: string;
+      morphology: string | null;
+      attributesJson: string;
+      classificationSystem: string | null;
+      classificationValue: string | null;
+      classificationText: string | null;
+      comparisonText: string | null;
+      rawText: string;
+      evidenceJson: string;
+      confidence: number | null;
+      trackingGroupId: string | null;
+      matchConfidence: number | null;
+      source: MorphologyFinding["source"];
+      manualFieldsJson: string;
+    };
+    const hasClassification = Boolean(
+      finding.classificationSystem || finding.classificationValue || finding.classificationText
+    );
+    return {
+      id: finding.id,
+      reportId: finding.reportId,
+      examDate: row.examinedAt || row.reportIssuedAt,
+      sectionName: finding.sectionName,
+      organ: finding.organ,
+      region: finding.region,
+      laterality: finding.laterality,
+      findingType: finding.findingType,
+      findingName: finding.findingName,
+      presence: finding.presence,
+      findingCount: finding.findingCount,
+      size: {
+        length: finding.sizeLength,
+        width: finding.sizeWidth,
+        height: finding.sizeHeight,
+        unit: finding.sizeUnit
+      },
+      measurements: parseJson(finding.measurementsJson, []),
+      morphology: finding.morphology,
+      attributes: parseJson(finding.attributesJson, {}),
+      classification: hasClassification ? {
+        system: finding.classificationSystem,
+        value: finding.classificationValue,
+        text: finding.classificationText
+      } : null,
+      comparisonText: finding.comparisonText,
+      rawText: finding.rawText,
+      evidence: parseJson(finding.evidenceJson, []),
+      confidence: finding.confidence,
+      trackingGroupId: finding.trackingGroupId,
+      matchConfidence: finding.matchConfidence,
+      source: finding.source,
+      manualFields: parseJson(finding.manualFieldsJson, [])
+    };
+  }) as MorphologyFinding[];
+  const diagnoses = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, section_name AS sectionName,
+      diagnosis_type AS diagnosisType, diagnosis_text AS diagnosisText,
+      diagnosis_code AS diagnosisCode, code_system AS codeSystem,
+      is_primary AS isPrimary, evidence_json AS evidenceJson, source,
+      manual_fields_json AS manualFieldsJson
+    FROM report_diagnoses WHERE report_id = ? AND is_deleted = 0
+    ORDER BY is_primary DESC, diagnosis_type, id
+  `).all(reportId).map((item) => {
+    const fact = item as unknown as Omit<ReportDiagnosis, "isPrimary" | "evidence" | "manualFields"> & {
+      isPrimary: number;
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...fact,
+      isPrimary: Boolean(fact.isPrimary),
+      evidence: parseJson(fact.evidenceJson, []),
+      manualFields: parseJson(fact.manualFieldsJson, []),
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }) as ReportDiagnosis[];
+  const medications = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, section_name AS sectionName,
+      medication_context AS context, medication_name AS medicationName,
+      generic_name AS genericName, specification, dosage_form AS dosageForm,
+      dose, dose_unit AS doseUnit, frequency, route, duration, quantity,
+      quantity_unit AS quantityUnit, instructions, evidence_json AS evidenceJson,
+      source, manual_fields_json AS manualFieldsJson
+    FROM report_medications WHERE report_id = ? AND is_deleted = 0
+    ORDER BY medication_context, section_name, id
+  `).all(reportId).map((item) => {
+    const fact = item as Omit<ReportMedication, "evidence" | "manualFields"> & {
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...fact,
+      evidence: parseJson(fact.evidenceJson, []),
+      manualFields: parseJson(fact.manualFieldsJson, []),
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }) as ReportMedication[];
+  const procedures = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, section_name AS sectionName,
+      procedure_type AS procedureType, procedure_name AS procedureName,
+      procedure_code AS procedureCode, body_part AS bodyPart,
+      performed_at AS performedAt, result_text AS resultText,
+      evidence_json AS evidenceJson, source, manual_fields_json AS manualFieldsJson
+    FROM report_procedures WHERE report_id = ? AND is_deleted = 0
+    ORDER BY performed_at, procedure_type, id
+  `).all(reportId).map((item) => {
+    const fact = item as Omit<ReportProcedure, "evidence" | "manualFields"> & {
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...fact,
+      evidence: parseJson(fact.evidenceJson, []),
+      manualFields: parseJson(fact.manualFieldsJson, []),
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }) as ReportProcedure[];
+  const vaccinations = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, vaccine_name AS vaccineName,
+      dose_number AS doseNumber, manufacturer, lot_number AS lotNumber,
+      administered_at AS administeredAt, administration_site AS administrationSite,
+      next_due_at AS nextDueAt, evidence_json AS evidenceJson, source,
+      manual_fields_json AS manualFieldsJson
+    FROM vaccination_records WHERE report_id = ? AND is_deleted = 0
+    ORDER BY administered_at, id
+  `).all(reportId).map((item) => {
+    const fact = item as Omit<VaccinationRecord, "evidence" | "manualFields"> & {
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...fact,
+      evidence: parseJson(fact.evidenceJson, []),
+      manualFields: parseJson(fact.manualFieldsJson, []),
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }) as VaccinationRecord[];
+  const billingSummaryRow = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, invoice_number AS invoiceNumber,
+      total_amount AS totalAmount, insurance_amount AS insuranceAmount,
+      self_pay_amount AS selfPayAmount, currency, evidence_json AS evidenceJson,
+      source, manual_fields_json AS manualFieldsJson
+    FROM billing_summaries WHERE report_id = ? AND is_deleted = 0
+  `).get(reportId) as (Omit<BillingSummary, "evidence" | "manualFields"> & {
+    evidenceJson: string;
+    manualFieldsJson: string;
+  }) | undefined;
+  const billingSummary = billingSummaryRow
+    ? {
+        ...billingSummaryRow,
+        evidence: parseJson(billingSummaryRow.evidenceJson, []),
+        manualFields: parseJson(billingSummaryRow.manualFieldsJson, []),
+        evidenceJson: undefined,
+        manualFieldsJson: undefined
+      }
+    : null;
+  const billingItems = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, category, item_name AS itemName,
+      amount, quantity, evidence_json AS evidenceJson
+      , source, manual_fields_json AS manualFieldsJson
+    FROM billing_items WHERE report_id = ? AND is_deleted = 0
+    ORDER BY category, id
+  `).all(reportId).map((item) => {
+    const fact = item as Omit<BillingItem, "evidence" | "manualFields"> & {
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...fact,
+      evidence: parseJson(fact.evidenceJson, []),
+      manualFields: parseJson(fact.manualFieldsJson, []),
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }) as BillingItem[];
+  const structuredSectionOrder = [
+    "checkup_package", "checkup_positive_findings", "checkup_abnormal_summary",
+    "checkup_final_conclusion", "checkup_original_recommendation",
+    "laboratory_specimen", "laboratory_method",
+    "imaging_modality", "imaging_contrast",
+    "functional_method", "functional_description",
+    "pathology_specimen", "pathology_gross_findings", "pathology_microscopic_findings",
+    "pathology_immunohistochemistry", "pathology_grade", "pathology_stage",
+    "outpatient_history", "outpatient_physical_examination", "outpatient_disposition", "outpatient_advice",
+    "inpatient_course", "inpatient_discharge_instructions"
+  ];
+  const structuredSections = getDatabase().prepare(`
+    SELECT id, report_id AS reportId, section_key AS sectionKey,
+      section_title AS title, content_text AS content, content_json AS contentJson,
+      evidence_json AS evidenceJson, source, manual_fields_json AS manualFieldsJson
+    FROM report_structured_sections
+    WHERE report_id = ? AND is_deleted = 0
+  `).all(reportId).map((item) => {
+    const section = item as Omit<ReportStructuredSection, "contentData" | "evidence" | "manualFields"> & {
+      contentJson: string | null;
+      evidenceJson: string;
+      manualFieldsJson: string;
+    };
+    return {
+      ...section,
+      contentData: parseJson<Record<string, unknown> | null>(section.contentJson, null),
+      evidence: parseJson(section.evidenceJson, []),
+      manualFields: parseJson(section.manualFieldsJson, []),
+      contentJson: undefined,
+      evidenceJson: undefined,
+      manualFieldsJson: undefined
+    };
+  }).sort((left, right) => {
+    const leftIndex = structuredSectionOrder.indexOf(left.sectionKey);
+    const rightIndex = structuredSectionOrder.indexOf(right.sectionKey);
+    return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex)
+      || left.title.localeCompare(right.title, "zh-CN");
+  }) as ReportStructuredSection[];
   return {
     ...row,
     bodyParts: parseJson(row.bodyPartsJson, []),
@@ -692,6 +991,14 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
     clinicians: parseJson(row.cliniciansJson, {}),
     pages,
     observations,
+    morphologyFindings,
+    diagnoses,
+    medications,
+    procedures,
+    vaccinations,
+    billingSummary,
+    billingItems,
+    structuredSections,
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates: findDuplicateCandidates(row)
   };
@@ -1291,6 +1598,8 @@ function normalizeTrendUnit(value: string | null) {
     "g/l": "g/L",
     "u/l": "U/L",
     "iu/l": "U/L",
+    "iu/ml": "IU/mL",
+    "kiu/l": "IU/mL",
     "10^9/l": "10^9/L",
     "10^12/l": "10^12/L",
     "×10^9/l": "10^9/L",
@@ -1452,11 +1761,50 @@ function placementVoteKey(value: TrendPlacement) {
   return `${value.groupKey}\u0000${value.subgroupKey || ""}`;
 }
 
-const builtinTrendByKey = new Map(builtinIndicators.map((indicator) => [indicator.canonicalKey, indicator]));
+function activeTrendCatalog() {
+  ensureBuiltinIndicatorCatalog();
+  const rows = getDatabase().prepare(`
+    SELECT catalog.canonical_key AS canonicalKey, catalog.category,
+      catalog.explanation, catalog.item_order AS itemOrder,
+      category.group_key AS groupKey, groups.name AS groupName,
+      groups.item_order AS groupOrder, category.subgroup_key AS subgroupKey,
+      subgroups.name AS subgroupName, subgroups.item_order AS subgroupOrder
+    FROM indicator_catalog catalog
+    JOIN indicator_taxonomy_categories category ON category.category_key = catalog.category_key
+    JOIN indicator_taxonomy_groups groups ON groups.group_key = category.group_key
+    LEFT JOIN indicator_taxonomy_subgroups subgroups ON subgroups.subgroup_key = category.subgroup_key
+    WHERE catalog.source = 'builtin' AND catalog.trend_enabled = 1
+  `).all() as Array<{
+    canonicalKey: string;
+    category: string;
+    explanation: string | null;
+    itemOrder: number | null;
+    groupKey: string;
+    groupName: string;
+    groupOrder: number;
+    subgroupKey: string | null;
+    subgroupName: string | null;
+    subgroupOrder: number | null;
+  }>;
+  return new Map(rows.map((row) => [row.canonicalKey, {
+    category: row.category,
+    explanation: row.explanation,
+    itemOrder: row.itemOrder ?? 9999,
+    placement: {
+      groupKey: row.groupKey,
+      groupName: row.groupName,
+      groupOrder: row.groupOrder,
+      subgroupKey: row.subgroupKey,
+      subgroupName: row.subgroupName,
+      subgroupOrder: row.subgroupOrder ?? 9999
+    } satisfies TrendPlacement
+  }]));
+}
 
 export function listTrendSeries(user: RequestUser, memberId?: string) {
   if (!user.authenticated) return [];
   if (memberId) assertMemberAccess(user, memberId);
+  const trendCatalog = activeTrendCatalog();
   const pinnedKeys = memberId
     ? new Set((getDatabase().prepare(`
         SELECT indicator_key AS indicatorKey, unit_key AS unitKey
@@ -1696,7 +2044,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   }>();
   for (const row of pointsWithEvidence) {
     const key = `${row.trendKey}\u0000${row.trendUnit || ""}`;
-    const builtin = builtinTrendByKey.get(row.trendKey) || null;
+    const builtin = trendCatalog.get(row.trendKey) || null;
     const rowPlacement = trendPlacementFor({
       category: builtin?.category || row.trendCategory,
       sectionName: row.sectionName,
@@ -1712,9 +2060,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         confidence: row.trendConfidence,
         explanation: builtin?.explanation || row.trendExplanation,
         explanationConfidence: builtin ? 1 : Number(row.trendConfidence || 0),
-        fixedPlacement: builtin
-          ? trendPlacementFor({ category: builtin.category })
-          : null,
+        fixedPlacement: builtin?.placement || null,
         placementVotes: new Map(),
         itemOrder: builtin?.itemOrder ?? 9999,
         matchReasons: new Set(),
@@ -2101,8 +2447,23 @@ const auditActionTitles: Record<string, string> = {
   "maintenance.regenerate_report_titles": "批量清理报告标题",
   "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图",
   "maintenance.normalize_indicators": "重新归一化历史指标",
+  "maintenance.rebuild_morphology_tracking": "重新关联历史形态发现",
+  "morphology.update": "校对形态发现",
+  "morphology.link": "关联形态变化",
+  "morphology.separate": "建立独立形态变化",
+  "morphology.ignore": "忽略形态误提取",
+  "morphology.merge": "合并形态变化线",
+  "morphology.split": "拆分形态变化线",
+  "clinical_fact.create": "新增报告分类信息",
+  "clinical_fact.update": "校对报告分类信息",
+  "clinical_fact.delete": "删除报告分类信息",
+  "report_structured_section.create": "新增报告专属内容",
+  "report_structured_section.update": "校对报告专属内容",
+  "report_structured_section.delete": "删除报告专属内容",
   "system.logs_clear": "清理系统日志",
   "system.diagnostics_export": "导出系统诊断包",
+  "dictionary.update": "更新指标字典",
+  "dictionary.rollback": "回滚指标字典",
 };
 
 const auditTargetLabels: Record<string, string> = {
@@ -2113,7 +2474,12 @@ const auditTargetLabels: Record<string, string> = {
   member: "家庭成员",
   backup: "备份",
   observation: "指标",
+  morphology_finding: "形态发现",
+  clinical_fact: "报告分类信息",
+  report_structured_section: "报告专属内容",
   system_log: "系统日志",
+  indicator_dictionary: "指标字典",
+  user: "用户账号",
 };
 
 /** 审计 detail 中的状态值统一翻译成中文，覆盖提醒/通知/报告三类状态 */
@@ -2137,10 +2503,12 @@ function shortAuditId(value: string) {
 }
 
 function collectAuditReferenceIds(rows: Array<{ targetType: string | null; targetId: string | null; detailJson: string }>) {
+  const userIds = new Set<string>();
   const memberIds = new Set<string>();
   const reportIds = new Set<string>();
   const pageIds = new Set<string>();
   const reminderIds = new Set<string>();
+  const morphologyFindingIds = new Set<string>();
   const backupIds = new Set<string>();
   for (const row of rows) {
     const detail = parseJson<Record<string, unknown>>(row.detailJson, {});
@@ -2149,8 +2517,11 @@ function collectAuditReferenceIds(rows: Array<{ targetType: string | null; targe
       else if (row.targetType === "report_page") pageIds.add(row.targetId);
       else if (row.targetType === "health_member" || row.targetType === "member") memberIds.add(row.targetId);
       else if (row.targetType === "reminder") reminderIds.add(row.targetId);
+      else if (row.targetType === "morphology_finding") morphologyFindingIds.add(row.targetId);
       else if (row.targetType === "backup") backupIds.add(row.targetId);
+      else if (row.targetType === "user") userIds.add(row.targetId);
     }
+    if (typeof detail.userId === "string") userIds.add(detail.userId);
     for (const key of ["memberId"] as const) {
       if (typeof detail[key] === "string") memberIds.add(detail[key]);
     }
@@ -2159,10 +2530,14 @@ function collectAuditReferenceIds(rows: Array<{ targetType: string | null; targe
     }
     if (typeof detail.reminderId === "string") reminderIds.add(detail.reminderId);
   }
-  return { memberIds, reportIds, pageIds, reminderIds, backupIds };
+  return { userIds, memberIds, reportIds, pageIds, reminderIds, morphologyFindingIds, backupIds };
 }
 
-function rowsById<T extends { id: string }>(table: "health_members" | "reports" | "reminders", ids: Set<string>, select: string) {
+function rowsById<T extends { id: string }>(
+  table: "users" | "health_members" | "reports" | "reminders" | "morphology_findings",
+  ids: Set<string>,
+  select: string
+) {
   if (!ids.size) return new Map<string, T>();
   const placeholders = [...ids].map(() => "?").join(",");
   const rows = getDatabase().prepare(`SELECT ${select} FROM ${table} WHERE id IN (${placeholders})`).all(...ids) as T[];
@@ -2185,6 +2560,7 @@ function userAuditDescription(
   action: string,
   detail: Record<string, unknown>,
   names: {
+    users: Map<string, { id: string; displayName: string }>;
     members: Map<string, { id: string; displayName: string }>;
     reports: Map<string, { id: string; title: string }>;
     reminders: Map<string, { id: string; title: string }>;
@@ -2215,9 +2591,35 @@ function userAuditDescription(
   }
   if (typeof detail.safetyBackupId === "string") parts.push(`安全备份 ${shortAuditId(detail.safetyBackupId)}`);
   if (typeof detail.updated === "number") parts.push(`更新 ${detail.updated} 条`);
-  if (typeof detail.status === "string") parts.push(`状态 ${auditStatusLabels[detail.status] || detail.status}`);
+  if (action.startsWith("dictionary.")) {
+    if (detail.layer === "core") parts.push("内置字典");
+    else if (detail.layer === "remote") parts.push("远程字典");
+    if (typeof detail.revision === "number") parts.push(`版本 ${detail.revision}`);
+    if (typeof detail.indicators === "number") parts.push(`${detail.indicators} 个指标`);
+    if (typeof detail.aliases === "number") parts.push(`${detail.aliases} 个别名`);
+  }
+  if (typeof detail.status === "string") parts.push(`状态 ${auditStatusLabels[detail.status] || "未知状态"}`);
+  if (typeof detail.factType === "string") {
+    const labels: Record<string, string> = {
+      diagnosis: "诊断", medication: "用药", procedure: "诊疗操作",
+      vaccination: "疫苗", billingSummary: "费用汇总", billingItem: "费用明细"
+    };
+    parts.push(labels[detail.factType] || "其他分类信息");
+  }
+  if (typeof detail.sectionKey === "string") {
+    parts.push(reportStructuredSectionLabels[
+      detail.sectionKey as keyof typeof reportStructuredSectionLabels
+    ] || "其他专属内容");
+  }
   if (Array.isArray(detail.fields) && detail.fields.length) parts.push(`字段 ${detail.fields.length} 项`);
-  return parts.join(" · ") || auditActionTitles[action] || action;
+  return parts.join(" · ") || auditActionTitles[action] || "未提供操作详情";
+}
+
+function userAuditTitle(action: string, detail: Record<string, unknown>) {
+  if (action === "dictionary.update" && detail.layer === "core") return "同步内置指标字典";
+  if (action === "dictionary.update" && detail.layer === "remote") return "更新远程指标字典";
+  if (action === "dictionary.rollback") return "回滚远程指标字典";
+  return auditActionTitles[action] || "未知操作";
 }
 
 export function listUserOperationAuditLogs(user: RequestUser, limit = 30, cursorValue?: string): CursorPage<{
@@ -2255,17 +2657,23 @@ export function listUserOperationAuditLogs(user: RequestUser, limit = 30, cursor
   const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
   const refs = collectAuditReferenceIds(pageRows);
   const names = {
+    users: rowsById<{ id: string; displayName: string }>("users", refs.userIds, "id, display_name AS displayName"),
     members: rowsById<{ id: string; displayName: string }>("health_members", refs.memberIds, "id, display_name AS displayName"),
     reports: rowsById<{ id: string; title: string }>("reports", refs.reportIds, "id, title"),
     pages: reportPagesById(refs.pageIds),
-    reminders: rowsById<{ id: string; title: string }>("reminders", refs.reminderIds, "id, title")
+    reminders: rowsById<{ id: string; title: string }>("reminders", refs.reminderIds, "id, title"),
+    morphologyFindings: rowsById<{ id: string; organ: string | null; findingName: string }>(
+      "morphology_findings",
+      refs.morphologyFindingIds,
+      "id, organ, finding_name AS findingName"
+    )
   };
   const targetName = (targetType: string | null, targetId: string | null, detail: Record<string, unknown>) => {
     if (!targetId) return null;
     if (targetType === "report") {
       return names.reports.get(targetId)?.title
         || (typeof detail.reportTitle === "string" ? detail.reportTitle : null)
-        || shortAuditId(targetId);
+        || "已删除报告";
     }
     if (targetType === "report_page") {
       const page = names.pages.get(targetId);
@@ -2273,8 +2681,36 @@ export function listUserOperationAuditLogs(user: RequestUser, limit = 30, cursor
       if (typeof detail.reportId === "string") return `${names.reports.get(detail.reportId)?.title || shortAuditId(detail.reportId)} · 报告页面`;
       return "报告页面";
     }
-    if (targetType === "health_member" || targetType === "member") return names.members.get(targetId)?.displayName || shortAuditId(targetId);
-    if (targetType === "reminder") return names.reminders.get(targetId)?.title || shortAuditId(targetId);
+    if (targetType === "health_member" || targetType === "member") return names.members.get(targetId)?.displayName || "已删除成员";
+    if (targetType === "reminder") return names.reminders.get(targetId)?.title || "已删除提醒";
+    if (targetType === "user") return names.users.get(targetId)?.displayName || "未知用户";
+    if (targetType === "backup") return "完整备份";
+    if (targetType === "observation") return "指标记录";
+    if (targetType === "morphology_finding") {
+      const finding = names.morphologyFindings.get(targetId);
+      return finding ? [finding.organ, finding.findingName].filter(Boolean).join(" · ") : "形态发现";
+    }
+    if (targetType === "indicator_dictionary") {
+      const layer = detail.layer === "core" ? "内置字典" : detail.layer === "remote" ? "远程字典" : "指标字典";
+      return typeof detail.revision === "number" ? `${layer}版本 ${detail.revision}` : layer;
+    }
+    if (targetType === "clinical_fact" && typeof detail.reportId === "string") {
+      const labels: Record<string, string> = {
+        diagnosis: "诊断", medication: "用药", procedure: "诊疗操作",
+        vaccination: "疫苗", billingSummary: "费用汇总", billingItem: "费用明细"
+      };
+      const reportTitle = names.reports.get(detail.reportId)?.title || shortAuditId(detail.reportId);
+      const factLabel = typeof detail.factType === "string" ? labels[detail.factType] || "其他分类信息" : "分类信息";
+      return `${reportTitle} · ${factLabel}`;
+    }
+    if (targetType === "report_structured_section" && typeof detail.reportId === "string") {
+      const reportTitle = names.reports.get(detail.reportId)?.title || shortAuditId(detail.reportId);
+      const sectionLabel = typeof detail.sectionKey === "string"
+        ? reportStructuredSectionLabels[detail.sectionKey as keyof typeof reportStructuredSectionLabels]
+          || "其他专属内容"
+        : "专属内容";
+      return `${reportTitle} · ${sectionLabel}`;
+    }
     return shortAuditId(targetId);
   };
   const items = pageRows.map((item) => {
@@ -2282,9 +2718,9 @@ export function listUserOperationAuditLogs(user: RequestUser, limit = 30, cursor
     return {
       id: item.id,
       action: item.action,
-      title: auditActionTitles[item.action] || "未知操作",
+      title: userAuditTitle(item.action, detail),
       description: userAuditDescription(item.action, detail, names),
-      targetLabel: item.targetType ? auditTargetLabels[item.targetType] || item.targetType : "系统",
+      targetLabel: item.targetType ? auditTargetLabels[item.targetType] || "其他对象" : "系统",
       targetId: item.targetId,
       targetName: targetName(item.targetType, item.targetId, detail),
       actorName: item.actorName,
@@ -2306,7 +2742,8 @@ export function getAiAuditSummary(user: RequestUser, limit = 30, cursorValue?: s
   const cursor = decodeAuditCursor(cursorValue);
   const summary = getDatabase().prepare(`
     WITH ai_rows AS (
-      SELECT j.id, 'report_extraction' AS source, j.status, j.attempts,
+      SELECT j.id, 'report_extraction' AS source, j.status,
+        COALESCE(NULLIF((SELECT COUNT(*) FROM ai_extraction_attempts aa WHERE aa.job_id = j.id), 0), j.attempts) AS attempts,
         e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens, e.elapsed_ms AS elapsedMs
       FROM processing_jobs j
       LEFT JOIN report_extractions e ON e.job_id = j.id
@@ -2335,10 +2772,26 @@ export function getAiAuditSummary(user: RequestUser, limit = 30, cursorValue?: s
   const rows = getDatabase().prepare(`
     WITH ai_rows AS (
       SELECT j.id, 'report_extraction' AS source, j.report_id AS reportId, r.title AS reportTitle, r.member_id AS memberId,
-        j.status, j.attempts, j.error_code AS errorCode, j.error_message AS errorMessage,
+        j.status,
+        COALESCE(NULLIF((SELECT COUNT(*) FROM ai_extraction_attempts aa WHERE aa.job_id = j.id), 0), j.attempts) AS attempts,
+        j.error_code AS errorCode, j.error_message AS errorMessage,
         j.created_at AS createdAt, j.started_at AS startedAt, j.finished_at AS finishedAt,
         e.provider, e.model, e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens,
-        e.elapsed_ms AS elapsedMs, e.input_characters AS inputCharacters
+        e.elapsed_ms AS elapsedMs, e.input_characters AS inputCharacters,
+        (
+          SELECT ur.document_content_type
+          FROM ai_extraction_unit_routes ur
+          JOIN ai_extraction_units uu ON uu.id = ur.unit_id
+          WHERE uu.job_id = j.id
+          ORDER BY uu.unit_index
+          LIMIT 1
+        ) AS documentContentType,
+        (
+          SELECT GROUP_CONCAT(DISTINCT ur.primary_content_type)
+          FROM ai_extraction_unit_routes ur
+          JOIN ai_extraction_units uu ON uu.id = ur.unit_id
+          WHERE uu.job_id = j.id
+        ) AS routedContentTypes
       FROM processing_jobs j
       JOIN reports r ON r.id = j.report_id
       LEFT JOIN report_extractions e ON e.job_id = j.id
@@ -2348,7 +2801,8 @@ export function getAiAuditSummary(user: RequestUser, limit = 30, cursorValue?: s
         a.status, a.attempts, a.error_code AS errorCode, a.error_message AS errorMessage,
         a.created_at AS createdAt, a.created_at AS startedAt, a.created_at AS finishedAt,
         a.provider, a.model, a.prompt_tokens AS promptTokens, a.completion_tokens AS completionTokens,
-        a.elapsed_ms AS elapsedMs, a.input_characters AS inputCharacters
+        a.elapsed_ms AS elapsedMs, a.input_characters AS inputCharacters,
+        NULL AS documentContentType, NULL AS routedContentTypes
       FROM ai_audit_events a
       LEFT JOIN reports r ON r.id = a.report_id
     )
@@ -2365,6 +2819,7 @@ export function getAiAuditSummary(user: RequestUser, limit = 30, cursorValue?: s
     errorCode: string | null; errorMessage: string | null; createdAt: string; startedAt: string | null;
     finishedAt: string | null; provider: string | null; model: string | null; promptTokens: number | null;
     completionTokens: number | null; elapsedMs: number | null; inputCharacters: number | null;
+    documentContentType: string | null; routedContentTypes: string | null;
   }>;
   const hasMore = rows.length > safeLimit;
   const recent = hasMore ? rows.slice(0, safeLimit) : rows;
@@ -2404,7 +2859,15 @@ export function buildMemberExportManifest(user: RequestUser, memberId: string) {
       bodyPart: report.bodyPart,
       reportIssuedAt: report.reportIssuedAt,
       pages: report.pages,
-      observations: report.observations
+      observations: report.observations,
+      morphologyFindings: report.morphologyFindings,
+      diagnoses: report.diagnoses,
+      medications: report.medications,
+      procedures: report.procedures,
+      vaccinations: report.vaccinations,
+      billingSummary: report.billingSummary,
+      billingItems: report.billingItems,
+      structuredSections: report.structuredSections
     }))
   };
 }

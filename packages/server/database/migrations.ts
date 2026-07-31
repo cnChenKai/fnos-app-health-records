@@ -373,6 +373,29 @@ export const databaseMigrations: DatabaseMigration[] = [
         `);
       }
     }
+  },
+  {
+    version: 15,
+    name: "add_indicator_dictionary_snapshots",
+    checksum: "manual:015-add-indicator-dictionary-snapshots",
+    up: (db) => {
+      ensureIndicatorDictionaryColumns(db);
+      db.exec(indicatorDictionarySchemaSql);
+    }
+  },
+  {
+    version: 16,
+    name: "finalize_indicator_dictionary_morphology_and_ai_units",
+    checksum: "manual:016-finalize-indicator-dictionary-morphology-ai-units",
+    up: (db) => {
+      ensureIndicatorDictionaryColumns(db);
+      db.exec(indicatorDictionarySchemaSql);
+      db.exec(morphologyFindingSchemaSql);
+      db.exec(clinicalFactSchemaSql);
+      db.exec(reportStructuredSectionSchemaSql);
+      ensureClinicalFactColumns(db);
+      db.exec(aiExtractionUnitSchemaSql);
+    }
   }
 ];
 
@@ -382,3 +405,547 @@ export function tableColumnNames(db: DatabaseSync, tableName: string) {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
   return new Set(columns.map((column) => column.name));
 }
+
+function ensureIndicatorDictionaryColumns(db: DatabaseSync) {
+  const catalogColumns = tableColumnNames(db, "indicator_catalog");
+  for (const [name, definition] of [
+    ["category_key", "TEXT"],
+    ["item_order", "INTEGER"],
+    ["observation_kind", "TEXT"],
+    ["unit_dimension", "TEXT"],
+    ["allowed_units_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["section_hints_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["dictionary_layer", "TEXT"],
+    ["dictionary_revision", "INTEGER"],
+    ["dictionary_snapshot_id", "TEXT"]
+  ] as const) {
+    if (!catalogColumns.has(name)) db.exec(`ALTER TABLE indicator_catalog ADD COLUMN ${name} ${definition}`);
+  }
+  const aliasColumns = tableColumnNames(db, "indicator_aliases");
+  for (const [name, definition] of [
+    ["dictionary_layer", "TEXT"],
+    ["dictionary_revision", "INTEGER"],
+    ["dictionary_snapshot_id", "TEXT"]
+  ] as const) {
+    if (!aliasColumns.has(name)) db.exec(`ALTER TABLE indicator_aliases ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+export function ensureClinicalFactColumns(db: DatabaseSync) {
+  for (const table of [
+    "report_diagnoses",
+    "report_medications",
+    "report_procedures",
+    "vaccination_records",
+    "billing_summaries",
+    "billing_items"
+  ]) {
+    const columns = tableColumnNames(db, table);
+    if (!columns.has("manual_fields_json")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN manual_fields_json TEXT NOT NULL DEFAULT '[]'`);
+    }
+    if (!columns.has("is_deleted")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1))`);
+    }
+  }
+}
+
+const internalReportMetadataTokens = new Set([
+  "physicalexam",
+  "checkup",
+  "laboratory",
+  "imaging",
+  "functional",
+  "pathology",
+  "outpatient",
+  "inpatient",
+  "prescription",
+  "receipt",
+  "billing",
+  "vaccine",
+  "vaccination",
+  "other"
+]);
+
+function metadataTokenKey(value: unknown) {
+  return typeof value === "string"
+    ? value.normalize("NFKC").trim().toLowerCase().replace(/[\s_-]+/g, "")
+    : "";
+}
+
+function fallbackBodyPart(reportType: string, reportSubtype: string | null) {
+  const subtype = reportSubtype && !internalReportMetadataTokens.has(metadataTokenKey(reportSubtype))
+    ? reportSubtype.trim()
+    : null;
+  const value = subtype || ({
+    checkup: "综合体检",
+    laboratory: "检验项目",
+    functional: "功能检查",
+    pathology: "病理标本",
+    outpatient: "门诊",
+    inpatient: "住院",
+    prescription: "用药",
+    billing: "费用",
+    vaccination: "疫苗接种"
+  } as Record<string, string>)[reportType];
+  return value
+    ? [{ raw: value, name: value, parent: null, laterality: "unspecified" }]
+    : [];
+}
+
+/**
+ * Early v16 builds could persist report-type enum values as body parts. Keep this
+ * repair idempotent because those builds and the corrected build share schema v16.
+ */
+export function repairReportDisplayMetadata(db: DatabaseSync) {
+  const rows = db.prepare(`
+    SELECT id, report_type AS reportType, report_subtype AS reportSubtype,
+      body_parts_json AS bodyPartsJson
+    FROM reports
+    WHERE body_parts_json <> '[]' OR report_subtype IS NOT NULL
+  `).all() as Array<{
+    id: string;
+    reportType: string;
+    reportSubtype: string | null;
+    bodyPartsJson: string;
+  }>;
+  const update = db.prepare(`
+    UPDATE reports
+    SET report_subtype = ?, body_parts_json = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  let repaired = 0;
+  for (const row of rows) {
+    let bodyParts: unknown;
+    try {
+      bodyParts = JSON.parse(row.bodyPartsJson);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(bodyParts)) continue;
+    const subtypeIsInternal = internalReportMetadataTokens.has(metadataTokenKey(row.reportSubtype));
+    const repairedSubtype = subtypeIsInternal ? null : row.reportSubtype;
+    const cleaned = bodyParts.flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const part = item as Record<string, unknown>;
+      const raw = internalReportMetadataTokens.has(metadataTokenKey(part.raw)) ? null : part.raw;
+      const name = internalReportMetadataTokens.has(metadataTokenKey(part.name)) ? null : part.name;
+      const displayName = typeof name === "string" && name.trim()
+        ? name.trim()
+        : typeof raw === "string" && raw.trim() ? raw.trim() : null;
+      if (!displayName) return [];
+      return [{
+        ...part,
+        raw: typeof raw === "string" && raw.trim() ? raw.trim() : displayName,
+        name: displayName,
+        parent: internalReportMetadataTokens.has(metadataTokenKey(part.parent)) ? null : part.parent ?? null
+      }];
+    });
+    const repairedParts = cleaned.length
+      ? cleaned
+      : bodyParts.length || subtypeIsInternal
+        ? fallbackBodyPart(row.reportType, repairedSubtype)
+        : [];
+    if (
+      repairedSubtype === row.reportSubtype
+      && JSON.stringify(repairedParts) === JSON.stringify(bodyParts)
+    ) continue;
+    update.run(repairedSubtype, JSON.stringify(repairedParts), row.id);
+    repaired += 1;
+  }
+  return repaired;
+}
+
+export const indicatorDictionarySchemaSql = `
+CREATE TABLE IF NOT EXISTS indicator_dictionary_snapshots (
+  id TEXT PRIMARY KEY,
+  layer TEXT NOT NULL CHECK (layer IN ('core', 'remote')),
+  revision INTEGER NOT NULL,
+  format_version INTEGER NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  manifest_json TEXT,
+  taxonomy_json TEXT NOT NULL,
+  indicators_json TEXT NOT NULL,
+  source_url TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(layer, revision, content_sha256)
+);
+
+CREATE INDEX IF NOT EXISTS indicator_dictionary_snapshots_layer_idx
+  ON indicator_dictionary_snapshots(layer, revision DESC, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS indicator_dictionary_state (
+  layer TEXT PRIMARY KEY CHECK (layer IN ('core', 'remote')),
+  active_snapshot_id TEXT NOT NULL REFERENCES indicator_dictionary_snapshots(id),
+  revision INTEGER NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS indicator_dictionary_updates (
+  id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL CHECK (operation IN ('core_sync', 'remote_update', 'rollback')),
+  layer TEXT NOT NULL CHECK (layer IN ('core', 'remote')),
+  from_revision INTEGER,
+  to_revision INTEGER,
+  snapshot_id TEXT REFERENCES indicator_dictionary_snapshots(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+  source_url TEXT,
+  actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  summary_json TEXT NOT NULL DEFAULT '{}',
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS indicator_dictionary_updates_created_idx
+  ON indicator_dictionary_updates(created_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS indicator_taxonomy_groups (
+  group_key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  item_order INTEGER NOT NULL,
+  description TEXT,
+  section_hints_json TEXT NOT NULL DEFAULT '[]',
+  dictionary_layer TEXT NOT NULL,
+  dictionary_revision INTEGER NOT NULL,
+  dictionary_snapshot_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS indicator_taxonomy_subgroups (
+  subgroup_key TEXT PRIMARY KEY,
+  group_key TEXT NOT NULL REFERENCES indicator_taxonomy_groups(group_key) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  item_order INTEGER NOT NULL,
+  description TEXT,
+  section_hints_json TEXT NOT NULL DEFAULT '[]',
+  dictionary_layer TEXT NOT NULL,
+  dictionary_revision INTEGER NOT NULL,
+  dictionary_snapshot_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS indicator_taxonomy_categories (
+  category_key TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  group_key TEXT NOT NULL REFERENCES indicator_taxonomy_groups(group_key) ON DELETE CASCADE,
+  subgroup_key TEXT REFERENCES indicator_taxonomy_subgroups(subgroup_key) ON DELETE SET NULL,
+  item_order INTEGER NOT NULL,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  section_hints_json TEXT NOT NULL DEFAULT '[]',
+  dictionary_layer TEXT NOT NULL,
+  dictionary_revision INTEGER NOT NULL,
+  dictionary_snapshot_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS indicator_unmatched_names (
+  fingerprint TEXT PRIMARY KEY,
+  normalized_name TEXT NOT NULL,
+  raw_name TEXT NOT NULL,
+  unit TEXT,
+  section_name TEXT,
+  sample_result TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved', 'ignored')),
+  resolved_canonical_key TEXT,
+  first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS indicator_unmatched_occurrences (
+  observation_id TEXT PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
+  fingerprint TEXT NOT NULL REFERENCES indicator_unmatched_names(fingerprint) ON DELETE CASCADE,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS indicator_unmatched_occurrences_pool_idx
+  ON indicator_unmatched_occurrences(fingerprint, created_at DESC);
+`;
+
+export const morphologyFindingSchemaSql = `
+CREATE TABLE IF NOT EXISTS morphology_findings (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_name TEXT,
+  organ TEXT,
+  region TEXT,
+  laterality TEXT NOT NULL DEFAULT 'unspecified' CHECK (
+    laterality IN ('left', 'right', 'bilateral', 'midline', 'unspecified')
+  ),
+  finding_type TEXT NOT NULL,
+  finding_name TEXT NOT NULL,
+  presence TEXT NOT NULL DEFAULT 'present' CHECK (
+    presence IN ('present', 'absent', 'uncertain')
+  ),
+  finding_count INTEGER CHECK (finding_count IS NULL OR finding_count >= 0),
+  size_length REAL,
+  size_width REAL,
+  size_height REAL,
+  size_unit TEXT,
+  measurements_json TEXT NOT NULL DEFAULT '[]',
+  morphology_text TEXT,
+  attributes_json TEXT NOT NULL DEFAULT '{}',
+  classification_system TEXT,
+  classification_value TEXT,
+  classification_text TEXT,
+  comparison_text TEXT,
+  raw_text TEXT NOT NULL,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+  tracking_group_id TEXT,
+  match_confidence REAL CHECK (
+    match_confidence IS NULL OR (match_confidence >= 0 AND match_confidence <= 1)
+  ),
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS morphology_findings_report_idx
+  ON morphology_findings(report_id, section_name, id);
+CREATE INDEX IF NOT EXISTS morphology_findings_tracking_idx
+  ON morphology_findings(tracking_group_id, report_id)
+  WHERE tracking_group_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS morphology_findings_lookup_idx
+  ON morphology_findings(organ, finding_type, laterality, report_id);
+`;
+
+export const clinicalFactSchemaSql = `
+CREATE TABLE IF NOT EXISTS report_diagnoses (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_name TEXT,
+  diagnosis_type TEXT NOT NULL DEFAULT 'other' CHECK (
+    diagnosis_type IN ('outpatient', 'admission', 'discharge', 'pathology', 'other')
+  ),
+  diagnosis_text TEXT NOT NULL,
+  diagnosis_code TEXT,
+  code_system TEXT,
+  is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_diagnoses_report_idx
+  ON report_diagnoses(report_id, diagnosis_type, id);
+
+CREATE TABLE IF NOT EXISTS report_medications (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_name TEXT,
+  medication_context TEXT NOT NULL DEFAULT 'other' CHECK (
+    medication_context IN ('prescription', 'outpatient', 'inpatient', 'discharge', 'other')
+  ),
+  medication_name TEXT NOT NULL,
+  generic_name TEXT,
+  specification TEXT,
+  dosage_form TEXT,
+  dose TEXT,
+  dose_unit TEXT,
+  frequency TEXT,
+  route TEXT,
+  duration TEXT,
+  quantity TEXT,
+  quantity_unit TEXT,
+  instructions TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_medications_report_idx
+  ON report_medications(report_id, medication_context, id);
+
+CREATE TABLE IF NOT EXISTS report_procedures (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_name TEXT,
+  procedure_type TEXT NOT NULL DEFAULT 'other' CHECK (
+    procedure_type IN ('examination', 'treatment', 'surgery', 'other')
+  ),
+  procedure_name TEXT NOT NULL,
+  procedure_code TEXT,
+  body_part TEXT,
+  performed_at TEXT,
+  result_text TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_procedures_report_idx
+  ON report_procedures(report_id, procedure_type, performed_at, id);
+
+CREATE TABLE IF NOT EXISTS vaccination_records (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  vaccine_name TEXT NOT NULL,
+  dose_number TEXT,
+  manufacturer TEXT,
+  lot_number TEXT,
+  administered_at TEXT,
+  administration_site TEXT,
+  next_due_at TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS vaccination_records_report_idx
+  ON vaccination_records(report_id, administered_at, id);
+
+CREATE TABLE IF NOT EXISTS billing_summaries (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL UNIQUE REFERENCES reports(id) ON DELETE CASCADE,
+  invoice_number TEXT,
+  total_amount REAL,
+  insurance_amount REAL,
+  self_pay_amount REAL,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS billing_items (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  category TEXT,
+  item_name TEXT NOT NULL,
+  amount REAL,
+  quantity REAL,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS billing_items_report_idx
+  ON billing_items(report_id, category, id);
+`;
+
+export const reportStructuredSectionSchemaSql = `
+CREATE TABLE IF NOT EXISTS report_structured_sections (
+  id TEXT PRIMARY KEY,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  section_key TEXT NOT NULL,
+  section_title TEXT NOT NULL,
+  content_text TEXT NOT NULL,
+  content_json TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai', 'manual', 'legacy_migration')),
+  manual_fields_json TEXT NOT NULL DEFAULT '[]',
+  is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_structured_sections_report_idx
+  ON report_structured_sections(report_id, section_key, id);
+`;
+
+export const aiExtractionUnitSchemaSql = `
+CREATE TABLE IF NOT EXISTS ai_extraction_units (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  plan_hash TEXT NOT NULL,
+  unit_key TEXT NOT NULL,
+  unit_index INTEGER NOT NULL,
+  unit_type TEXT NOT NULL CHECK (unit_type IN ('complete_pages', 'page_chunk', 'supplement')),
+  page_numbers_json TEXT NOT NULL DEFAULT '[]',
+  page_ranges_json TEXT NOT NULL DEFAULT '[]',
+  input_hash TEXT NOT NULL,
+  character_count INTEGER NOT NULL DEFAULT 0,
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  matched_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'planned' CHECK (
+    status IN ('planned', 'processing', 'completed', 'warning', 'failed', 'superseded')
+  ),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  provider TEXT,
+  model TEXT,
+  prompt_version TEXT,
+  result_json TEXT,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  elapsed_ms INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  finished_at TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(job_id, unit_key)
+);
+
+CREATE INDEX IF NOT EXISTS ai_extraction_units_job_idx
+  ON ai_extraction_units(job_id, unit_index, id);
+CREATE INDEX IF NOT EXISTS ai_extraction_units_report_idx
+  ON ai_extraction_units(report_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS ai_extraction_units_status_idx
+  ON ai_extraction_units(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS ai_extraction_unit_routes (
+  unit_id TEXT PRIMARY KEY REFERENCES ai_extraction_units(id) ON DELETE CASCADE,
+  classifier_version TEXT NOT NULL,
+  primary_content_type TEXT NOT NULL,
+  content_types_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL NOT NULL DEFAULT 0 CHECK (confidence >= 0 AND confidence <= 1),
+  reasons_json TEXT NOT NULL DEFAULT '[]',
+  document_content_type TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ai_extraction_unit_routes_type_idx
+  ON ai_extraction_unit_routes(primary_content_type, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS ai_extraction_attempts (
+  id TEXT PRIMARY KEY,
+  unit_id TEXT NOT NULL REFERENCES ai_extraction_units(id) ON DELETE CASCADE,
+  job_id TEXT NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  attempt_number INTEGER NOT NULL,
+  attempt_type TEXT NOT NULL CHECK (
+    attempt_type IN ('main', 'format_retry', 'split', 'supplement', 'visual')
+  ),
+  status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+  provider TEXT,
+  model TEXT,
+  prompt_version TEXT,
+  input_characters INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER,
+  completion_tokens INTEGER,
+  elapsed_ms INTEGER,
+  error_code TEXT,
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS ai_extraction_attempts_unit_idx
+  ON ai_extraction_attempts(unit_id, attempt_number, created_at);
+CREATE INDEX IF NOT EXISTS ai_extraction_attempts_report_idx
+  ON ai_extraction_attempts(report_id, created_at DESC);
+`;

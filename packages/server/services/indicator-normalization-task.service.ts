@@ -4,7 +4,7 @@ import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
 import {
-  normalizeAllObservationsWithAiFallback,
+  normalizeAllObservationsFromDictionary,
   type IndicatorNormalizationMaintenanceResult
 } from "./indicator-normalization.service";
 
@@ -203,7 +203,7 @@ function taskUser(row: TaskRow): RequestUser {
 
 async function executeTask(row: TaskRow) {
   try {
-    const result = await normalizeAllObservationsWithAiFallback(taskUser(row), undefined, {
+    const result = await normalizeAllObservationsFromDictionary(taskUser(row), {
       full: row.mode === "full",
       taskId: row.id,
       onProgress(progress) {

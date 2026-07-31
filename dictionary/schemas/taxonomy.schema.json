@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://timor-m.github.io/fnos-app-health-records/dictionary/schemas/taxonomy.schema.json",
+  "title": "Health Records Indicator Taxonomy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "formatVersion",
+    "layer",
+    "revision",
+    "groups",
+    "categories"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "layer": {
+      "enum": ["core", "remote"]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "groups": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/group"
+      }
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/category"
+      }
+    }
+  },
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{1,79}$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "uniqueItems": true
+    },
+    "subgroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "order", "description", "sectionHints"],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "sectionHints": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "order", "description", "sectionHints", "subgroups"],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "sectionHints": {
+          "$ref": "#/$defs/stringList"
+        },
+        "subgroups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subgroup"
+          }
+        }
+      }
+    },
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "name",
+        "groupKey",
+        "subgroupKey",
+        "order",
+        "aliases",
+        "sectionHints"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/key"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "groupKey": {
+          "$ref": "#/$defs/key"
+        },
+        "subgroupKey": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/key"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringList"
+        },
+        "sectionHints": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    }
+  }
+}

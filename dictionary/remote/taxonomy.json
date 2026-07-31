@@ -1,0 +1,8 @@
+{
+  "$schema": "../schemas/taxonomy.schema.json",
+  "formatVersion": 1,
+  "layer": "remote",
+  "revision": 3,
+  "groups": [],
+  "categories": []
+}

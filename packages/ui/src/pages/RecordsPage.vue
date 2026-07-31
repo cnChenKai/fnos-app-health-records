@@ -40,6 +40,7 @@ useScrollLock(computed(() => mobileDetailOpen.value));
 let listSeq = 0;
 let loadMoreObserver: IntersectionObserver | null = null;
 let pendingRouteReportId = "";
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const filtered = computed(() => {
   const keyword = query.value.trim().toLocaleLowerCase();
@@ -50,10 +51,10 @@ const filtered = computed(() => {
   );
 });
 const recordCountSubtitle = computed(() => {
-  if (loading.value && !reports.value.length) return "正在加载档案";
+  if (loading.value && !reports.value.length) return "";
   const totalReports = summaryStats.value?.totalReports ?? reports.value.length;
   const totalPages = summaryStats.value?.totalPages ?? reports.value.reduce((sum, report) => sum + report.pageCount, 0);
-  if (!totalReports) return "暂无报告";
+  if (!totalReports) return "";
   return `共 ${totalReports} 份报告${totalPages ? ` · ${totalPages} 页原件` : ""}`;
 });
 const selected = computed(() => filtered.value.find((report) => report.id === selectedId.value) || null);
@@ -234,12 +235,42 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   if (memberId) load(memberId).catch(() => {});
 }, { immediate: true });
 
+function cancelPendingSearch() {
+  if (!searchDebounceTimer) return;
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+}
+
 function applyFilters() {
+  cancelPendingSearch();
   const memberId = app.selectedMemberId.value;
   if (memberId) load(memberId).catch(() => {});
 }
 
-watch(recordCountSubtitle, (subtitle) => app.setTopbarSubtitle(subtitle), { immediate: true });
+watch(query, () => {
+  cancelPendingSearch();
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    const memberId = app.selectedMemberId.value;
+    if (memberId) load(memberId).catch(() => {});
+  }, 350);
+}, { flush: "sync" });
+
+function activateTopbarSearch() {
+  app.setTopbarSearch({
+    key: "records",
+    model: query,
+    placeholder: "搜索档案",
+    expandedPlaceholder: "搜索医院、科室、部位或报告",
+    submit: applyFilters
+  });
+}
+
+function nextRouteUsesTopbarSearch() {
+  return route.path === "/records" || route.path === "/trends";
+}
+
+watch(recordCountSubtitle, (subtitle) => app.setTopbarSubtitle("records", subtitle), { immediate: true });
 
 watch(() => route.query.reportId, (reportId) => {
   pendingRouteReportId = typeof reportId === "string" ? reportId : "";
@@ -270,18 +301,23 @@ watch(loadMoreSentinel, (element) => attachLoadMoreObserver(element));
 
 onMounted(() => {
   attachLoadMoreObserver(loadMoreSentinel.value);
+  activateTopbarSearch();
 });
 onBeforeUnmount(() => {
+  cancelPendingSearch();
   loadMoreObserver?.disconnect();
-  app.setTopbarSubtitle("");
+  app.clearTopbarSubtitle("records");
+  app.clearTopbarSearch("records");
 });
-/* KeepAlive 缓存期间：失活时收起移动端详情并清副标题，激活时恢复副标题 */
+/* KeepAlive 缓存期间保留本页汇总，路由切回时顶部可以同步读取，避免闪现上一页内容。 */
 onDeactivated(() => {
+  cancelPendingSearch();
   mobileDetailOpen.value = false;
-  app.setTopbarSubtitle("");
+  if (!nextRouteUsesTopbarSearch()) app.clearTopbarSearch("records");
 });
 onActivated(() => {
-  app.setTopbarSubtitle(recordCountSubtitle.value);
+  app.setTopbarSubtitle("records", recordCountSubtitle.value);
+  activateTopbarSearch();
 });
 useRefreshOnActivate(() => { void reloadList(); });
 </script>
@@ -298,7 +334,7 @@ useRefreshOnActivate(() => { void reloadList(); });
       </div>
     </section>
     <div class="filter-row records-filter-row">
-      <label class="search-field records-search-field"><Search :size="18" /><input v-model="query" placeholder="搜索医院、科室、部位或报告" @keydown.enter="applyFilters" /></label>
+      <label class="search-field records-search-field page-search-field"><Search :size="18" /><input v-model="query" placeholder="搜索医院、科室、部位或报告" @keydown.enter="applyFilters" /></label>
       <input v-model="ocrQuery" class="compact-filter advanced-filter" placeholder="OCR 全文" @keydown.enter="applyFilters" />
       <FormSelect v-model="typeFilter" class="records-filter-select advanced-filter" :options="typeOptions" aria-label="报告类型" @change="applyFilters" />
       <FormSelect v-model="statusFilter" class="records-filter-select advanced-filter" :options="statusOptions" aria-label="归档状态" @change="applyFilters" />

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
-import { builtinIndicatorVersion } from "../domain/indicator-dictionary/builtin-indicators.ts";
 import { runIndicatorDictionaryBackfillIfNeeded } from "../services/maintenance-runner.service.ts";
+import { activeIndicatorDictionaryVersion } from "../services/indicator-dictionary.service.ts";
 
 test("backfills stale builtin indicator normalizations once per dictionary version", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-backfill-"));
@@ -59,7 +59,7 @@ test("backfills stale builtin indicator normalizations once per dictionary versi
     assert.ok(first);
     assert.equal(first.previousVersion, "old-version");
     assert.equal(first.updated, 1);
-    assert.equal(first.preserved, 1);
+    assert.equal(first.unmatched, 1);
     const cholesterol = db.prepare(`
       SELECT canonical_key AS canonicalKey, canonical_name AS canonicalName, quality, version
       FROM observation_normalizations WHERE observation_id = 'backfill-total-cholesterol'
@@ -68,21 +68,21 @@ test("backfills stale builtin indicator normalizations once per dictionary versi
       canonicalKey: "lipid_tc",
       canonicalName: "总胆固醇",
       quality: "high",
-      version: `indicator-normalization-${builtinIndicatorVersion}`
+      version: `indicator-normalization-${activeIndicatorDictionaryVersion()}`
     });
     const custom = db.prepare(`
       SELECT canonical_key AS canonicalKey, matched_by AS matchedBy
       FROM observation_normalizations WHERE observation_id = 'backfill-ai-custom'
-    `).get() as { canonicalKey: string; matchedBy: string };
+    `).get() as { canonicalKey: string | null; matchedBy: string };
     assert.deepEqual({ ...custom }, {
-      canonicalKey: "ai:numeric:自定义数值指标",
-      matchedBy: "ai_suggestion"
+      canonicalKey: null,
+      matchedBy: "none"
     });
     const storedVersion = db.prepare(`
       SELECT value_json AS valueJson
       FROM app_settings WHERE setting_key = 'maintenance.indicator_dictionary_version'
     `).get() as { valueJson: string };
-    assert.equal(JSON.parse(storedVersion.valueJson), builtinIndicatorVersion);
+    assert.equal(JSON.parse(storedVersion.valueJson), activeIndicatorDictionaryVersion());
     assert.equal(runIndicatorDictionaryBackfillIfNeeded(), null);
   } finally {
     closeDatabaseForTests();
@@ -153,7 +153,7 @@ test("replaces historical AI splits for common CBC aliases during dictionary bac
     }>;
     assert.deepEqual(rows.map((row) => ({
       ...row,
-      version: row.version === `indicator-normalization-${builtinIndicatorVersion}` ? "current" : row.version
+      version: row.version === `indicator-normalization-${activeIndicatorDictionaryVersion()}` ? "current" : row.version
     })), [
       {
         observationId: "cbc-backfill-neut",

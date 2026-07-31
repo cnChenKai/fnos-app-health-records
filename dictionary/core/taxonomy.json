@@ -1,0 +1,508 @@
+{
+  "$schema": "../schemas/taxonomy.schema.json",
+  "formatVersion": 1,
+  "layer": "core",
+  "revision": 7,
+  "groups": [
+    {
+      "key": "general",
+      "name": "一般检查",
+      "order": 10,
+      "description": "身高、体重、体重指数、腰围和生命体征等基础测量。",
+      "sectionHints": [
+        "一般检查",
+        "一般项目",
+        "基础测量",
+        "基本项目",
+        "生命体征",
+        "体格测量",
+        "人体成分"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "internal",
+      "name": "内科检查",
+      "order": 20,
+      "description": "体检报告中的内科查体项目。",
+      "sectionHints": [
+        "内科",
+        "内科检查"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "surgery",
+      "name": "外科检查",
+      "order": 30,
+      "description": "体检报告中的外科查体项目。",
+      "sectionHints": [
+        "外科",
+        "外科检查"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "ophthalmology",
+      "name": "眼科检查",
+      "order": 40,
+      "description": "视力、眼压和其他眼科检查。",
+      "sectionHints": [
+        "眼科",
+        "视力",
+        "眼压"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "ent",
+      "name": "耳鼻喉科",
+      "order": 50,
+      "description": "耳、鼻、咽喉相关检查。",
+      "sectionHints": [
+        "耳鼻喉",
+        "耳科",
+        "鼻科",
+        "咽喉"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "oral",
+      "name": "口腔科",
+      "order": 60,
+      "description": "口腔和牙科检查。",
+      "sectionHints": [
+        "口腔",
+        "牙科"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "gynecology",
+      "name": "妇科检查",
+      "order": 70,
+      "description": "妇科查体、超声及乳腺相关检查。",
+      "sectionHints": [
+        "妇科",
+        "妇科超声",
+        "乳腺"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "laboratory",
+      "name": "检验检查",
+      "order": 80,
+      "description": "血液、尿液、生化、免疫等实验室检查。",
+      "sectionHints": [
+        "检验",
+        "化验",
+        "生化",
+        "实验室"
+      ],
+      "subgroups": [
+        {
+          "key": "blood",
+          "name": "血常规",
+          "order": 10,
+          "description": "血细胞计数和分类。",
+          "sectionHints": [
+            "血常规",
+            "全血细胞",
+            "血液常规",
+            "五分类",
+            "三分类"
+          ]
+        },
+        {
+          "key": "urine",
+          "name": "尿常规",
+          "order": 20,
+          "description": "尿液常规检查。",
+          "sectionHints": [
+            "尿常规",
+            "尿液"
+          ]
+        },
+        {
+          "key": "liver",
+          "name": "肝功能",
+          "order": 30,
+          "description": "肝功能相关生化项目。",
+          "sectionHints": [
+            "肝功能",
+            "肝功"
+          ]
+        },
+        {
+          "key": "renal",
+          "name": "肾功能",
+          "order": 40,
+          "description": "肾功能相关生化项目。",
+          "sectionHints": [
+            "肾功能",
+            "肾功"
+          ]
+        },
+        {
+          "key": "lipid",
+          "name": "血脂",
+          "order": 50,
+          "description": "血脂相关项目。",
+          "sectionHints": [
+            "血脂",
+            "脂类"
+          ]
+        },
+        {
+          "key": "glucose",
+          "name": "血糖",
+          "order": 60,
+          "description": "葡萄糖代谢相关项目。",
+          "sectionHints": [
+            "血糖",
+            "葡萄糖",
+            "糖代谢"
+          ]
+        },
+        {
+          "key": "electrolyte",
+          "name": "电解质",
+          "order": 70,
+          "description": "血液电解质项目。",
+          "sectionHints": [
+            "电解质"
+          ]
+        },
+        {
+          "key": "thyroid",
+          "name": "甲状腺功能",
+          "order": 80,
+          "description": "甲状腺激素和相关功能项目。",
+          "sectionHints": [
+            "甲状腺功能",
+            "甲功",
+            "甲状腺激素"
+          ]
+        },
+        {
+          "key": "infectious",
+          "name": "感染及免疫",
+          "order": 90,
+          "description": "感染筛查和免疫相关项目。",
+          "sectionHints": [
+            "感染",
+            "免疫",
+            "乙肝",
+            "丙肝",
+            "梅毒",
+            "HIV"
+          ]
+        },
+        {
+          "key": "laboratory_other",
+          "name": "其他检验",
+          "order": 100,
+          "description": "尚未归入其他检验子组的实验室项目。",
+          "sectionHints": [
+            "检验",
+            "生化",
+            "实验室"
+          ]
+        }
+      ]
+    },
+    {
+      "key": "functional",
+      "name": "功能检查",
+      "order": 90,
+      "description": "心电图、肺功能、骨密度等功能性检查。",
+      "sectionHints": [
+        "心电",
+        "肺功能",
+        "骨密度",
+        "动脉硬化",
+        "功能检查"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "imaging",
+      "name": "影像检查",
+      "order": 100,
+      "description": "超声、DR、CT、MRI 等影像检查。",
+      "sectionHints": [
+        "影像",
+        "超声",
+        "彩超",
+        "CT",
+        "磁共振",
+        "MRI",
+        "DR",
+        "X线",
+        "放射"
+      ],
+      "subgroups": []
+    },
+    {
+      "key": "other",
+      "name": "其他检查",
+      "order": 110,
+      "description": "无法可靠归入标准体检目录的检查。",
+      "sectionHints": [
+        "其他检查"
+      ],
+      "subgroups": []
+    }
+  ],
+  "categories": [
+    {
+      "key": "general_measurement",
+      "name": "基础测量",
+      "groupKey": "general",
+      "subgroupKey": null,
+      "order": 10,
+      "aliases": [
+        "一般检查",
+        "基础测量",
+        "体格测量",
+        "生命体征"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "人体成分",
+        "体格检查",
+        "生命体征",
+        "血压",
+        "脉搏"
+      ]
+    },
+    {
+      "key": "blood_count",
+      "name": "血常规",
+      "groupKey": "laboratory",
+      "subgroupKey": "blood",
+      "order": 10,
+      "aliases": [
+        "血常规",
+        "全血细胞计数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ]
+    },
+    {
+      "key": "ophthalmology_measurement",
+      "name": "眼科测量",
+      "groupKey": "ophthalmology",
+      "subgroupKey": null,
+      "order": 10,
+      "aliases": [
+        "眼科",
+        "视力"
+      ],
+      "sectionHints": [
+        "眼科",
+        "视力",
+        "眼压"
+      ]
+    },
+    {
+      "key": "urinalysis",
+      "name": "尿常规",
+      "groupKey": "laboratory",
+      "subgroupKey": "urine",
+      "order": 20,
+      "aliases": [
+        "尿常规",
+        "尿液分析"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ]
+    },
+    {
+      "key": "stool_analysis",
+      "name": "便常规",
+      "groupKey": "laboratory",
+      "subgroupKey": "laboratory_other",
+      "order": 25,
+      "aliases": [
+        "便常规",
+        "粪便常规",
+        "大便常规"
+      ],
+      "sectionHints": [
+        "便常规",
+        "粪便",
+        "大便"
+      ]
+    },
+    {
+      "key": "liver_function",
+      "name": "肝功能",
+      "groupKey": "laboratory",
+      "subgroupKey": "liver",
+      "order": 30,
+      "aliases": [
+        "肝功能",
+        "肝功"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "肝功"
+      ]
+    },
+    {
+      "key": "renal_function",
+      "name": "肾功能",
+      "groupKey": "laboratory",
+      "subgroupKey": "renal",
+      "order": 40,
+      "aliases": [
+        "肾功能",
+        "肾功"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "肾功"
+      ]
+    },
+    {
+      "key": "lipids",
+      "name": "血脂",
+      "groupKey": "laboratory",
+      "subgroupKey": "lipid",
+      "order": 50,
+      "aliases": [
+        "血脂",
+        "脂类"
+      ],
+      "sectionHints": [
+        "血脂",
+        "脂类"
+      ]
+    },
+    {
+      "key": "glucose_metabolism",
+      "name": "血糖",
+      "groupKey": "laboratory",
+      "subgroupKey": "glucose",
+      "order": 60,
+      "aliases": [
+        "血糖",
+        "葡萄糖代谢"
+      ],
+      "sectionHints": [
+        "血糖",
+        "葡萄糖",
+        "糖代谢"
+      ]
+    },
+    {
+      "key": "electrolytes",
+      "name": "电解质",
+      "groupKey": "laboratory",
+      "subgroupKey": "electrolyte",
+      "order": 70,
+      "aliases": [
+        "电解质"
+      ],
+      "sectionHints": [
+        "电解质"
+      ]
+    },
+    {
+      "key": "thyroid_function",
+      "name": "甲状腺功能",
+      "groupKey": "laboratory",
+      "subgroupKey": "thyroid",
+      "order": 80,
+      "aliases": [
+        "甲状腺功能",
+        "甲功"
+      ],
+      "sectionHints": [
+        "甲状腺功能",
+        "甲功",
+        "甲状腺激素"
+      ]
+    },
+    {
+      "key": "infection_immunity",
+      "name": "感染及免疫",
+      "groupKey": "laboratory",
+      "subgroupKey": "infectious",
+      "order": 90,
+      "aliases": [
+        "感染筛查",
+        "感染及免疫"
+      ],
+      "sectionHints": [
+        "感染",
+        "免疫",
+        "乙肝",
+        "梅毒",
+        "HIV"
+      ]
+    },
+    {
+      "key": "laboratory_other",
+      "name": "其他检验",
+      "groupKey": "laboratory",
+      "subgroupKey": "laboratory_other",
+      "order": 100,
+      "aliases": [
+        "其他检验",
+        "肿瘤标志物"
+      ],
+      "sectionHints": [
+        "检验",
+        "肿瘤标志物",
+        "实验室"
+      ]
+    },
+    {
+      "key": "functional_measurement",
+      "name": "功能检查",
+      "groupKey": "functional",
+      "subgroupKey": null,
+      "order": 10,
+      "aliases": [
+        "心电图",
+        "动脉硬化检测",
+        "功能检查"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电",
+        "动脉硬化",
+        "ABI",
+        "baPWV"
+      ]
+    },
+    {
+      "key": "gynecology_ultrasound",
+      "name": "妇科超声",
+      "groupKey": "gynecology",
+      "subgroupKey": null,
+      "order": 10,
+      "aliases": [
+        "妇科超声",
+        "妇科彩超"
+      ],
+      "sectionHints": [
+        "妇科超声",
+        "妇科彩超",
+        "子宫",
+        "附件"
+      ]
+    }
+  ]
+}

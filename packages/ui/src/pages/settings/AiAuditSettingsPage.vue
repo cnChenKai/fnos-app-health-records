@@ -61,6 +61,16 @@ function sourceText(value: string) {
   return value === "indicator_normalization" ? "指标归一化" : "报告整理";
 }
 
+function routeText(value: string | null) {
+  if (!value) return "";
+  const labels: Record<string, string> = {
+    checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查",
+    pathology: "病理", outpatient: "门诊", inpatient: "住院", prescription: "处方",
+    billing: "票据", vaccination: "疫苗", other: "其他"
+  };
+  return value.split(",").map((item) => labels[item] || item).join("、");
+}
+
 async function load(reset = true) {
   let current = seq;
   if (reset) {
@@ -164,7 +174,7 @@ onBeforeUnmount(() => observer?.disconnect());
         <article v-for="item in data.recent" :key="item.id" :class="{ failed: item.status === 'failed' }">
           <div>
             <strong>{{ item.reportTitle }}</strong>
-            <span>{{ sourceText(item.source) }} · {{ formatDatabaseTime(item.createdAt) }} · {{ item.model || "未返回模型" }}</span>
+            <span>{{ sourceText(item.source) }} · {{ formatDatabaseTime(item.createdAt) }} · {{ item.model || "未返回模型" }}<template v-if="item.routedContentTypes"> · {{ routeText(item.routedContentTypes) }}</template></span>
           </div>
           <em>{{ statusText(item.status) }}</em>
           <small :title="tokenTitle((item.promptTokens || 0) + (item.completionTokens || 0))">

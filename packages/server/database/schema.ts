@@ -1,4 +1,11 @@
-import { latestSchemaVersion } from "./migrations";
+import {
+  aiExtractionUnitSchemaSql,
+  clinicalFactSchemaSql,
+  indicatorDictionarySchemaSql,
+  latestSchemaVersion,
+  morphologyFindingSchemaSql,
+  reportStructuredSectionSchemaSql
+} from "./migrations";
 
 export const schemaVersion = latestSchemaVersion;
 
@@ -108,6 +115,8 @@ CREATE TABLE IF NOT EXISTS reports (
 CREATE INDEX IF NOT EXISTS reports_timeline_idx
   ON reports(member_id, report_issued_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS reports_organization_idx
+  ON reports(organization_id, report_issued_at DESC);
 
 CREATE TABLE IF NOT EXISTS report_field_overrides (
   id TEXT PRIMARY KEY,
@@ -165,6 +174,10 @@ CREATE TABLE IF NOT EXISTS observations (
 CREATE INDEX IF NOT EXISTS observations_trend_idx
   ON observations(normalized_name, unit, report_id);
 
+${morphologyFindingSchemaSql}
+${clinicalFactSchemaSql}
+${reportStructuredSectionSchemaSql}
+
 CREATE TABLE IF NOT EXISTS indicator_catalog (
   id TEXT PRIMARY KEY,
   canonical_key TEXT NOT NULL UNIQUE,
@@ -178,6 +191,15 @@ CREATE TABLE IF NOT EXISTS indicator_catalog (
   source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'user')),
   ai_managed INTEGER NOT NULL DEFAULT 0 CHECK (ai_managed IN (0, 1)),
   builtin_version TEXT,
+  category_key TEXT,
+  item_order INTEGER,
+  observation_kind TEXT,
+  unit_dimension TEXT,
+  allowed_units_json TEXT NOT NULL DEFAULT '[]',
+  section_hints_json TEXT NOT NULL DEFAULT '[]',
+  dictionary_layer TEXT,
+  dictionary_revision INTEGER,
+  dictionary_snapshot_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -194,6 +216,9 @@ CREATE TABLE IF NOT EXISTS indicator_aliases (
   source TEXT NOT NULL DEFAULT 'builtin' CHECK (source IN ('builtin', 'user', 'ai_suggestion')),
   confidence REAL NOT NULL DEFAULT 1,
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  dictionary_layer TEXT,
+  dictionary_revision INTEGER,
+  dictionary_snapshot_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -298,6 +323,8 @@ CREATE TABLE IF NOT EXISTS report_extractions (
 
 CREATE INDEX IF NOT EXISTS report_extractions_report_idx
   ON report_extractions(report_id, created_at DESC);
+
+${aiExtractionUnitSchemaSql}
 
 CREATE TABLE IF NOT EXISTS ai_audit_events (
   id TEXT PRIMARY KEY,
@@ -462,6 +489,8 @@ CREATE TABLE IF NOT EXISTS file_gc_queue (
 
 CREATE INDEX IF NOT EXISTS file_gc_queue_pending_idx
   ON file_gc_queue(completed_at, not_before, created_at);
+
+${indicatorDictionarySchemaSql}
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,

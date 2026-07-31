@@ -5,7 +5,14 @@ import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
-import { aiProviderCatalog, normalizeAiProvider, type AiProviderKey } from "./ai-provider";
+import {
+  aiProviderCatalog,
+  normalizeAiProvider,
+  resolveAiTemperature,
+  type AiProviderKey
+} from "./ai-provider";
+import { listAiTasks, type AiTaskKey } from "./ai-task-registry";
+import { executeAiChatCompletion } from "./ai-runtime.service";
 
 const settingKey = "ai.provider";
 
@@ -19,6 +26,16 @@ export type AiSettings = {
   apiKey: string;
 };
 
+export type AiTaskBinding = {
+  provider?: AiProviderKey;
+  model?: string;
+};
+
+export type AiSettingsInput = Partial<AiSettings> & {
+  clearApiKey?: boolean;
+  taskBindings?: Partial<Record<AiTaskKey, AiTaskBinding | null>>;
+};
+
 type ProviderSettings = Omit<AiSettings, "enabled" | "provider">;
 type StoredProviderSettings = Omit<ProviderSettings, "apiKey"> & {
   apiKey?: string;
@@ -28,11 +45,13 @@ type StoredAiSettings = Partial<StoredProviderSettings> & {
   enabled?: boolean;
   provider?: string;
   providers?: Partial<Record<AiProviderKey, StoredProviderSettings>>;
+  taskBindings?: Partial<Record<AiTaskKey, { provider?: string; model?: string }>>;
 };
 type ParsedAiSettings = {
   enabled: boolean;
   provider: AiProviderKey;
   providers: Partial<Record<AiProviderKey, ProviderSettings>>;
+  taskBindings: Partial<Record<AiTaskKey, AiTaskBinding>>;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +113,7 @@ function parseProviderSettings(value: StoredProviderSettings | undefined): Parti
 function parseStoredSettings(): ParsedAiSettings {
   const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
     .get(settingKey) as { valueJson: string } | undefined;
-  if (!row) return { enabled: false, provider: "deepseek", providers: {} };
+  if (!row) return { enabled: false, provider: "deepseek", providers: {}, taskBindings: {} };
 
   try {
     const stored = JSON.parse(row.valueJson) as StoredAiSettings;
@@ -104,6 +123,18 @@ function parseStoredSettings(): ParsedAiSettings {
       for (const key of Object.keys(aiProviderCatalog) as AiProviderKey[]) {
         const raw = stored.providers[key];
         if (isRecord(raw)) providers[key] = parseProviderSettings(raw as StoredProviderSettings) as ProviderSettings;
+      }
+    }
+    const taskBindings: ParsedAiSettings["taskBindings"] = {};
+    if (isRecord(stored.taskBindings)) {
+      for (const task of listAiTasks()) {
+        const raw = stored.taskBindings[task.key];
+        if (!isRecord(raw)) continue;
+        const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+          ? raw.provider as AiProviderKey
+          : undefined;
+        const model = typeof raw.model === "string" ? raw.model.trim() : "";
+        if (provider || model) taskBindings[task.key] = { provider, ...(model ? { model } : {}) };
       }
     }
 
@@ -120,14 +151,34 @@ function parseStoredSettings(): ParsedAiSettings {
         apiKey: providers[provider]?.apiKey ?? legacy?.apiKey ?? ""
       } as ProviderSettings;
     }
-    return { enabled: stored.enabled === true, provider, providers };
+    return { enabled: stored.enabled === true, provider, providers, taskBindings };
   } catch {
-    return { enabled: false, provider: "deepseek", providers: {} };
+    return { enabled: false, provider: "deepseek", providers: {}, taskBindings: {} };
+  }
+}
+
+function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
+  try {
+    const parsed = new URL(value);
+    if (
+      provider === "kimi"
+      && parsed.hostname === "api.kimi.com"
+      && parsed.pathname.replace(/\/+$/, "") === "/coding"
+    ) {
+      parsed.pathname = "/coding/v1";
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return value;
   }
 }
 
 function resolveProvider(provider: AiProviderKey, parsed: ParsedAiSettings): ProviderSettings {
-  return { ...providerDefaults(provider), ...parsed.providers[provider] };
+  const resolved = { ...providerDefaults(provider), ...parsed.providers[provider] };
+  return {
+    ...resolved,
+    baseUrl: normalizeProviderBaseUrl(provider, resolved.baseUrl)
+  };
 }
 
 function normalizeBaseUrl(value: unknown, fallback: string) {
@@ -160,7 +211,12 @@ function serializeSettings(parsed: ParsedAiSettings) {
       apiKeyEncrypted: encrypt(value.apiKey)
     };
   }
-  return { enabled: parsed.enabled, provider: parsed.provider, providers };
+  return {
+    enabled: parsed.enabled,
+    provider: parsed.provider,
+    providers,
+    taskBindings: parsed.taskBindings
+  };
 }
 
 function publicSettings(parsed: ParsedAiSettings) {
@@ -189,7 +245,19 @@ function publicSettings(parsed: ParsedAiSettings) {
     apiKeyConfigured: Boolean(active.apiKey),
     apiKeyMasked: maskApiKey(active.apiKey),
     providerSettings,
-    providers: Object.entries(aiProviderCatalog).map(([key, value]) => ({ key, ...value }))
+    providers: Object.entries(aiProviderCatalog).map(([key, value]) => ({ key, ...value })),
+    tasks: listAiTasks(),
+    taskBindings: Object.fromEntries(listAiTasks().map((task) => {
+      const binding = parsed.taskBindings[task.key];
+      const provider = binding?.provider || parsed.provider;
+      const providerSettings = resolveProvider(provider, parsed);
+      return [task.key, {
+        provider,
+        model: binding?.model || providerSettings.textModel,
+        inherited: !binding,
+        implemented: task.implemented
+      }];
+    }))
   };
 }
 
@@ -202,7 +270,25 @@ export function getAiSettings(includeSecret = false) {
   };
 }
 
-export function saveAiSettings(input: Partial<AiSettings> & { clearApiKey?: boolean }) {
+export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
+  const parsed = parseStoredSettings();
+  const binding = parsed.taskBindings[taskKey];
+  const provider = binding?.provider || parsed.provider;
+  const providerSettings = resolveProvider(provider, parsed);
+  return {
+    enabled: parsed.enabled,
+    taskKey,
+    provider,
+    baseUrl: providerSettings.baseUrl,
+    model: binding?.model || providerSettings.textModel,
+    visionModel: providerSettings.visionModel,
+    visionEnabled: providerSettings.visionEnabled,
+    apiKey: includeSecret ? providerSettings.apiKey : "",
+    inherited: !binding
+  };
+}
+
+export function saveAiSettings(input: AiSettingsInput) {
   const parsed = parseStoredSettings();
   const provider = normalizeAiProvider(input.provider || parsed.provider);
   const current = resolveProvider(provider, parsed);
@@ -215,13 +301,32 @@ export function saveAiSettings(input: Partial<AiSettings> & { clearApiKey?: bool
       ...parsed.providers,
       [provider]: {
         visionEnabled: input.visionEnabled === undefined ? current.visionEnabled : input.visionEnabled === true,
-        baseUrl: normalizeBaseUrl(input.baseUrl, current.baseUrl),
+        baseUrl: normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl)),
         textModel: String(input.textModel || current.textModel).trim(),
         visionModel: String(input.visionModel ?? current.visionModel).trim(),
         apiKey
       }
-    }
+    },
+    taskBindings: { ...parsed.taskBindings }
   };
+  if (input.taskBindings) {
+    for (const task of listAiTasks()) {
+      if (!(task.key in input.taskBindings)) continue;
+      const value = input.taskBindings[task.key];
+      if (!value) {
+        delete next.taskBindings[task.key];
+        continue;
+      }
+      const bindingProvider = value.provider
+        ? normalizeAiProvider(value.provider)
+        : undefined;
+      const model = String(value.model || "").trim();
+      next.taskBindings[task.key] = {
+        ...(bindingProvider ? { provider: bindingProvider } : {}),
+        ...(model ? { model } : {})
+      };
+    }
+  }
   getDatabase().prepare(`
     INSERT INTO app_settings (setting_key, value_json) VALUES (?, ?)
     ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP
@@ -229,7 +334,7 @@ export function saveAiSettings(input: Partial<AiSettings> & { clearApiKey?: bool
   return publicSettings(next);
 }
 
-export async function testAiConnection(input: Partial<AiSettings> = {}) {
+export async function testAiConnection(input: AiSettingsInput = {}) {
   const parsed = parseStoredSettings();
   const provider = normalizeAiProvider(input.provider || parsed.provider);
   const current = resolveProvider(provider, parsed);
@@ -241,22 +346,35 @@ export async function testAiConnection(input: Partial<AiSettings> = {}) {
       statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`
     });
   }
-  const baseUrl = normalizeBaseUrl(input.baseUrl, current.baseUrl);
+  const baseUrl = normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl));
   const started = Date.now();
-  let response: Response;
   try {
-    response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: textModel, messages: [{ role: "user", content: "reply ok" }], max_tokens: 4 }),
-      signal: AbortSignal.timeout(15000)
+    await executeAiChatCompletion({
+      provider,
+      baseUrl,
+      apiKey,
+      model: textModel
+    }, {
+      messages: [{ role: "user", content: "reply ok" }],
+      temperature: resolveAiTemperature(provider, textModel),
+      maxOutputTokens: 4,
+      timeoutMs: 15_000,
+      timeoutCode: "AI_CONNECTION_TEST_TIMEOUT",
+      timeoutMessage: "连接 AI 服务超时",
+      networkCode: "AI_CONNECTION_TEST_NETWORK_ERROR",
+      networkMessage: "NAS 无法连接 AI 服务"
     });
   } catch (cause) {
-    const error = cause as Error & { code?: string; cause?: { code?: string; message?: string } };
+    const error = cause as Error & {
+      code?: string;
+      upstreamStatus?: number;
+      upstreamDetail?: string;
+      cause?: { code?: string; message?: string; cause?: { code?: string; message?: string } };
+    };
     const code = error.code || error.cause?.code || "";
-    const detail = [code, error.message, error.cause?.message].filter(Boolean).join(" · ");
-    const timedOut = error.name === "TimeoutError" || error.name === "AbortError"
-      || /TIMEOUT|TIMEDOUT/i.test(`${code} ${detail}`);
+    const detail = [code, error.message, error.cause?.message, error.cause?.cause?.message]
+      .filter(Boolean).join(" · ");
+    const timedOut = /TIMEOUT|TIMEDOUT/i.test(`${code} ${detail}`);
     const dnsFailed = /ENOTFOUND|EAI_AGAIN/i.test(`${code} ${detail}`);
     const tlsFailed = /CERT|TLS|SSL|SELF_SIGNED/i.test(`${code} ${detail}`);
     await writeLog("warn", "ai-connection-test-failed", {
@@ -266,6 +384,22 @@ export async function testAiConnection(input: Partial<AiSettings> = {}) {
       errorCode: code,
       detail: detail.slice(0, 600)
     });
+    if (error.upstreamStatus) {
+      const summary = error.upstreamStatus === 401 || error.upstreamStatus === 403
+        ? "AI 服务认证失败，请检查 API Key 和账号权限"
+        : error.upstreamStatus === 404
+          ? "AI API 地址或文本模型不存在"
+          : error.upstreamStatus === 429
+            ? "AI 服务请求受限，请检查调用频率、额度或余额"
+            : error.upstreamStatus >= 500
+              ? "AI 服务暂时不可用"
+              : "AI 服务拒绝了测试请求，请检查模型名称和接口兼容性";
+      const suffix = error.upstreamDetail ? `：${error.upstreamDetail.slice(0, 240)}` : "";
+      throw createError({
+        statusCode: 502,
+        statusMessage: `${summary}（上游 ${error.upstreamStatus}）${suffix}`
+      });
+    }
     const statusMessage = timedOut
       ? "连接 AI 服务超时，请检查 NAS 外网连接、代理或服务地址"
       : dnsFailed
@@ -274,45 +408,6 @@ export async function testAiConnection(input: Partial<AiSettings> = {}) {
           ? "AI 服务 TLS 证书校验失败，请检查 NAS 时间、证书或代理设置"
           : "NAS 无法连接 AI 服务，请检查外网连接、代理、DNS 和 API 地址";
     throw createError({ statusCode: timedOut ? 504 : 502, statusMessage });
-  }
-  if (!response.ok) {
-    let upstreamDetail = "";
-    try {
-      const text = (await response.text()).trim();
-      if (text) {
-        try {
-          const payload = JSON.parse(text) as { error?: { message?: unknown } | string; message?: unknown };
-          upstreamDetail = String(
-            typeof payload.error === "object" ? payload.error?.message || "" : payload.error || payload.message || ""
-          ).trim();
-        } catch {
-          upstreamDetail = text;
-        }
-      }
-    } catch {
-      // The upstream status is still enough to provide an actionable error.
-    }
-    await writeLog("warn", "ai-connection-test-rejected", {
-      provider,
-      host: new URL(baseUrl).host,
-      model: textModel,
-      upstreamStatus: response.status,
-      detail: upstreamDetail.slice(0, 600)
-    });
-    const summary = response.status === 401 || response.status === 403
-      ? "AI 服务认证失败，请检查 API Key 和账号权限"
-      : response.status === 404
-        ? "AI API 地址或文本模型不存在"
-        : response.status === 429
-          ? "AI 服务请求受限，请检查调用频率、额度或余额"
-          : response.status >= 500
-            ? "AI 服务暂时不可用"
-            : "AI 服务拒绝了测试请求，请检查模型名称和接口兼容性";
-    const suffix = upstreamDetail ? `：${upstreamDetail.slice(0, 240)}` : "";
-    throw createError({
-      statusCode: 502,
-      statusMessage: `${summary}（上游 ${response.status}）${suffix}`
-    });
   }
   return { ok: true, provider, model: textModel, elapsedMs: Date.now() - started };
 }

@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://timor-m.github.io/fnos-app-health-records/dictionary/schemas/indicators.schema.json",
+  "title": "Health Records Indicator Dictionary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "formatVersion",
+    "layer",
+    "revision",
+    "indicators",
+    "extensions",
+    "redirects"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "formatVersion": {
+      "const": 1
+    },
+    "layer": {
+      "enum": ["core", "remote"]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "indicators": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/indicator"
+      }
+    },
+    "extensions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/extension"
+      }
+    },
+    "redirects": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/canonicalKey"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/canonicalKey"
+      }
+    }
+  },
+  "$defs": {
+    "canonicalKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.:-]{2,119}$"
+    },
+    "taxonomyKey": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{1,79}$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160
+      },
+      "uniqueItems": true
+    },
+    "unitList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 80
+      },
+      "uniqueItems": true
+    },
+    "indicator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalKey",
+        "displayName",
+        "categoryKey",
+        "order",
+        "kind",
+        "valueType",
+        "specimen",
+        "defaultUnit",
+        "unitDimension",
+        "aliases",
+        "allowedUnits",
+        "sectionHints",
+        "explanation"
+      ],
+      "properties": {
+        "canonicalKey": {
+          "$ref": "#/$defs/canonicalKey"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "categoryKey": {
+          "$ref": "#/$defs/taxonomyKey"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "enum": ["quantitative", "categorical"]
+        },
+        "valueType": {
+          "enum": ["numeric", "text", "positive_negative", "ordinal"]
+        },
+        "specimen": {
+          "enum": ["blood", "urine", "serum", "plasma", "whole_blood", "other", null]
+        },
+        "defaultUnit": {
+          "type": ["string", "null"],
+          "maxLength": 80
+        },
+        "unitDimension": {
+          "enum": [
+            "count_concentration",
+            "mass",
+            "length",
+            "pressure",
+            "frequency",
+            "volume",
+            "filtration_rate",
+            "ratio",
+            "index",
+            "enzyme_activity",
+            "molar_concentration",
+            "mass_concentration",
+            "time",
+            "categorical",
+            "text",
+            "other"
+          ]
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringList"
+        },
+        "allowedUnits": {
+          "$ref": "#/$defs/unitList"
+        },
+        "sectionHints": {
+          "$ref": "#/$defs/stringList"
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "quantitative"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "valueType": {
+                "const": "numeric"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "extension": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonicalKey", "aliases", "sectionHints"],
+      "properties": {
+        "canonicalKey": {
+          "$ref": "#/$defs/canonicalKey"
+        },
+        "aliases": {
+          "$ref": "#/$defs/stringList"
+        },
+        "sectionHints": {
+          "$ref": "#/$defs/stringList"
+        }
+      }
+    }
+  }
+}

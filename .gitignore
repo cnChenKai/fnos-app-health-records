@@ -14,3 +14,5 @@ npm-debug.log*
 tools/fnpack
 tools/fnpack-*
 tools/fnpack.version
+dictionary/remote/manifest.json
+.dictionary-pages/

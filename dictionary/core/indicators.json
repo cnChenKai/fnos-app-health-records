@@ -1,0 +1,3098 @@
+{
+  "$schema": "../schemas/indicators.schema.json",
+  "formatVersion": 1,
+  "layer": "core",
+  "revision": 7,
+  "indicators": [
+    {
+      "canonicalKey": "cbc_wbc",
+      "displayName": "白细胞计数",
+      "categoryKey": "blood_count",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "WBC",
+        "白细胞",
+        "白细胞数",
+        "白细胞数目",
+        "白细胞总数",
+        "白细胞总数目",
+        "白细胞计数",
+        "白血球",
+        "白细胞数目WBC",
+        "白细胞计数WBC"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "反映血液中白细胞数量，常用于观察感染、炎症等相关变化。"
+    },
+    {
+      "canonicalKey": "cbc_neutrophil_percentage",
+      "displayName": "中性粒细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "NEUT%",
+        "NEU%",
+        "中性粒细胞%",
+        "中性粒细胞比率",
+        "中性粒细胞比例",
+        "中性粒细胞百分比",
+        "中性粒细胞百分率",
+        "中性粒细胞百分数"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示中性粒细胞在白细胞中的占比，通常结合白细胞计数和中性粒细胞绝对值一起观察。"
+    },
+    {
+      "canonicalKey": "cbc_neutrophil_count",
+      "displayName": "中性粒细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "NEUT#",
+        "NEU#",
+        "中性粒细胞绝对值",
+        "中性粒细胞数",
+        "中性粒细胞计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示血液中中性粒细胞的实际数量，与中性粒细胞百分比含义不同。"
+    },
+    {
+      "canonicalKey": "cbc_lymphocyte_percentage",
+      "displayName": "淋巴细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 4,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "LYM%",
+        "LYMPH%",
+        "淋巴细胞%",
+        "淋巴细胞比率",
+        "淋巴细胞比例",
+        "淋巴细胞百分比",
+        "淋巴细胞百分率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示淋巴细胞在白细胞中的占比，通常结合淋巴细胞绝对值一起观察。"
+    },
+    {
+      "canonicalKey": "cbc_lymphocyte_count",
+      "displayName": "淋巴细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 5,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "LYM#",
+        "LYMPH#",
+        "淋巴细胞绝对值",
+        "淋巴细胞数",
+        "淋巴细胞计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示血液中淋巴细胞的实际数量，与淋巴细胞百分比含义不同。"
+    },
+    {
+      "canonicalKey": "cbc_monocyte_percentage",
+      "displayName": "单核细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 6,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "MON%",
+        "MONO%",
+        "单核细胞%",
+        "单核细胞比率",
+        "单核细胞比例",
+        "单核细胞百分比",
+        "单核细胞百分率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示单核细胞在白细胞中的占比，通常结合单核细胞绝对值一起观察。"
+    },
+    {
+      "canonicalKey": "cbc_monocyte_count",
+      "displayName": "单核细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 7,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "MON#",
+        "MONO#",
+        "单核细胞绝对值",
+        "单核细胞数",
+        "单核细胞计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示血液中单核细胞的实际数量，与单核细胞百分比含义不同。"
+    },
+    {
+      "canonicalKey": "cbc_eosinophil_percentage",
+      "displayName": "嗜酸性粒细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 8,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "EO%",
+        "EOS%",
+        "嗜酸细胞%",
+        "嗜酸性粒细胞%",
+        "嗜酸细胞比率",
+        "嗜酸性粒细胞百分比",
+        "嗜酸性粒细胞百分率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示嗜酸性粒细胞在白细胞中的占比，通常结合绝对值一起观察。"
+    },
+    {
+      "canonicalKey": "cbc_eosinophil_count",
+      "displayName": "嗜酸性粒细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 9,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "EO#",
+        "EOS#",
+        "嗜酸细胞绝对值",
+        "嗜酸性粒细胞绝对值",
+        "嗜酸细胞数",
+        "嗜酸性粒细胞数",
+        "嗜酸性粒细胞计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示血液中嗜酸性粒细胞的实际数量，与百分比含义不同。"
+    },
+    {
+      "canonicalKey": "cbc_basophil_percentage",
+      "displayName": "嗜碱性粒细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 10,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "BAS%",
+        "BASO%",
+        "嗜碱细胞%",
+        "嗜碱性粒细胞%",
+        "嗜碱细胞比率",
+        "嗜碱性粒细胞百分比",
+        "嗜碱性粒细胞百分率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示嗜碱性粒细胞在白细胞中的占比，通常结合绝对值一起观察。"
+    },
+    {
+      "canonicalKey": "cbc_basophil_count",
+      "displayName": "嗜碱性粒细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 11,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "BAS#",
+        "BASO#",
+        "嗜碱细胞绝对值",
+        "嗜碱性粒细胞绝对值",
+        "嗜碱细胞数",
+        "嗜碱性粒细胞数",
+        "嗜碱性粒细胞计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "表示血液中嗜碱性粒细胞的实际数量，与百分比含义不同。"
+    },
+    {
+      "canonicalKey": "cbc_rbc",
+      "displayName": "红细胞计数",
+      "categoryKey": "blood_count",
+      "order": 12,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^12/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "RBC",
+        "红细胞",
+        "红细胞数",
+        "红细胞计数"
+      ],
+      "allowedUnits": [
+        "10^12/L",
+        "×10^12/L",
+        "10*12/L",
+        "10^6/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "反映红细胞数量，常与血红蛋白一起观察贫血或血液浓缩等情况。"
+    },
+    {
+      "canonicalKey": "cbc_hgb",
+      "displayName": "血红蛋白",
+      "categoryKey": "blood_count",
+      "order": 13,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "HGB",
+        "Hb",
+        "血红蛋白",
+        "血色素"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "g/dL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "反映血液携氧能力，是观察贫血相关变化的常见指标。"
+    },
+    {
+      "canonicalKey": "cbc_plt",
+      "displayName": "血小板计数",
+      "categoryKey": "blood_count",
+      "order": 14,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "PLT",
+        "血小板",
+        "血小板数",
+        "血小板计数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "反映血小板数量，常用于观察凝血和出血风险相关变化。"
+    },
+    {
+      "canonicalKey": "liver_alt",
+      "displayName": "丙氨酸氨基转移酶",
+      "categoryKey": "liver_function",
+      "order": 15,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "ALT",
+        "GPT",
+        "谷丙转氨酶",
+        "丙氨酸氨基转移酶",
+        "丙氨酸转氨酶",
+        "血清丙氨酸氨基转移酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "常用于观察肝细胞损伤相关变化。"
+    },
+    {
+      "canonicalKey": "liver_ast",
+      "displayName": "天门冬氨酸氨基转移酶",
+      "categoryKey": "liver_function",
+      "order": 16,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "AST",
+        "GOT",
+        "谷草转氨酶",
+        "天门冬氨酸氨基转移酶",
+        "门冬氨酸氨基转移酶",
+        "血清天冬氨酸氨基转移酶",
+        "血清门冬氨酸氨基转移酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "常与 ALT 一起观察肝功能相关变化。"
+    },
+    {
+      "canonicalKey": "liver_ggt",
+      "displayName": "γ-谷氨酰转肽酶",
+      "categoryKey": "liver_function",
+      "order": 17,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "GGT",
+        "γ-GT",
+        "γ谷氨酰转肽酶",
+        "γ-谷氨酰转肽酶",
+        "谷氨酰转肽酶",
+        "血清γ-谷氨酰基转移酶",
+        "血清γ谷氨酰基转移酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "常用于观察肝胆系统相关变化。"
+    },
+    {
+      "canonicalKey": "liver_tbil",
+      "displayName": "总胆红素",
+      "categoryKey": "liver_function",
+      "order": 18,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "TBIL",
+        "T-BIL",
+        "总胆红素"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "常用于观察胆红素代谢和肝胆相关变化。"
+    },
+    {
+      "canonicalKey": "renal_creatinine",
+      "displayName": "肌酐",
+      "categoryKey": "renal_function",
+      "order": 19,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "CREA",
+        "Cr",
+        "Creatinine",
+        "肌酐",
+        "血肌酐",
+        "血清肌酐"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "生化"
+      ],
+      "explanation": "常用于观察肾功能变化。"
+    },
+    {
+      "canonicalKey": "renal_urea",
+      "displayName": "尿素",
+      "categoryKey": "renal_function",
+      "order": 20,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "UREA",
+        "尿素",
+        "血清尿素"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "生化"
+      ],
+      "explanation": "常与肌酐一起观察肾功能和蛋白代谢相关变化。"
+    },
+    {
+      "canonicalKey": "renal_uric_acid",
+      "displayName": "尿酸",
+      "categoryKey": "renal_function",
+      "order": 21,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "UA",
+        "Uric Acid",
+        "尿酸",
+        "血尿酸",
+        "血清尿酸"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "肾脏功能",
+        "生化"
+      ],
+      "explanation": "常用于观察高尿酸血症和痛风风险相关变化。"
+    },
+    {
+      "canonicalKey": "lipid_tc",
+      "displayName": "总胆固醇",
+      "categoryKey": "lipids",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "TC",
+        "TCH",
+        "CHO",
+        "CHOL",
+        "总胆固醇",
+        "胆固醇"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "反映血脂总胆固醇水平，通常需要结合 LDL-C、HDL-C 和甘油三酯一起看。"
+    },
+    {
+      "canonicalKey": "lipid_tg",
+      "displayName": "甘油三酯",
+      "categoryKey": "lipids",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "TG",
+        "TRIG",
+        "甘油三酯",
+        "三酰甘油"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "反映血脂中甘油三酯水平，受饮食和代谢状态影响较明显。"
+    },
+    {
+      "canonicalKey": "lipid_hdl_c",
+      "displayName": "高密度脂蛋白胆固醇",
+      "categoryKey": "lipids",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "HDL",
+        "HDL-C",
+        "HDLC",
+        "高密度脂蛋白",
+        "高密度脂蛋白胆固醇"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "常被称为“好胆固醇”，用于观察血脂结构变化。"
+    },
+    {
+      "canonicalKey": "lipid_ldl_c",
+      "displayName": "低密度脂蛋白胆固醇",
+      "categoryKey": "lipids",
+      "order": 25,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "LDL",
+        "LDL-C",
+        "LDLC",
+        "低密度脂蛋白",
+        "低密度脂蛋白胆固醇"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "常被称为“坏胆固醇”，用于观察血脂风险相关变化。"
+    },
+    {
+      "canonicalKey": "glucose_fasting",
+      "displayName": "空腹血糖",
+      "categoryKey": "glucose_metabolism",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "FPG",
+        "FBG",
+        "GLU",
+        "Glucose",
+        "空腹血糖",
+        "血糖"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "空腹",
+        "血糖",
+        "生化"
+      ],
+      "explanation": "用于观察空腹状态下血糖变化。若报告明确为随机或餐后血糖，系统会单独处理。"
+    },
+    {
+      "canonicalKey": "glucose_hba1c",
+      "displayName": "糖化血红蛋白",
+      "categoryKey": "glucose_metabolism",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "HbA1c",
+        "A1C",
+        "糖化血红蛋白",
+        "糖化血红蛋白A1c"
+      ],
+      "allowedUnits": [
+        "%",
+        "mmol/mol"
+      ],
+      "sectionHints": [
+        "糖化",
+        "血糖"
+      ],
+      "explanation": "反映一段时间内血糖控制水平的指标。"
+    },
+    {
+      "canonicalKey": "thyroid_tsh",
+      "displayName": "促甲状腺激素",
+      "categoryKey": "thyroid_function",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mIU/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "TSH",
+        "促甲状腺激素",
+        "促甲状腺素"
+      ],
+      "allowedUnits": [
+        "mIU/L",
+        "μIU/mL",
+        "uIU/mL"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ],
+      "explanation": "常用于观察甲状腺功能调节状态。"
+    },
+    {
+      "canonicalKey": "thyroid_ft3",
+      "displayName": "游离三碘甲状腺原氨酸",
+      "categoryKey": "thyroid_function",
+      "order": 29,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "pmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "FT3",
+        "游离T3",
+        "游离三碘甲状腺原氨酸"
+      ],
+      "allowedUnits": [
+        "pmol/L",
+        "pg/mL"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ],
+      "explanation": "甲状腺功能相关指标，通常与 FT4、TSH 一起观察。"
+    },
+    {
+      "canonicalKey": "thyroid_ft4",
+      "displayName": "游离甲状腺素",
+      "categoryKey": "thyroid_function",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "pmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "FT4",
+        "游离T4",
+        "游离甲状腺素"
+      ],
+      "allowedUnits": [
+        "pmol/L",
+        "ng/dL"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ],
+      "explanation": "甲状腺功能相关指标，通常与 FT3、TSH 一起观察。"
+    },
+    {
+      "canonicalKey": "thyroid_t3_total",
+      "displayName": "总三碘甲状腺原氨酸",
+      "categoryKey": "thyroid_function",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "nmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "T3",
+        "TT3",
+        "三碘甲状腺原氨酸",
+        "总三碘甲状腺原氨酸"
+      ],
+      "allowedUnits": [
+        "nmol/L",
+        "ng/mL"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ],
+      "explanation": "报告中的总 T3 测量值，不与游离 T3 合并。"
+    },
+    {
+      "canonicalKey": "thyroid_t4_total",
+      "displayName": "总甲状腺素",
+      "categoryKey": "thyroid_function",
+      "order": 32,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "nmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "T4",
+        "TT4",
+        "甲状腺素",
+        "总甲状腺素"
+      ],
+      "allowedUnits": [
+        "nmol/L",
+        "μg/dL"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ],
+      "explanation": "报告中的总 T4 测量值，不与游离 T4 合并。"
+    },
+    {
+      "canonicalKey": "electrolyte_potassium",
+      "displayName": "钾",
+      "categoryKey": "electrolytes",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "K",
+        "K+",
+        "钾",
+        "血钾",
+        "钾离子"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mEq/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "血液电解质指标，常用于观察体液和心肌电活动相关风险。"
+    },
+    {
+      "canonicalKey": "electrolyte_sodium",
+      "displayName": "钠",
+      "categoryKey": "electrolytes",
+      "order": 32,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "Na",
+        "Na+",
+        "钠",
+        "血钠",
+        "钠离子"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mEq/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "血液电解质指标，常用于观察体液平衡相关变化。"
+    },
+    {
+      "canonicalKey": "body_weight",
+      "displayName": "体重",
+      "categoryKey": "general_measurement",
+      "order": 33,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
+      "aliases": [
+        "体重",
+        "身体重量",
+        "Weight",
+        "WT",
+        "BW"
+      ],
+      "allowedUnits": [
+        "kg",
+        "千克",
+        "公斤",
+        "g",
+        "克"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "体检",
+        "人体成分"
+      ],
+      "explanation": "记录报告中明确测量的体重，用于观察不同日期的体重变化。"
+    },
+    {
+      "canonicalKey": "body_height",
+      "displayName": "身高",
+      "categoryKey": "general_measurement",
+      "order": 34,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm",
+      "unitDimension": "length",
+      "aliases": [
+        "身高",
+        "身体高度",
+        "Height",
+        "HT"
+      ],
+      "allowedUnits": [
+        "cm",
+        "厘米",
+        "m",
+        "米",
+        "mm",
+        "毫米"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "体检",
+        "生长发育"
+      ],
+      "explanation": "记录报告中明确测量的身高；儿童和青少年可用于观察生长变化。"
+    },
+    {
+      "canonicalKey": "body_waist_circumference",
+      "displayName": "腰围",
+      "categoryKey": "general_measurement",
+      "order": 35,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm",
+      "unitDimension": "length",
+      "aliases": [
+        "腰围",
+        "腰部周径",
+        "腰周",
+        "Waist",
+        "Waist Circumference",
+        "WC"
+      ],
+      "allowedUnits": [
+        "cm",
+        "厘米",
+        "m",
+        "米",
+        "mm",
+        "毫米"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "体检",
+        "人体成分"
+      ],
+      "explanation": "记录报告中明确测量的腰围，用于观察腰部周径变化。"
+    },
+    {
+      "canonicalKey": "body_bmi",
+      "displayName": "体重指数",
+      "categoryKey": "general_measurement",
+      "order": 36,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg/m²",
+      "unitDimension": "index",
+      "aliases": [
+        "BMI",
+        "体重指数",
+        "体重指数BMI",
+        "身体质量指数",
+        "身体质量指数BMI"
+      ],
+      "allowedUnits": [
+        "kg/m²",
+        "kg/m2",
+        "kg/㎡"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "体检"
+      ],
+      "explanation": "由身高和体重计算得到，用于观察体重状态变化。"
+    },
+    {
+      "canonicalKey": "gyn_endometrium_thickness",
+      "displayName": "子宫内膜厚度",
+      "categoryKey": "gynecology_ultrasound",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "内膜厚度",
+        "子宫内膜厚度",
+        "宫内膜厚度"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "妇科",
+        "超声",
+        "检查所见",
+        "阴道超声",
+        "子宫附件"
+      ],
+      "explanation": "妇科超声中对子宫内膜厚度的测量，通常需要结合月经周期、症状和医生结论理解。"
+    },
+    {
+      "canonicalKey": "infectious_hbv_dna",
+      "displayName": "乙型肝炎病毒核酸定量",
+      "categoryKey": "infection_immunity",
+      "order": 53,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "IU/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "HBV-DNA",
+        "HBVDNA",
+        "乙肝病毒DNA",
+        "乙型肝炎病毒DNA",
+        "乙型肝炎病毒核酸定量"
+      ],
+      "allowedUnits": [
+        "IU/mL",
+        "copies/mL"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙型肝炎",
+        "病毒核酸",
+        "感染"
+      ],
+      "explanation": "用于观察乙肝病毒复制水平变化，需要结合肝功能、乙肝标志物和医生意见理解。"
+    },
+    {
+      "canonicalKey": "infectious_hbsag",
+      "displayName": "乙型肝炎表面抗原",
+      "categoryKey": "infection_immunity",
+      "order": 54,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HBsAg",
+        "乙型肝炎表面抗原",
+        "乙肝表面抗原",
+        "乙型肝炎表面抗原定性"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙肝两对半",
+        "乙型肝炎"
+      ],
+      "explanation": "乙肝标志物定性/半定量项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hbsab",
+      "displayName": "乙型肝炎表面抗体",
+      "categoryKey": "infection_immunity",
+      "order": 55,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HBsAb",
+        "抗-HBs",
+        "乙型肝炎表面抗体",
+        "乙肝表面抗体",
+        "乙型肝炎表面抗体定性"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI",
+        "mIU/mL"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙肝两对半",
+        "乙型肝炎"
+      ],
+      "explanation": "乙肝标志物项目，不默认进入折线趋势；若后续识别为定量抗体，可单独按定量规则展示。"
+    },
+    {
+      "canonicalKey": "infectious_hbeag",
+      "displayName": "乙型肝炎e抗原",
+      "categoryKey": "infection_immunity",
+      "order": 56,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HBeAg",
+        "乙型肝炎e抗原",
+        "乙肝e抗原",
+        "乙型肝炎e抗原定性"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙肝两对半",
+        "乙型肝炎"
+      ],
+      "explanation": "乙肝标志物定性/半定量项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hbeab",
+      "displayName": "乙型肝炎e抗体",
+      "categoryKey": "infection_immunity",
+      "order": 57,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HBeAb",
+        "抗-HBe",
+        "乙型肝炎e抗体",
+        "乙肝e抗体",
+        "乙型肝炎e抗体定性"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙肝两对半",
+        "乙型肝炎"
+      ],
+      "explanation": "乙肝标志物定性/半定量项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hbcab",
+      "displayName": "乙型肝炎核心抗体",
+      "categoryKey": "infection_immunity",
+      "order": 58,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HBcAb",
+        "抗-HBc",
+        "乙型肝炎核心抗体",
+        "乙肝核心抗体",
+        "乙型肝炎核心抗体定性"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙肝两对半",
+        "乙型肝炎"
+      ],
+      "explanation": "乙肝标志物定性/半定量项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hiv_agab",
+      "displayName": "人类免疫缺陷病毒抗原抗体",
+      "categoryKey": "infection_immunity",
+      "order": 59,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HIV",
+        "HIV抗原抗体",
+        "人类免疫缺陷病毒抗原抗体",
+        "人类免疫缺陷病毒抗体"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "感染",
+        "免疫缺陷",
+        "HIV"
+      ],
+      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_syphilis_antibody",
+      "displayName": "梅毒螺旋体抗体",
+      "categoryKey": "infection_immunity",
+      "order": 60,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "梅毒螺旋体抗体",
+        "TP抗体",
+        "TPPA",
+        "TP-Ab",
+        "梅毒抗体"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "感染",
+        "梅毒",
+        "螺旋体"
+      ],
+      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "urine_protein",
+      "displayName": "尿蛋白",
+      "categoryKey": "urinalysis",
+      "order": 61,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "PRO",
+        "尿蛋白",
+        "蛋白质"
+      ],
+      "allowedUnits": [
+        "",
+        "+",
+        "阴性",
+        "阳性"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规状态型指标，不默认作为折线趋势展示。"
+    },
+    {
+      "canonicalKey": "body_hip_circumference",
+      "displayName": "臀围",
+      "categoryKey": "general_measurement",
+      "order": 38,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm",
+      "unitDimension": "length",
+      "aliases": [
+        "臀围",
+        "臀部周径",
+        "臀部围度",
+        "Hip circumference"
+      ],
+      "allowedUnits": [
+        "cm",
+        "厘米",
+        "m",
+        "米"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "体检",
+        "人体成分"
+      ],
+      "explanation": "反映臀部周径，通常结合腰围观察身体脂肪分布。"
+    },
+    {
+      "canonicalKey": "vital_systolic_bp",
+      "displayName": "收缩压",
+      "categoryKey": "general_measurement",
+      "order": 39,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "SBP",
+        "收缩压",
+        "高压",
+        "血压高值"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "血压",
+        "内科"
+      ],
+      "explanation": "血压测量中的较高值，应结合舒张压和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "vital_diastolic_bp",
+      "displayName": "舒张压",
+      "categoryKey": "general_measurement",
+      "order": 40,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "DBP",
+        "舒张压",
+        "低压",
+        "血压低值"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "血压",
+        "内科"
+      ],
+      "explanation": "血压测量中的较低值，应结合收缩压和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "vital_pulse",
+      "displayName": "脉搏",
+      "categoryKey": "general_measurement",
+      "order": 41,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "次/分",
+      "unitDimension": "frequency",
+      "aliases": [
+        "Pulse",
+        "PUL",
+        "脉搏",
+        "脉率",
+        "静息脉搏",
+        "心率"
+      ],
+      "allowedUnits": [
+        "次/分",
+        "次/min",
+        "bpm"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "脉搏",
+        "内科"
+      ],
+      "explanation": "表示每分钟脉搏次数，通常结合测量状态和心率相关检查观察。"
+    },
+    {
+      "canonicalKey": "cbc_hct",
+      "displayName": "红细胞压积",
+      "categoryKey": "blood_count",
+      "order": 15,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "HCT",
+        "红细胞压积",
+        "红细胞比容",
+        "血细胞比容"
+      ],
+      "allowedUnits": [
+        "%",
+        "L/L"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示红细胞在全血中所占比例，是血常规常见指标。"
+    },
+    {
+      "canonicalKey": "cbc_mcv",
+      "displayName": "平均红细胞体积",
+      "categoryKey": "blood_count",
+      "order": 16,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "fL",
+      "unitDimension": "volume",
+      "aliases": [
+        "MCV",
+        "平均红细胞体积",
+        "平均红细胞容积"
+      ],
+      "allowedUnits": [
+        "fL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示单个红细胞的平均体积，通常结合其他红细胞指标观察。"
+    },
+    {
+      "canonicalKey": "cbc_mch",
+      "displayName": "平均红细胞血红蛋白量",
+      "categoryKey": "blood_count",
+      "order": 17,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "pg",
+      "unitDimension": "mass",
+      "aliases": [
+        "MCH",
+        "平均红细胞血红蛋白量",
+        "平均红细胞血红蛋白含量",
+        "平均血红蛋白量"
+      ],
+      "allowedUnits": [
+        "pg"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示单个红细胞平均含有的血红蛋白量。"
+    },
+    {
+      "canonicalKey": "cbc_mchc",
+      "displayName": "平均红细胞血红蛋白浓度",
+      "categoryKey": "blood_count",
+      "order": 18,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "MCHC",
+        "平均红细胞血红蛋白浓度",
+        "平均血红蛋白浓度"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "g/dL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示红细胞内血红蛋白的平均浓度。"
+    },
+    {
+      "canonicalKey": "cbc_rdw_cv",
+      "displayName": "红细胞分布宽度变异系数",
+      "categoryKey": "blood_count",
+      "order": 19,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "RDW-CV",
+        "RDWCV",
+        "红细胞分布宽度变异系数",
+        "红细胞体积分布宽度CV"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "反映红细胞体积大小差异程度。"
+    },
+    {
+      "canonicalKey": "cbc_rdw_sd",
+      "displayName": "红细胞分布宽度标准差",
+      "categoryKey": "blood_count",
+      "order": 20,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "fL",
+      "unitDimension": "volume",
+      "aliases": [
+        "RDW-SD",
+        "RDWSD",
+        "红细胞分布宽度-SD",
+        "红细胞分布宽度标准差",
+        "红细胞体积分布宽度SD"
+      ],
+      "allowedUnits": [
+        "fL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "以标准差形式反映红细胞体积大小差异。"
+    },
+    {
+      "canonicalKey": "cbc_mpv",
+      "displayName": "平均血小板体积",
+      "categoryKey": "blood_count",
+      "order": 21,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "fL",
+      "unitDimension": "volume",
+      "aliases": [
+        "MPV",
+        "平均血小板体积",
+        "平均血小板容积",
+        "血小板平均体积"
+      ],
+      "allowedUnits": [
+        "fL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示血小板的平均体积。"
+    },
+    {
+      "canonicalKey": "cbc_pdw",
+      "displayName": "血小板分布宽度",
+      "categoryKey": "blood_count",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "other",
+      "aliases": [
+        "PDW",
+        "血小板分布宽度",
+        "血小板体积分布宽度"
+      ],
+      "allowedUnits": [
+        "fL",
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "反映血小板体积大小的差异，不同设备可能使用不同单位。"
+    },
+    {
+      "canonicalKey": "cbc_pct",
+      "displayName": "血小板压积",
+      "categoryKey": "blood_count",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "PCT",
+        "血小板压积",
+        "血小板比容"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示血小板在全血中所占的体积比例。"
+    },
+    {
+      "canonicalKey": "cbc_plcr",
+      "displayName": "大血小板比率",
+      "categoryKey": "blood_count",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "P-LCR",
+        "PLCR",
+        "大血小板比率",
+        "大型血小板比率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示较大体积血小板所占比例。"
+    },
+    {
+      "canonicalKey": "liver_total_protein",
+      "displayName": "总蛋白",
+      "categoryKey": "liver_function",
+      "order": 19,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "TP",
+        "总蛋白",
+        "血清总蛋白"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "g/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "反映血清中蛋白总量，通常结合白蛋白和球蛋白观察。"
+    },
+    {
+      "canonicalKey": "liver_albumin",
+      "displayName": "白蛋白",
+      "categoryKey": "liver_function",
+      "order": 20,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "ALB",
+        "Albumin",
+        "白蛋白",
+        "血清白蛋白"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "g/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "血清中的主要蛋白之一，通常结合总蛋白等指标观察。"
+    },
+    {
+      "canonicalKey": "liver_globulin",
+      "displayName": "球蛋白",
+      "categoryKey": "liver_function",
+      "order": 21,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "GLB",
+        "GLO",
+        "Globulin",
+        "球蛋白",
+        "血清球蛋白"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "g/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "通常由总蛋白和白蛋白等信息综合观察。"
+    },
+    {
+      "canonicalKey": "liver_ag_ratio",
+      "displayName": "白球比",
+      "categoryKey": "liver_function",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "A/G",
+        "AGR",
+        "白球比",
+        "白蛋白球蛋白比值",
+        "白蛋白/球蛋白"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "表示白蛋白与球蛋白的比值。"
+    },
+    {
+      "canonicalKey": "liver_dbil",
+      "displayName": "直接胆红素",
+      "categoryKey": "liver_function",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "DBIL",
+        "D-BIL",
+        "直接胆红素",
+        "结合胆红素"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "胆红素分项之一，通常结合总胆红素和间接胆红素观察。"
+    },
+    {
+      "canonicalKey": "liver_ibil",
+      "displayName": "间接胆红素",
+      "categoryKey": "liver_function",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "IBIL",
+        "I-BIL",
+        "间接胆红素",
+        "非结合胆红素"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "胆红素分项之一，通常结合总胆红素和直接胆红素观察。"
+    },
+    {
+      "canonicalKey": "liver_alp",
+      "displayName": "碱性磷酸酶",
+      "categoryKey": "liver_function",
+      "order": 25,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "ALP",
+        "AKP",
+        "碱性磷酸酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "常见酶学指标，通常结合其他肝胆指标和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "liver_tba",
+      "displayName": "总胆汁酸",
+      "categoryKey": "liver_function",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "TBA",
+        "总胆汁酸",
+        "血清总胆汁酸"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "反映血清总胆汁酸水平，通常结合其他肝功能指标观察。"
+    },
+    {
+      "canonicalKey": "renal_bun",
+      "displayName": "尿素氮",
+      "categoryKey": "renal_function",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "BUN",
+        "尿素氮",
+        "血尿素氮"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "生化"
+      ],
+      "explanation": "血尿素氮与尿素采用不同换算关系，应按报告原项目单独比较。"
+    },
+    {
+      "canonicalKey": "renal_egfr",
+      "displayName": "估算肾小球滤过率",
+      "categoryKey": "renal_function",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mL/min/1.73m²",
+      "unitDimension": "filtration_rate",
+      "aliases": [
+        "eGFR",
+        "估算肾小球滤过率",
+        "肾小球滤过率估算值"
+      ],
+      "allowedUnits": [
+        "mL/min/1.73m²",
+        "mL/min/1.73m2"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "生化"
+      ],
+      "explanation": "根据报告所列公式估算的肾小球滤过率，应按同一报告口径观察。"
+    },
+    {
+      "canonicalKey": "renal_cystatin_c",
+      "displayName": "胱抑素C",
+      "categoryKey": "renal_function",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "CysC",
+        "CYS-C",
+        "胱抑素C",
+        "血清胱抑素C"
+      ],
+      "allowedUnits": [
+        "mg/L"
+      ],
+      "sectionHints": [
+        "肾功能",
+        "生化"
+      ],
+      "explanation": "常见肾功能相关指标，通常结合肌酐和估算肾小球滤过率观察。"
+    },
+    {
+      "canonicalKey": "glucose_postprandial_2h",
+      "displayName": "餐后2小时血糖",
+      "categoryKey": "glucose_metabolism",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "2hPG",
+        "餐后2小时血糖",
+        "餐后两小时血糖",
+        "餐后血糖2小时"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "餐后",
+        "血糖",
+        "糖代谢"
+      ],
+      "explanation": "表示餐后两小时测得的血糖，应与空腹或随机血糖分开比较。"
+    },
+    {
+      "canonicalKey": "glucose_random",
+      "displayName": "随机血糖",
+      "categoryKey": "glucose_metabolism",
+      "order": 29,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "RBG",
+        "随机血糖",
+        "随机葡萄糖"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "随机",
+        "血糖",
+        "糖代谢"
+      ],
+      "explanation": "表示非固定空腹或餐后时点测得的血糖。"
+    },
+    {
+      "canonicalKey": "electrolyte_chloride",
+      "displayName": "氯",
+      "categoryKey": "electrolytes",
+      "order": 33,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "Cl",
+        "CL-",
+        "氯",
+        "氯离子",
+        "血清氯"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mEq/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "常见电解质指标，通常结合钠、钾等项目观察。"
+    },
+    {
+      "canonicalKey": "electrolyte_calcium",
+      "displayName": "钙",
+      "categoryKey": "electrolytes",
+      "order": 34,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "Ca",
+        "CA2+",
+        "钙",
+        "血钙",
+        "血清钙"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "表示报告中的血清钙水平，应以本次报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "electrolyte_phosphorus",
+      "displayName": "磷",
+      "categoryKey": "electrolytes",
+      "order": 35,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "P",
+        "PHOS",
+        "磷",
+        "无机磷",
+        "血磷"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "表示报告中的无机磷水平，通常结合钙等项目观察。"
+    },
+    {
+      "canonicalKey": "electrolyte_magnesium",
+      "displayName": "镁",
+      "categoryKey": "electrolytes",
+      "order": 36,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "Mg",
+        "MG2+",
+        "镁",
+        "血镁",
+        "血清镁"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "表示报告中的血清镁水平。"
+    },
+    {
+      "canonicalKey": "electrolyte_co2_cp",
+      "displayName": "二氧化碳结合力",
+      "categoryKey": "electrolytes",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "CO2CP",
+        "二氧化碳结合力"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mEq/L"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
+      ],
+      "explanation": "反映报告中的二氧化碳结合力，不与不同检测口径的总二氧化碳强行合并。"
+    },
+    {
+      "canonicalKey": "urine_specific_gravity",
+      "displayName": "尿比重",
+      "categoryKey": "urinalysis",
+      "order": 62,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "SG",
+        "尿比重",
+        "比重"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "反映尿液相对密度，通常为无单位数值。"
+    },
+    {
+      "canonicalKey": "urine_ph",
+      "displayName": "尿液酸碱度",
+      "categoryKey": "urinalysis",
+      "order": 63,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "pH",
+        "尿pH",
+        "尿液pH",
+        "酸碱度",
+        "尿酸碱度",
+        "尿液酸碱度"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "表示尿液酸碱度，通常为无单位数值。"
+    },
+    {
+      "canonicalKey": "urine_glucose_qualitative",
+      "displayName": "尿糖（定性）",
+      "categoryKey": "urinalysis",
+      "order": 64,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "UGLU",
+        "尿糖",
+        "尿葡萄糖",
+        "葡萄糖定性"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的定性结果，不与血糖或尿糖定量结果合并。"
+    },
+    {
+      "canonicalKey": "urine_occult_blood",
+      "displayName": "尿潜血",
+      "categoryKey": "urinalysis",
+      "order": 65,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "BLD",
+        "OB",
+        "尿潜血",
+        "隐血",
+        "尿隐血"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的潜血定性结果。"
+    },
+    {
+      "canonicalKey": "urine_ketone",
+      "displayName": "尿酮体",
+      "categoryKey": "urinalysis",
+      "order": 66,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "KET",
+        "尿酮体",
+        "酮体"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的酮体定性结果。"
+    },
+    {
+      "canonicalKey": "urine_bilirubin",
+      "displayName": "尿胆红素",
+      "categoryKey": "urinalysis",
+      "order": 67,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "BIL",
+        "尿胆红素",
+        "胆红素"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的胆红素定性结果。"
+    },
+    {
+      "canonicalKey": "urine_urobilinogen",
+      "displayName": "尿胆原",
+      "categoryKey": "urinalysis",
+      "order": 68,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "URO",
+        "UBG",
+        "尿胆原",
+        "尿胆素原"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的尿胆原结果。"
+    },
+    {
+      "canonicalKey": "urine_nitrite",
+      "displayName": "尿亚硝酸盐",
+      "categoryKey": "urinalysis",
+      "order": 69,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "NIT",
+        "尿亚硝酸盐",
+        "亚硝酸盐"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的亚硝酸盐定性结果。"
+    },
+    {
+      "canonicalKey": "urine_leukocyte_esterase",
+      "displayName": "尿白细胞酯酶",
+      "categoryKey": "urinalysis",
+      "order": 70,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "LEU",
+        "LE",
+        "尿白细胞酯酶",
+        "白细胞酯酶"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的白细胞酯酶定性结果。"
+    },
+    {
+      "canonicalKey": "urine_rbc",
+      "displayName": "尿红细胞",
+      "categoryKey": "urinalysis",
+      "order": 71,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "URBC",
+        "尿RBC",
+        "尿红细胞",
+        "镜检红细胞",
+        "尿镜检红细胞",
+        "红细胞计数"
+      ],
+      "allowedUnits": [
+        "/HPF",
+        "Cell/HP",
+        "个/HPF",
+        "cells/HPF",
+        "个/μL",
+        "cells/μL"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿液"
+      ],
+      "explanation": "尿沉渣中的红细胞计数；不同计量单位分别形成趋势，不强行换算。"
+    },
+    {
+      "canonicalKey": "urine_wbc",
+      "displayName": "尿白细胞",
+      "categoryKey": "urinalysis",
+      "order": 72,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "UWBC",
+        "尿WBC",
+        "尿白细胞",
+        "镜检白细胞",
+        "尿镜检白细胞",
+        "白细胞计数"
+      ],
+      "allowedUnits": [
+        "/HPF",
+        "Cell/HP",
+        "个/HPF",
+        "cells/HPF",
+        "个/μL",
+        "cells/μL"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿液"
+      ],
+      "explanation": "尿沉渣中的白细胞计数；不同计量单位分别形成趋势，不强行换算。"
+    },
+    {
+      "canonicalKey": "urine_protein_quantitative",
+      "displayName": "尿蛋白（定量）",
+      "categoryKey": "urinalysis",
+      "order": 73,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "UTP",
+        "尿蛋白定量",
+        "尿总蛋白",
+        "尿蛋白"
+      ],
+      "allowedUnits": [
+        "mg/L",
+        "g/L",
+        "mg/24h",
+        "g/24h",
+        "mg/gCr"
+      ],
+      "sectionHints": [
+        "尿蛋白定量",
+        "尿液",
+        "肾功能"
+      ],
+      "explanation": "尿蛋白的定量结果；不同采集方式和单位分别比较，不与定性阴阳结果合并。"
+    },
+    {
+      "canonicalKey": "urine_casts",
+      "displayName": "尿镜检管型",
+      "categoryKey": "urinalysis",
+      "order": 74,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": "/LPF",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "Cast",
+        "管型",
+        "镜检管型",
+        "尿管型",
+        "尿镜检管型"
+      ],
+      "allowedUnits": [
+        "/LPF",
+        "Cast/LP",
+        "个/LPF"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣镜检中的管型计数，不同计量口径分别比较。"
+    },
+    {
+      "canonicalKey": "stool_wbc",
+      "displayName": "便白细胞",
+      "categoryKey": "stool_analysis",
+      "order": 1,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "WBC",
+        "白细胞",
+        "白细胞计数",
+        "便白细胞",
+        "粪便白细胞"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "便常规",
+        "粪便",
+        "大便"
+      ],
+      "explanation": "便常规中的白细胞结果，属于状态型项目，不与血常规白细胞合并。"
+    },
+    {
+      "canonicalKey": "stool_rbc",
+      "displayName": "便红细胞",
+      "categoryKey": "stool_analysis",
+      "order": 2,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "RBC",
+        "红细胞",
+        "红细胞计数",
+        "便红细胞",
+        "粪便红细胞"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "便常规",
+        "粪便",
+        "大便"
+      ],
+      "explanation": "便常规中的红细胞结果，属于状态型项目，不与血常规红细胞合并。"
+    },
+    {
+      "canonicalKey": "ecg_heart_rate",
+      "displayName": "心电图心率",
+      "categoryKey": "functional_measurement",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "次/分",
+      "unitDimension": "frequency",
+      "aliases": [
+        "HR",
+        "Heart Rate",
+        "心率",
+        "心电图心率"
+      ],
+      "allowedUnits": [
+        "次/分",
+        "次/min",
+        "bpm"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图记录中的心率，与一般检查的脉搏按检查场景分别展示。"
+    },
+    {
+      "canonicalKey": "ecg_pr_interval",
+      "displayName": "PR 间期",
+      "categoryKey": "functional_measurement",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "ms",
+      "unitDimension": "time",
+      "aliases": [
+        "PR",
+        "PR间期",
+        "P-R间期"
+      ],
+      "allowedUnits": [
+        "ms"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图中的 PR 间期测量值。"
+    },
+    {
+      "canonicalKey": "ecg_qrs_duration",
+      "displayName": "QRS 时限",
+      "categoryKey": "functional_measurement",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "ms",
+      "unitDimension": "time",
+      "aliases": [
+        "QRS",
+        "QRS时限",
+        "QRS宽度"
+      ],
+      "allowedUnits": [
+        "ms"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图中的 QRS 波群时限。"
+    },
+    {
+      "canonicalKey": "ecg_qtc_interval",
+      "displayName": "QTc 间期",
+      "categoryKey": "functional_measurement",
+      "order": 4,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "ms",
+      "unitDimension": "time",
+      "aliases": [
+        "QTc",
+        "QTc间期",
+        "校正QT间期"
+      ],
+      "allowedUnits": [
+        "ms"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图中的校正 QT 间期。"
+    },
+    {
+      "canonicalKey": "vascular_abi_right",
+      "displayName": "右侧踝肱指数",
+      "categoryKey": "functional_measurement",
+      "order": 10,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "右侧ABI",
+        "右ABI",
+        "右踝ABI",
+        "右侧踝肱指数",
+        "右踝肱指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "ABI"
+      ],
+      "explanation": "右侧下肢的踝肱指数，应与同次左侧结果及原报告参考范围一起观察。"
+    },
+    {
+      "canonicalKey": "vascular_abi_left",
+      "displayName": "左侧踝肱指数",
+      "categoryKey": "functional_measurement",
+      "order": 11,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "左侧ABI",
+        "左ABI",
+        "左踝ABI",
+        "左侧踝肱指数",
+        "左踝肱指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "ABI"
+      ],
+      "explanation": "左侧下肢的踝肱指数，应与同次右侧结果及原报告参考范围一起观察。"
+    },
+    {
+      "canonicalKey": "vascular_abi",
+      "displayName": "踝肱指数",
+      "categoryKey": "functional_measurement",
+      "order": 12,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "ABI",
+        "踝肱指数",
+        "踝臂指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "ABI"
+      ],
+      "explanation": "动脉功能检查中的踝肱指数，左右侧结果分别保留原项目名称和证据。"
+    },
+    {
+      "canonicalKey": "vascular_bapwv_right",
+      "displayName": "右侧肱踝脉搏波传导速度",
+      "categoryKey": "functional_measurement",
+      "order": 13,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "右侧baPWV",
+        "右baPWV",
+        "右侧PWV",
+        "右PWV",
+        "右侧肱踝脉搏波传导速度",
+        "右侧臂踝脉搏波速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "baPWV"
+      ],
+      "explanation": "右侧肢体的肱踝脉搏波传导速度，应与同次左侧结果及原报告参考范围一起观察。"
+    },
+    {
+      "canonicalKey": "vascular_bapwv_left",
+      "displayName": "左侧肱踝脉搏波传导速度",
+      "categoryKey": "functional_measurement",
+      "order": 14,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "左侧baPWV",
+        "左baPWV",
+        "左侧PWV",
+        "左PWV",
+        "左侧肱踝脉搏波传导速度",
+        "左侧臂踝脉搏波速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "baPWV"
+      ],
+      "explanation": "左侧肢体的肱踝脉搏波传导速度，应与同次右侧结果及原报告参考范围一起观察。"
+    },
+    {
+      "canonicalKey": "vascular_bapwv",
+      "displayName": "肱踝脉搏波传导速度",
+      "categoryKey": "functional_measurement",
+      "order": 15,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "baPWV",
+        "肱踝脉搏波传导速度",
+        "臂踝脉搏波速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "baPWV"
+      ],
+      "explanation": "动脉功能检查中的肱踝脉搏波传导速度，左右侧数据分别保留。"
+    },
+    {
+      "canonicalKey": "tumor_psa_total",
+      "displayName": "总前列腺特异性抗原",
+      "categoryKey": "laboratory_other",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "T-PSA",
+        "TPSA",
+        "前列腺特异性抗原",
+        "总前列腺特异性抗原",
+        "总PSA"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告中的总前列腺特异性抗原测量值。"
+    },
+    {
+      "canonicalKey": "tumor_psa_free",
+      "displayName": "游离前列腺特异性抗原",
+      "categoryKey": "laboratory_other",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "F-PSA",
+        "FPSA",
+        "游离前列腺特异性抗原",
+        "游离PSA"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告中的游离前列腺特异性抗原测量值。"
+    },
+    {
+      "canonicalKey": "tumor_psa_free_total_ratio",
+      "displayName": "游离/总前列腺特异性抗原比值",
+      "categoryKey": "laboratory_other",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "F-PSA/T-PSA",
+        "fPSA/tPSA",
+        "游离总PSA比值",
+        "游离前列腺特异性抗原比值"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告明确给出的游离 PSA 与总 PSA 比值，不由系统自行计算。"
+    },
+    {
+      "canonicalKey": "body_waist_hip_ratio",
+      "displayName": "腰臀比",
+      "categoryKey": "general_measurement",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "WHR",
+        "腰臀比",
+        "腰围臀围比"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "人体成分"
+      ],
+      "explanation": "报告明确给出的腰围与臀围比值，不由系统根据其他数值自行推算。"
+    },
+    {
+      "canonicalKey": "vision_uncorrected_right",
+      "displayName": "右眼裸眼视力",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "裸眼视力右",
+        "右眼裸眼视力",
+        "右眼视力"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "眼科",
+        "视力"
+      ],
+      "explanation": "原报告记录的右眼裸眼视力。"
+    },
+    {
+      "canonicalKey": "vision_uncorrected_left",
+      "displayName": "左眼裸眼视力",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "裸眼视力左",
+        "左眼裸眼视力",
+        "左眼视力"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "眼科",
+        "视力"
+      ],
+      "explanation": "原报告记录的左眼裸眼视力。"
+    },
+    {
+      "canonicalKey": "urine_vitamin_c",
+      "displayName": "尿维生素 C",
+      "categoryKey": "urinalysis",
+      "order": 75,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "VC",
+        "维生素C",
+        "尿维生素C"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液"
+      ],
+      "explanation": "尿常规中的维生素 C 定性结果，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "urine_crystals",
+      "displayName": "尿镜检结晶",
+      "categoryKey": "urinalysis",
+      "order": 76,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "镜检结晶",
+        "尿结晶",
+        "尿镜检结晶"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣镜检中的结晶定性结果，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "lipid_atherogenic_index",
+      "displayName": "动脉硬化指数",
+      "categoryKey": "lipids",
+      "order": 42,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "AI",
+        "动脉硬化指数",
+        "动脉粥样硬化指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血脂",
+        "脂蛋白",
+        "动脉粥样硬化指数"
+      ],
+      "explanation": "报告明确给出的动脉硬化指数，不由系统根据血脂结果自行计算。"
+    },
+    {
+      "canonicalKey": "laboratory_ferritin",
+      "displayName": "血清铁蛋白",
+      "categoryKey": "laboratory_other",
+      "order": 10,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "FER",
+        "Ferritin",
+        "铁蛋白",
+        "血清铁蛋白",
+        "血清铁蛋白测定"
+      ],
+      "allowedUnits": [
+        "μg/L",
+        "ng/mL"
+      ],
+      "sectionHints": [
+        "检验",
+        "肿瘤标志物",
+        "铁代谢"
+      ],
+      "explanation": "血清铁蛋白测量值，通常结合原报告参考范围观察。"
+    }
+  ],
+  "extensions": [],
+  "redirects": {}
+}

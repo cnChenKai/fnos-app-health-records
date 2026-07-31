@@ -1,0 +1,97 @@
+name: Dictionary Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/dictionary-pages.yml"
+      - "dictionary/remote/**"
+      - "dictionary/schemas/**"
+      - "scripts/dictionary/**"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: dictionary-pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate complete dictionary snapshots
+        run: npm run dictionary:validate
+
+      - name: Build Pages artifact
+        env:
+          DICTIONARY_SIGNING_PRIVATE_KEY: ${{ secrets.DICTIONARY_SIGNING_PRIVATE_KEY }}
+          DICTIONARY_SIGNING_KEY_ID: ${{ vars.DICTIONARY_SIGNING_KEY_ID }}
+        run: npm run dictionary:build
+
+      - name: Sync dictionary snapshot to Gitee
+        env:
+          GITEE_DICTIONARY_SSH_KEY: ${{ secrets.GITEE_DICTIONARY_SSH_KEY }}
+          GITEE_DICTIONARY_REPOSITORY: Timor-M/health-records-dictionary
+        run: |
+          if [ -z "$GITEE_DICTIONARY_SSH_KEY" ]; then
+            echo "::error::Missing GitHub Actions secret GITEE_DICTIONARY_SSH_KEY"
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$GITEE_DICTIONARY_SSH_KEY" | tr -d '\r' > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -H gitee.com >> "$HOME/.ssh/known_hosts"
+
+          mirror_dir="$(mktemp -d)"
+          git clone --depth 1 \
+            "git@gitee.com:${GITEE_DICTIONARY_REPOSITORY}.git" \
+            "$mirror_dir"
+
+          install -m 0644 .dictionary-pages/manifest.json "$mirror_dir/manifest.json"
+          install -m 0644 .dictionary-pages/taxonomy.json "$mirror_dir/taxonomy.json"
+          install -m 0644 .dictionary-pages/indicators.json "$mirror_dir/indicators.json"
+
+          cd "$mirror_dir"
+          git config user.name "health-records-bot"
+          git config user.email "health-records-bot@users.noreply.github.com"
+          git add manifest.json taxonomy.json indicators.json
+
+          if git diff --cached --quiet; then
+            echo "Gitee dictionary mirror is already up to date"
+            exit 0
+          fi
+
+          revision="$(node -p "require('./manifest.json').revision")"
+          git commit -m "chore: publish dictionary revision ${revision}"
+          git push origin HEAD:main
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .dictionary-pages
+
+      - name: Deploy dictionary to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

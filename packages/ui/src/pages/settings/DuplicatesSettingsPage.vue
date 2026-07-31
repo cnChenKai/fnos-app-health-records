@@ -87,7 +87,7 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
     <SubPageHeader title="重复报告检测" description="手动扫描当前成员，处理疑似重复或高度重复的报告" />
     <section class="settings-band">
       <header>
-        <div><SearchCheck :size="20" /><div><h3>手动扫描</h3><p>依据 AI/OCR 提取出的医院、日期、编号、科室、部位、结论和指标判断。</p></div></div>
+        <div><SearchCheck :size="20" /><div><h3>手动扫描</h3><p>依据原件指纹、OCR 内容、业务编号及已整理字段和指标综合判断。</p></div></div>
         <button class="primary-button compact-primary" type="button" :disabled="loading" @click="scan">
           <RefreshCw :size="16" :class="{ 'spin-icon': loading }" />{{ loading ? "扫描中" : "开始检测" }}
         </button>

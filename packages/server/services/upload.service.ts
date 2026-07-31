@@ -184,12 +184,13 @@ export function createUpload(user: RequestUser, memberId: string, files: UploadI
 }
 
 export function listProcessingJobs(user: RequestUser, reportId: string) {
-  const report = getDatabase().prepare("SELECT member_id AS memberId FROM reports WHERE id = ?").get(reportId) as
+  const db = getDatabase();
+  const report = db.prepare("SELECT member_id AS memberId FROM reports WHERE id = ?").get(reportId) as
     | { memberId: string }
     | undefined;
   if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberAccess(user, report.memberId);
-  return getDatabase().prepare(`
+  const jobs = db.prepare(`
     SELECT j.id, j.page_id AS pageId, p.page_number AS pageNumber, p.original_name AS originalName,
       j.job_type AS jobType, j.status, j.attempts,
       j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
@@ -209,5 +210,84 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
     LEFT JOIN report_extractions e ON e.job_id = j.id
     WHERE j.report_id = ?
     ORDER BY COALESCE(p.page_number, 999999), j.created_at, j.id
-  `).all(reportId);
+  `).all(reportId) as Array<Record<string, unknown> & {
+    id: string;
+    jobType: string;
+    ocrTextLength: number | null;
+  }>;
+  const units = db.prepare(`
+    SELECT job_id AS jobId, unit_type AS unitType, page_numbers_json AS pageNumbersJson,
+      status, candidate_count AS candidateCount, matched_count AS matchedCount, unit_index AS unitIndex
+    FROM ai_extraction_units
+    WHERE report_id = ? AND status <> 'superseded'
+    ORDER BY unit_index, id
+  `).all(reportId) as Array<{
+    jobId: string; unitType: string; pageNumbersJson: string; status: string;
+    candidateCount: number; matchedCount: number; unitIndex: number;
+  }>;
+  const byJob = new Map<string, typeof units>();
+  for (const unit of units) byJob.set(unit.jobId, [...(byJob.get(unit.jobId) || []), unit]);
+  const aiAttempts = db.prepare(`
+    SELECT job_id AS jobId, status, model, prompt_tokens AS promptTokens,
+      completion_tokens AS completionTokens, elapsed_ms AS elapsedMs
+    FROM ai_extraction_attempts
+    WHERE report_id = ?
+    ORDER BY created_at, id
+  `).all(reportId) as Array<{
+    jobId: string;
+    status: string;
+    model: string | null;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    elapsedMs: number | null;
+  }>;
+  const attemptsByJob = new Map<string, typeof aiAttempts>();
+  for (const attempt of aiAttempts) {
+    attemptsByJob.set(attempt.jobId, [...(attemptsByJob.get(attempt.jobId) || []), attempt]);
+  }
+  return jobs.map((job) => {
+    if (job.jobType !== "ai_extract") return job;
+    const jobUnits = byJob.get(job.id) || [];
+    const jobAttempts = attemptsByJob.get(job.id) || [];
+    const pageNumbers = (unit: typeof jobUnits[number]) => {
+      try { return JSON.parse(unit.pageNumbersJson) as number[]; } catch { return []; }
+    };
+    const processing = jobUnits.filter((unit) => unit.status === "processing");
+    const current = processing[0]
+      || jobUnits.find((unit) => unit.status === "failed")
+      || jobUnits.find((unit) => unit.status === "planned");
+    const currentPages = processing.length
+      ? [...new Set(processing.flatMap(pageNumbers))].sort((left, right) => left - right)
+      : current ? pageNumbers(current) : [];
+    const totalPages = new Set(jobUnits.flatMap(pageNumbers));
+    const processedPages = new Set(jobUnits
+      .filter((unit) => ["completed", "warning"].includes(unit.status))
+      .flatMap(pageNumbers));
+    return {
+      ...job,
+      aiModel: jobAttempts.at(-1)?.model || job.aiModel || null,
+      aiElapsedMs: jobAttempts.length
+        ? jobAttempts.reduce((sum, attempt) => sum + (attempt.elapsedMs || 0), 0)
+        : job.aiElapsedMs,
+      promptTokens: jobAttempts.length
+        ? jobAttempts.reduce((sum, attempt) => sum + (attempt.promptTokens || 0), 0)
+        : job.promptTokens,
+      completionTokens: jobAttempts.length
+        ? jobAttempts.reduce((sum, attempt) => sum + (attempt.completionTokens || 0), 0)
+        : job.completionTokens,
+      aiRequestCount: jobAttempts.length,
+      aiSuccessCount: jobAttempts.filter((attempt) => attempt.status === "completed").length,
+      aiFailureCount: jobAttempts.filter((attempt) => attempt.status === "failed").length,
+      plannedUnits: jobUnits.length,
+      completedUnits: jobUnits.filter((unit) => unit.status === "completed").length,
+      warningUnits: jobUnits.filter((unit) => unit.status === "warning").length,
+      processedPages: processedPages.size,
+      totalPages: totalPages.size,
+      currentUnitType: current?.unitType || null,
+      currentPages,
+      unmatchedCandidates: jobUnits
+        .filter((unit) => unit.unitType !== "supplement")
+        .reduce((sum, unit) => sum + Math.max(0, unit.candidateCount - unit.matchedCount), 0)
+    };
+  });
 }

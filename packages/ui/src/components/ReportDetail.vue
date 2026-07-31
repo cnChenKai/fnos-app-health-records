@@ -2,14 +2,20 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
-  FileImage, FileText, LoaderCircle, Maximize2, Pencil, RefreshCw, RotateCw, ScrollText,
+  FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText,
   Sparkles, Trash2, X
 } from "@lucide/vue";
+import ClinicalFactEditor from "./ClinicalFactEditor.vue";
+import ReportStructuredSectionEditor from "./ReportStructuredSectionEditor.vue";
 import FormSelect from "./FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
+import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
 import { formatDatabaseTime } from "../utils/time";
-import type { OcrPageText, ProcessingJob, ProcessingJobEvent, ReportDetail, ReportPage, ReportSummary } from "../types/api";
+import type {
+  ClinicalEvidence, ClinicalFactType, OcrPageText, ProcessingJob, ProcessingJobEvent,
+  ReportDetail, ReportPage, ReportSummary
+} from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
 import { useConfirm } from "../composables/useConfirm";
 import { useScrollLock } from "../composables/useScrollLock";
@@ -41,6 +47,7 @@ const processingExpanded = ref(false);
 const runtimeAvailable = ref(true);
 const eventSheetOpen = ref(false);
 const eventLoading = ref(false);
+const eventPolling = ref(false);
 const eventError = ref("");
 const eventJob = ref<ProcessingJob | null>(null);
 const jobEvents = ref<ProcessingJobEvent[]>([]);
@@ -58,6 +65,13 @@ const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
 const trashingReport = ref(false);
 const editOpen = ref(false);
+const morphologyEditItem = ref<ReportDetail["morphologyFindings"][number] | null>(null);
+const clinicalFactEditor = ref<{
+  type: ClinicalFactType;
+  fact: (Record<string, unknown> & { id?: string }) | null;
+} | null>(null);
+const structuredSectionEditor = ref<ReportDetail["structuredSections"][number] | null | "create">(null);
+const allObservationsOpen = ref(false);
 const editOriginalIndex = ref(0);
 const savingReport = ref(false);
 const savingPages = ref(false);
@@ -68,11 +82,15 @@ const editForm = ref({
   findings: "", impression: "", summary: "", recommendation: ""
 });
 let jobsTimer: ReturnType<typeof setInterval> | null = null;
+let eventTimer: ReturnType<typeof setInterval> | null = null;
 let detailSeq = 0;
 let jobsSeq = 0;
 let jobsLoadingSeq = 0;
 let ocrSeq = 0;
 let jobsPollFailures = 0;
+let eventSeq = 0;
+let eventRequestPending = false;
+const OBSERVATION_PREVIEW_LIMIT = 24;
 
 /* 处理进度区默认折叠：任何写入 jobsError 的失败都要同时展开该区并 toast，否则按钮停了用户却看不到原因 */
 function failJobsAction(cause: unknown, fallback: string) {
@@ -81,7 +99,13 @@ function failJobsAction(cause: unknown, fallback: string) {
   toast.show(jobsError.value, 3600);
 }
 
-const source = computed(() => detail.value || props.summary || null);
+const currentDetail = computed(() =>
+  detail.value?.id === props.reportId ? detail.value : null
+);
+const currentSummary = computed(() =>
+  props.summary?.id === props.reportId ? props.summary : null
+);
+const source = computed(() => currentDetail.value || currentSummary.value || null);
 /* OCR 全部完成但没有任何文字：原件大概率不是有效报告，在详情顶部明确提示而非仅发通知 */
 const ocrEmptyNotice = computed(() => {
   const localJobs = selectedJobs.value.filter((job) => job.jobType !== "ai_extract");
@@ -92,7 +116,23 @@ const ocrEmptyNotice = computed(() => {
 const completedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "completed").length);
 const failedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "failed"));
 const finishedJobs = computed(() => selectedJobs.value.filter((job) => ["completed", "failed", "cancelled"].includes(job.status)).length);
-const progressPercent = computed(() => selectedJobs.value.length ? Math.round(finishedJobs.value / selectedJobs.value.length * 100) : 0);
+const progressPercent = computed(() => {
+  if (!selectedJobs.value.length) return 0;
+  const progress = selectedJobs.value.reduce((sum, job) => {
+    if (["completed", "failed", "cancelled"].includes(job.status)) return sum + 1;
+    if (job.jobType === "ai_extract" && job.plannedUnits) {
+      return sum + Math.min(1, (job.completedUnits || 0) / job.plannedUnits);
+    }
+    return sum;
+  }, 0);
+  const percent = Math.round(progress / selectedJobs.value.length * 100);
+  const hasUnfinishedJob = selectedJobs.value.some((job) =>
+    !["completed", "failed", "cancelled"].includes(job.status)
+  );
+  // AI units may all be complete while the parent job is still merging and
+  // persisting results. Reserve 100% for a genuinely settled job set.
+  return hasUnfinishedJob ? Math.min(percent, 99) : percent;
+});
 const hasRunningJobs = computed(() => selectedJobs.value.some((job) => ["queued", "processing"].includes(job.status)));
 const hasProcessingJobs = computed(() => selectedJobs.value.some((job) => job.status === "processing"));
 const needsOcrRuntime = computed(() =>
@@ -119,12 +159,20 @@ const hasAiContent = computed(() => Boolean(
   detail.value && (
     detail.value.summary || detail.value.findings || detail.value.impression || detail.value.recommendation
     || detail.value.clinicalDiagnosis || detail.value.purpose || detail.value.chiefComplaint
-    || detail.value.observations.length
+    || detail.value.observations.length || detail.value.morphologyFindings.length
+    || detail.value.diagnoses.length || detail.value.medications.length || detail.value.procedures.length
+    || detail.value.vaccinations.length || detail.value.billingSummary || detail.value.billingItems.length
+    || detail.value.structuredSections.length
   )
 ));
 const abnormalObservations = computed(() => detail.value?.observations.filter((item) => ["high", "low", "abnormal"].includes(String(item.abnormalFlag))) || []);
-const visibleObservations = computed(() => detail.value?.observations.slice(0, 24) || []);
-const duplicateCandidates = computed(() => detail.value?.duplicateCandidates || []);
+const visibleObservations = computed(() => detail.value?.observations.slice(0, OBSERVATION_PREVIEW_LIMIT) || []);
+/* 重复匹配是双向的，但确认提示只属于尚未归档的新报告，避免打开已有报告时反向显示同一警告。 */
+const duplicateCandidates = computed(() =>
+  source.value?.status === "needs_review"
+    ? currentDetail.value?.duplicateCandidates || []
+    : []
+);
 const aiJobs = computed(() => selectedJobs.value.filter((job) => job.jobType === "ai_extract"));
 const runningAiJobs = computed(() => aiJobs.value.filter((job) => ["queued", "processing"].includes(job.status)));
 const failedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "failed"));
@@ -203,7 +251,11 @@ function jobMeta(job: ProcessingJob) {
     job.startedAt ? `开始 ${formatDatabaseTime(job.startedAt)}` : `创建 ${formatDatabaseTime(job.createdAt)}`
   ];
   if (job.finishedAt) parts.push(`结束 ${formatDatabaseTime(job.finishedAt)}`);
-  if (job.attempts > 0) parts.push(`尝试 ${job.attempts} 次`);
+  if (job.jobType === "ai_extract" && job.aiRequestCount) {
+    parts.push(`调用 ${job.aiRequestCount} 次（成功 ${job.aiSuccessCount || 0} / 失败 ${job.aiFailureCount || 0}）`);
+  } else if (job.attempts > 0) {
+    parts.push(`尝试 ${job.attempts} 次`);
+  }
   return parts.join(" · ");
 }
 
@@ -212,16 +264,31 @@ function jobDetail(job: ProcessingJob) {
   if (job.jobType === "ocr" && job.ocrEngine) {
     return [job.ocrEngine, job.ocrModelVersion, formatMs(job.ocrElapsedMs)].filter(Boolean).join(" · ");
   }
-  if (job.jobType === "ai_extract" && job.aiProvider) {
+  if (
+    job.jobType === "ai_extract"
+    && (
+      job.aiModel
+      || job.aiElapsedMs != null
+      || job.promptTokens != null
+      || job.completionTokens != null
+      || Boolean(job.unmatchedCandidates)
+    )
+  ) {
     const tokens = [job.promptTokens, job.completionTokens].some((value) => value != null)
       ? `${job.promptTokens || 0}/${job.completionTokens || 0} tokens`
       : "";
-    return [job.aiProvider, job.aiModel, formatMs(job.aiElapsedMs), tokens].filter(Boolean).join(" · ");
+    const quality = job.unmatchedCandidates ? `${job.unmatchedCandidates} 项待核对` : "";
+    return [job.aiModel, formatMs(job.aiElapsedMs), tokens, quality].filter(Boolean).join(" · ");
+  }
+  if (job.jobType === "ai_extract" && job.plannedUnits) {
+    const pages = job.currentPages?.length ? `当前第 ${job.currentPages.join("、")} 页` : "";
+    return [`解析单元 ${job.completedUnits || 0}/${job.plannedUnits}`, pages].filter(Boolean).join(" · ");
   }
   return job.status === "processing" ? "任务正在后台执行" : job.status === "queued" ? "等待后台队列处理" : "任务已完成";
 }
 
 function eventTitle(event: ProcessingJobEvent) {
+  if (event.detail?.stage === "duplicate_precheck") return "发现重复报告";
   const prefix = eventTypeLabels[event.eventType] || event.eventType;
   return event.attempt > 0 ? `${prefix} · 第 ${event.attempt} 次尝试` : prefix;
 }
@@ -237,7 +304,6 @@ function eventDetail(event: ProcessingJobEvent) {
     typeof payload.code === "string" ? `错误码 ${payload.code}` : "",
     typeof payload.elapsedMs === "number" ? `耗时 ${formatMs(payload.elapsedMs)}` : "",
     typeof payload.retryDelaySeconds === "number" ? `${payload.retryDelaySeconds} 秒后自动重试` : "",
-    typeof payload.provider === "string" ? `AI ${payload.provider}` : "",
     typeof payload.model === "string" ? String(payload.model) : "",
     typeof payload.engine === "string" ? `OCR ${payload.engine}` : "",
     typeof payload.modelVersion === "string" ? String(payload.modelVersion) : "",
@@ -251,6 +317,15 @@ function eventDetail(event: ProcessingJobEvent) {
       : "",
     typeof payload.promptTokens === "number" || typeof payload.completionTokens === "number"
       ? `${Number(payload.promptTokens || 0)}/${Number(payload.completionTokens || 0)} tokens`
+      : "",
+    Array.isArray(payload.pageNumbers) && payload.pageNumbers.length
+      ? `第 ${payload.pageNumbers.join("、")} 页`
+      : "",
+    typeof payload.unitIndex === "number" ? `单元 ${payload.unitIndex + 1}` : "",
+    typeof payload.characterCount === "number" ? `${payload.characterCount} 字符` : "",
+    typeof payload.candidateCount === "number" ? `${payload.candidateCount} 个候选行` : "",
+    typeof payload.unmatchedCandidates === "number" && payload.unmatchedCandidates > 0
+      ? `${payload.unmatchedCandidates} 项待核对`
       : ""
   ].filter(Boolean);
   return parts.join(" · ");
@@ -289,7 +364,11 @@ function closePdfOriginalViewer() {
 }
 
 /* 弹层打开期间锁定背景滚动（页面缩放已全局禁用） */
-useScrollLock(computed(() => pdfViewerOpen.value || editOpen.value || ocrSheetOpen.value || eventSheetOpen.value));
+useScrollLock(computed(() =>
+  pdfViewerOpen.value || editOpen.value || Boolean(morphologyEditItem.value)
+  || Boolean(clinicalFactEditor.value) || ocrSheetOpen.value || eventSheetOpen.value
+  || Boolean(structuredSectionEditor.value) || allObservationsOpen.value
+));
 
 function abnormalLabel(value: string | null) {
   return { high: "偏高", low: "偏低", abnormal: "异常", normal: "正常" }[value || ""] || "";
@@ -321,6 +400,169 @@ function observationNormalizationLine(item: ReportDetail["observations"][number]
   return "";
 }
 
+function medicationDetail(item: ReportDetail["medications"][number]) {
+  return [
+    item.specification,
+    [item.dose, item.doseUnit].filter(Boolean).join(" "),
+    item.frequency,
+    item.route,
+    item.duration,
+    item.quantity ? `数量 ${item.quantity}${item.quantityUnit || ""}` : null
+  ].filter(Boolean).join(" · ");
+}
+
+function procedureDetail(item: ReportDetail["procedures"][number]) {
+  return [item.performedAt, item.bodyPart, item.resultText].filter(Boolean).join(" · ");
+}
+
+function billingMoney(value: number | null, currency = "CNY") {
+  if (value === null || value === undefined) return "";
+  return `${currency === "CNY" ? "¥" : `${currency} `}${value.toFixed(2)}`;
+}
+
+const clinicalFactTypeLabels: Record<ClinicalFactType, string> = {
+  diagnosis: "诊断",
+  medication: "用药",
+  procedure: "操作",
+  vaccination: "疫苗",
+  billingSummary: "费用汇总",
+  billingItem: "费用明细"
+};
+
+const structuredSectionLabels: Record<ReportDetail["structuredSections"][number]["sectionKey"], string> = {
+  checkup_package: "体检套餐", checkup_positive_findings: "阳性发现",
+  checkup_abnormal_summary: "异常汇总", checkup_final_conclusion: "总检结论",
+  checkup_original_recommendation: "原报告建议", laboratory_specimen: "检验标本",
+  laboratory_method: "检验方法", imaging_modality: "检查方式", imaging_contrast: "增强信息",
+  functional_method: "检查方法", functional_description: "检查描述",
+  pathology_specimen: "病理标本", pathology_gross_findings: "肉眼所见",
+  pathology_microscopic_findings: "镜下所见", pathology_immunohistochemistry: "免疫组化",
+  pathology_grade: "病理分级", pathology_stage: "病理分期", outpatient_history: "病史",
+  outpatient_physical_examination: "体格检查", outpatient_disposition: "处置",
+  outpatient_advice: "医嘱", inpatient_course: "住院经过",
+  inpatient_discharge_instructions: "出院医嘱"
+};
+
+const clinicalFactAddTypes = computed<ClinicalFactType[]>(() => {
+  const type = detail.value?.reportType;
+  if (type === "outpatient") return ["diagnosis", "medication", "procedure"];
+  if (type === "inpatient") return ["diagnosis", "medication", "procedure"];
+  if (type === "prescription") return ["medication"];
+  if (type === "billing") return ["billingSummary", "billingItem"];
+  if (type === "vaccination") return ["vaccination"];
+  if (type === "pathology") return ["diagnosis", "procedure"];
+  return [];
+});
+
+function editClinicalFact(type: ClinicalFactType, fact: object | null = null) {
+  clinicalFactEditor.value = {
+    type,
+    fact: fact ? fact as Record<string, unknown> & { id?: string } : null
+  };
+}
+
+async function clinicalFactSaved() {
+  await loadDetail(props.reportId, true);
+  emit("updated");
+}
+
+function openClinicalEvidence(evidence: ClinicalEvidence) {
+  const pageNumber = evidence[0]?.pageNumber;
+  if (!pageNumber || !detail.value) {
+    toast.show("这条记录没有可定位的原页证据");
+    return;
+  }
+  const index = detail.value.pages.findIndex((page) => page.pageNumber === pageNumber);
+  if (index < 0) {
+    toast.show(`未找到第 ${pageNumber} 页原件`);
+    return;
+  }
+  openOriginalViewer(index);
+}
+
+function removeClinicalFact(type: ClinicalFactType, fact: { id: string }) {
+  confirmDialog.ask({
+    title: `删除${clinicalFactTypeLabels[type]}`,
+    message: "删除后，后续 AI 重跑也不会自动恢复同一条原文记录。",
+    confirmText: "删除",
+    danger: true,
+    run: async () => {
+      try {
+        detail.value = await request<ReportDetail>(
+          `clinical-facts/${type}/${encodeURIComponent(fact.id)}`,
+          { method: "DELETE" }
+        );
+        emit("updated");
+        toast.show(`${clinicalFactTypeLabels[type]}已删除`);
+      } catch (cause) {
+        detailError.value = cause instanceof Error ? cause.message : "删除失败";
+        toast.show(detailError.value);
+      }
+    }
+  });
+}
+
+async function structuredSectionSaved() {
+  await loadDetail(props.reportId, true);
+  emit("updated");
+}
+
+function removeStructuredSection(section: ReportDetail["structuredSections"][number]) {
+  confirmDialog.ask({
+    title: `删除${section.title}`,
+    message: "删除后，后续 AI 重跑也不会自动恢复同一类原文内容。",
+    confirmText: "删除",
+    danger: true,
+    run: async () => {
+      try {
+        detail.value = await request<ReportDetail>(
+          `report-structured-sections/${encodeURIComponent(section.id)}`,
+          { method: "DELETE" }
+        );
+        emit("updated");
+        toast.show(`${section.title}已删除`);
+      } catch (cause) {
+        detailError.value = cause instanceof Error ? cause.message : "删除失败";
+        toast.show(detailError.value);
+      }
+    }
+  });
+}
+
+const morphologyLateralityLabels: Record<ReportDetail["morphologyFindings"][number]["laterality"], string> = {
+  left: "左侧",
+  right: "右侧",
+  bilateral: "双侧",
+  midline: "正中",
+  unspecified: ""
+};
+
+function morphologySizeLine(item: ReportDetail["morphologyFindings"][number]) {
+  const dimensions = [item.size.length, item.size.width, item.size.height]
+    .filter((value): value is number => value !== null && value !== undefined);
+  if (!dimensions.length) return "";
+  return `${dimensions.join(" × ")}${item.size.unit ? ` ${item.size.unit}` : ""}`;
+}
+
+function morphologyLocationLine(item: ReportDetail["morphologyFindings"][number]) {
+  return [
+    morphologyLateralityLabels[item.laterality],
+    item.organ,
+    item.region
+  ].filter(Boolean).join(" · ") || item.sectionName || "部位未明确";
+}
+
+function morphologyClassificationLine(item: ReportDetail["morphologyFindings"][number]) {
+  if (!item.classification) return "";
+  return item.classification.text
+    || [item.classification.system, item.classification.value].filter(Boolean).join(" ");
+}
+
+async function morphologySaved() {
+  await loadDetail(props.reportId, true);
+  emit("updated");
+}
+
 function openEditReport() {
   const current = source.value;
   if (!current) return;
@@ -331,7 +573,7 @@ function openEditReport() {
     hospitalName: current.hospitalName || "",
     hospitalBranch: current.hospitalBranch || "",
     city: detail.value?.city || "",
-    departmentName: current.departmentName || "",
+    departmentName: detail.value?.visitDepartment || "",
     orderingDepartment: detail.value?.orderingDepartment || "",
     performingDepartment: detail.value?.performingDepartment || "",
     reportingDepartment: detail.value?.reportingDepartment || "",
@@ -576,6 +818,24 @@ function stopJobsPolling() {
   jobsTimer = null;
 }
 
+function stopEventPolling() {
+  if (eventTimer) clearInterval(eventTimer);
+  eventTimer = null;
+  eventPolling.value = false;
+}
+
+function eventJobIsRunning(jobId: string) {
+  const current = selectedJobs.value.find((job) => job.id === jobId) || eventJob.value;
+  return Boolean(current && ["queued", "processing"].includes(current.status));
+}
+
+function startEventPolling(jobId: string) {
+  stopEventPolling();
+  if (!eventSheetOpen.value || !eventJobIsRunning(jobId)) return;
+  eventPolling.value = true;
+  eventTimer = setInterval(() => { void loadJobEvents(jobId, true); }, 2000);
+}
+
 function maybeStartJobsPolling() {
   stopJobsPolling();
   if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
@@ -606,6 +866,9 @@ async function refreshJobs(silent = false) {
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
     selectedJobs.value = nextJobs;
+    if (eventJob.value) {
+      eventJob.value = nextJobs.find((job) => job.id === eventJob.value?.id) || eventJob.value;
+    }
     jobsPollFailures = 0;
     if (ocr) runtimeAvailable.value = ocr.available;
     const settled = nextJobs.length > 0 && nextJobs.every((job) => ["completed", "failed"].includes(job.status));
@@ -639,11 +902,13 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
   if (!preserveCurrent) detail.value = null;
   try {
     const next = await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}`);
-    if (seq === detailSeq) detail.value = next;
+    if (seq === detailSeq && props.reportId === reportId && next.id === reportId) detail.value = next;
   } catch (cause) {
-    if (seq === detailSeq) detailError.value = cause instanceof Error ? cause.message : "报告详情读取失败";
+    if (seq === detailSeq && props.reportId === reportId) {
+      detailError.value = cause instanceof Error ? cause.message : "报告详情读取失败";
+    }
   } finally {
-    if (seq === detailSeq) detailLoading.value = false;
+    if (seq === detailSeq && props.reportId === reportId) detailLoading.value = false;
   }
 }
 
@@ -658,22 +923,49 @@ async function retryJob(job: ProcessingJob) {
 }
 
 async function openJobEvents(job: ProcessingJob) {
+  const seq = ++eventSeq;
+  stopEventPolling();
   eventJob.value = job;
   eventSheetOpen.value = true;
-  eventLoading.value = true;
   eventError.value = "";
   jobEvents.value = [];
+  await loadJobEvents(job.id, false, seq);
+  if (seq === eventSeq && eventSheetOpen.value) startEventPolling(job.id);
+}
+
+async function loadJobEvents(jobId: string, silent = false, expectedSeq = eventSeq) {
+  if (eventRequestPending || !eventSheetOpen.value || eventJob.value?.id !== jobId) return;
+  eventRequestPending = true;
+  if (!silent) eventLoading.value = true;
   try {
-    jobEvents.value = await request<ProcessingJobEvent[]>(`jobs/${job.id}/events`);
+    const nextEvents = await request<ProcessingJobEvent[]>(`jobs/${jobId}/events`);
+    if (expectedSeq !== eventSeq || !eventSheetOpen.value || eventJob.value?.id !== jobId) return;
+    jobEvents.value = nextEvents;
+    eventError.value = "";
+    if (!eventJobIsRunning(jobId)) stopEventPolling();
   } catch (cause) {
-    eventError.value = cause instanceof Error ? cause.message : "无法读取详细日志";
+    if (expectedSeq === eventSeq && eventSheetOpen.value && eventJob.value?.id === jobId) {
+      eventError.value = cause instanceof Error ? cause.message : "无法读取详细日志";
+    }
   } finally {
-    eventLoading.value = false;
+    eventRequestPending = false;
+    if (!silent && expectedSeq === eventSeq) eventLoading.value = false;
   }
+}
+
+function closeJobEvents() {
+  eventSeq += 1;
+  stopEventPolling();
+  eventSheetOpen.value = false;
+  eventJob.value = null;
+  jobEvents.value = [];
+  eventError.value = "";
+  eventLoading.value = false;
 }
 
 watch(() => props.reportId, (reportId) => {
   stopJobsPolling();
+  closeJobEvents();
   jobsSeq += 1;
   jobsLoadingSeq = 0;
   ocrSeq += 1;
@@ -688,6 +980,7 @@ watch(() => props.reportId, (reportId) => {
   ocrLoading.value = false;
   ocrError.value = "";
   editOpen.value = false;
+  allObservationsOpen.value = false;
   editOriginalIndex.value = 0;
   if (!reportId) {
     detail.value = null;
@@ -704,13 +997,22 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   stopJobsPolling();
+  stopEventPolling();
+  eventSeq += 1;
   window.removeEventListener("keydown", handleViewerKeydown);
 });
 /* 随 KeepAlive 页面失活暂停任务轮询，激活时立即刷新一次并按任务状态恢复轮询 */
-onDeactivated(stopJobsPolling);
+onDeactivated(() => {
+  stopJobsPolling();
+  stopEventPolling();
+});
 onActivated(() => {
   if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
     void refreshJobs(true);
+  }
+  if (eventSheetOpen.value && eventJob.value) {
+    void loadJobEvents(eventJob.value.id, true);
+    startEventPolling(eventJob.value.id);
   }
 });
 </script>
@@ -742,7 +1044,7 @@ onActivated(() => {
       <dl class="preview-facts">
         <div><dt>报告日期</dt><dd>{{ source.reportIssuedAt || "日期待确认" }}<span v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>医院</dt><dd>{{ [source.hospitalName, source.hospitalBranch].filter(Boolean).join(" · ") || "待整理" }}<span v-if="isManualField('hospitalName') || isManualField('hospitalBranch')" class="manual-field-chip">人工校对</span></dd></div>
-        <div><dt>科室</dt><dd>{{ source.departmentName || "待整理" }}<span v-if="isManualField('departmentName')" class="manual-field-chip">人工校对</span></dd></div>
+        <div><dt>科室</dt><dd>{{ source.departmentName || "待整理" }}<span v-if="['departmentName', 'performingDepartment', 'reportingDepartment', 'orderingDepartment'].some(isManualField)" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}<span v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>页数</dt><dd>{{ source.pageCount || 0 }} 页</dd></div>
         <div><dt>状态</dt><dd>{{ statusMeta[source.status]?.label || source.status }}</dd></div>
@@ -762,7 +1064,7 @@ onActivated(() => {
         <CircleAlert :size="18" />
         <div>
           <strong>可能已上传过这份报告</strong>
-          <p>系统根据 AI 提取出的医院、日期、编号、科室/部位和报告内容发现 {{ duplicateCandidates.length }} 个候选，确认归档前建议先核对。</p>
+          <p>系统根据原件、OCR 和已整理的报告内容发现 {{ duplicateCandidates.length }} 个候选，确认归档前建议先核对。若自动 AI 整理已暂缓，仍可在下方手动继续。</p>
           <button
             v-for="candidate in duplicateCandidates"
             :key="candidate.id"
@@ -806,6 +1108,174 @@ onActivated(() => {
           <article v-if="detail?.chiefComplaint"><span>主诉<em v-if="isManualField('chiefComplaint')" class="manual-field-chip">人工校对</em></span><p>{{ detail.chiefComplaint }}</p></article>
           <article v-if="detail?.findings"><span>检查所见<em v-if="isManualField('findings')" class="manual-field-chip">人工校对</em></span><p>{{ detail.findings }}</p></article>
         </section>
+        <section v-if="clinicalFactAddTypes.length" class="clinical-fact-add-strip">
+          <span>补充分类信息</span>
+          <div>
+            <button v-for="type in clinicalFactAddTypes" :key="type" type="button" @click="editClinicalFact(type)">
+              <Plus :size="15" />{{ clinicalFactTypeLabels[type] }}
+            </button>
+          </div>
+        </section>
+        <section
+          v-if="detail && ['checkup', 'laboratory', 'imaging', 'functional', 'pathology', 'outpatient', 'inpatient'].includes(detail.reportType)"
+          class="clinical-fact-add-strip"
+        >
+          <span>报告专属内容</span>
+          <div>
+            <button type="button" @click="structuredSectionEditor = 'create'">
+              <Plus :size="15" />补充内容
+            </button>
+          </div>
+        </section>
+        <section v-if="detail?.structuredSections.length" class="clinical-fact-panel structured-section-panel">
+          <header><strong>报告专属内容</strong><span>共 {{ detail.structuredSections.length }} 项</span></header>
+          <div class="structured-section-list">
+            <article v-for="item in detail.structuredSections" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>
+                  {{ item.title || structuredSectionLabels[item.sectionKey] }}
+                  <em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em>
+                </strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对专属内容" @click="structuredSectionEditor = item"><Pencil :size="15" /></button>
+                  <button type="button" title="删除专属内容" @click="removeStructuredSection(item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ item.content }}</p>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.diagnoses.length" class="clinical-fact-panel">
+          <header><strong>诊断记录</strong><span>共 {{ detail.diagnoses.length }} 项</span></header>
+          <div class="clinical-fact-list">
+            <article v-for="item in detail.diagnoses" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>{{ item.diagnosisText }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对诊断" @click="editClinicalFact('diagnosis', item)"><Pencil :size="15" /></button>
+                  <button type="button" title="删除诊断" @click="removeClinicalFact('diagnosis', item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ [item.sectionName, item.diagnosisCode, item.codeSystem].filter(Boolean).join(" · ") || "原报告诊断" }}</p>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.medications.length" class="clinical-fact-panel">
+          <header><strong>用药记录</strong><span>共 {{ detail.medications.length }} 项</span></header>
+          <div class="clinical-fact-list">
+            <article v-for="item in detail.medications" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>{{ item.medicationName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对用药" @click="editClinicalFact('medication', item)"><Pencil :size="15" /></button>
+                  <button type="button" title="删除用药" @click="removeClinicalFact('medication', item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ medicationDetail(item) || item.instructions || "原报告未注明详细用法" }}</p>
+              <small v-if="item.instructions && medicationDetail(item)">{{ item.instructions }}</small>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.procedures.length" class="clinical-fact-panel">
+          <header><strong>诊疗与操作</strong><span>共 {{ detail.procedures.length }} 项</span></header>
+          <div class="clinical-fact-list">
+            <article v-for="item in detail.procedures" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>{{ item.procedureName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对操作" @click="editClinicalFact('procedure', item)"><Pencil :size="15" /></button>
+                  <button type="button" title="删除操作" @click="removeClinicalFact('procedure', item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ procedureDetail(item) || item.sectionName || "原报告诊疗记录" }}</p>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.vaccinations.length" class="clinical-fact-panel">
+          <header><strong>疫苗接种</strong><span>共 {{ detail.vaccinations.length }} 项</span></header>
+          <div class="clinical-fact-list">
+            <article v-for="item in detail.vaccinations" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>{{ item.vaccineName }}<template v-if="item.doseNumber"> · {{ item.doseNumber }}</template><em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
+                  <button type="button" title="删除疫苗" @click="removeClinicalFact('vaccination', item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ [item.administeredAt, item.manufacturer, item.lotNumber ? `批号 ${item.lotNumber}` : null, item.administrationSite].filter(Boolean).join(" · ") || "原报告接种记录" }}</p>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.billingSummary || detail?.billingItems.length" class="clinical-fact-panel">
+          <header><strong>费用信息</strong><span>{{ detail.billingItems.length }} 项明细</span></header>
+          <div v-if="detail.billingSummary" class="billing-summary-block">
+            <div class="billing-summary-line">
+              <span v-if="detail.billingSummary.totalAmount !== null">合计 <strong>{{ billingMoney(detail.billingSummary.totalAmount, detail.billingSummary.currency) }}</strong></span>
+              <span v-if="detail.billingSummary.insuranceAmount !== null">医保 <strong>{{ billingMoney(detail.billingSummary.insuranceAmount, detail.billingSummary.currency) }}</strong></span>
+              <span v-if="detail.billingSummary.selfPayAmount !== null">自费 <strong>{{ billingMoney(detail.billingSummary.selfPayAmount, detail.billingSummary.currency) }}</strong></span>
+              <em v-if="detail.billingSummary.manualFields.length" class="manual-field-chip">人工校对</em>
+            </div>
+            <div class="clinical-fact-actions">
+              <button v-if="detail.billingSummary.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(detail.billingSummary.evidence)"><FileImage :size="15" /></button>
+              <button type="button" title="校对费用汇总" @click="editClinicalFact('billingSummary', detail.billingSummary)"><Pencil :size="15" /></button>
+              <button type="button" title="删除费用汇总" @click="removeClinicalFact('billingSummary', detail.billingSummary)"><Trash2 :size="15" /></button>
+            </div>
+          </div>
+          <div v-if="detail.billingItems.length" class="clinical-fact-list">
+            <article v-for="item in detail.billingItems" :key="item.id">
+              <div class="clinical-fact-heading">
+                <strong>{{ item.itemName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                <div class="clinical-fact-actions">
+                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button type="button" title="校对费用明细" @click="editClinicalFact('billingItem', item)"><Pencil :size="15" /></button>
+                  <button type="button" title="删除费用明细" @click="removeClinicalFact('billingItem', item)"><Trash2 :size="15" /></button>
+                </div>
+              </div>
+              <p>{{ [item.category, billingMoney(item.amount, detail.billingSummary?.currency || 'CNY')].filter(Boolean).join(" · ") }}</p>
+            </article>
+          </div>
+        </section>
+        <section v-if="detail?.morphologyFindings.length" class="morphology-panel">
+          <header>
+            <strong>形态学发现</strong>
+            <span>共 {{ detail.morphologyFindings.length }} 项</span>
+          </header>
+          <div class="morphology-list">
+            <article v-for="item in detail.morphologyFindings" :key="item.id">
+              <div class="morphology-heading">
+                <div>
+                  <strong>{{ item.findingName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                  <span>{{ morphologyLocationLine(item) }}</span>
+                </div>
+                <div class="morphology-heading-actions">
+                  <em v-if="item.presence !== 'present'" :class="`morphology-presence morphology-presence--${item.presence}`">
+                    {{ item.presence === "absent" ? "未见" : "待确认" }}
+                  </em>
+                  <button class="plain-icon-button" type="button" title="校对形态字段" @click="morphologyEditItem = item"><Pencil :size="16" /></button>
+                </div>
+              </div>
+              <div v-if="morphologySizeLine(item) || morphologyClassificationLine(item)" class="morphology-facts">
+                <span v-if="morphologySizeLine(item)">尺寸 <strong>{{ morphologySizeLine(item) }}</strong></span>
+                <span v-if="morphologyClassificationLine(item)">分级 <strong>{{ morphologyClassificationLine(item) }}</strong></span>
+              </div>
+              <p v-if="item.morphology">{{ item.morphology }}</p>
+              <div v-if="item.measurements.length" class="morphology-measurements">
+                <span v-for="measurement in item.measurements" :key="`${measurement.key}-${measurement.value}-${measurement.unit || ''}`">
+                  {{ measurement.key }} {{ measurement.value }}{{ measurement.unit ? ` ${measurement.unit}` : "" }}
+                </span>
+              </div>
+              <details v-if="item.rawText" class="morphology-raw">
+                <summary>查看原文<template v-if="item.evidence[0]?.pageNumber"> · 第 {{ item.evidence[0].pageNumber }} 页</template></summary>
+                <p>{{ item.rawText }}</p>
+              </details>
+            </article>
+          </div>
+        </section>
         <section v-if="detail?.observations.length" class="observation-panel">
           <header>
             <strong>结构化指标</strong>
@@ -820,11 +1290,42 @@ onActivated(() => {
               <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
             </article>
           </div>
-          <p v-if="detail.observations.length > visibleObservations.length" class="preview-hint">已显示前 {{ visibleObservations.length }} 项，完整指标表后续会独立分页展示。</p>
+          <div v-if="detail.observations.length > visibleObservations.length" class="observation-panel-footer">
+            <span>已显示前 {{ visibleObservations.length }} 项</span>
+            <button type="button" @click="allObservationsOpen = true">
+              查看全部
+              <ChevronRight :size="16" />
+            </button>
+          </div>
         </section>
       </div>
       <div v-else class="preview-hint">{{ aiEmptyHint }}</div>
     </article>
+
+    <MorphologyFindingEditor
+      :open="Boolean(morphologyEditItem)"
+      :finding="morphologyEditItem"
+      @close="morphologyEditItem = null"
+      @saved="morphologySaved"
+    />
+    <ClinicalFactEditor
+      v-if="clinicalFactEditor"
+      :open="Boolean(clinicalFactEditor)"
+      :report-id="props.reportId"
+      :type="clinicalFactEditor.type"
+      :fact="clinicalFactEditor.fact"
+      @close="clinicalFactEditor = null"
+      @saved="clinicalFactSaved"
+    />
+    <ReportStructuredSectionEditor
+      v-if="structuredSectionEditor && detail"
+      :open="Boolean(structuredSectionEditor)"
+      :report-id="props.reportId"
+      :report-type="detail.reportType"
+      :section="structuredSectionEditor === 'create' ? null : structuredSectionEditor"
+      @close="structuredSectionEditor = null"
+      @saved="structuredSectionSaved"
+    />
 
     <article class="preview-card processing-card">
       <div class="section-title-row">
@@ -916,6 +1417,34 @@ onActivated(() => {
       <p v-else class="preview-hint">详情加载后会显示关联原件。</p>
     </article>
   </div>
+
+  <Teleport to="body">
+    <div v-if="allObservationsOpen && detail" class="modal-backdrop observation-all-backdrop" @click.self="allObservationsOpen = false">
+      <section class="modal-panel observation-all-modal" role="dialog" aria-modal="true" aria-label="全部结构化指标">
+        <header>
+          <div>
+            <ScrollText :size="20" />
+            <div class="observation-all-title">
+              <h3>全部结构化指标</h3>
+              <p>共 {{ detail.observations.length }} 项<template v-if="abnormalObservations.length"> · {{ abnormalObservations.length }} 项异常</template></p>
+            </div>
+          </div>
+          <button class="plain-icon-button" type="button" title="关闭" @click="allObservationsOpen = false"><X :size="18" /></button>
+        </header>
+        <div class="observation-all-body">
+          <div class="observation-list">
+            <article v-for="item in detail.observations" :key="item.id">
+              <strong>{{ item.itemName }}</strong>
+              <p>{{ observationValueLine(item) }}<em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em></p>
+              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="item.referenceText">参考 {{ item.referenceText }}</span></div>
+              <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
+              <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
+            </article>
+          </div>
+        </div>
+      </section>
+    </div>
+  </Teleport>
 
   <Teleport to="body">
     <div v-if="editOpen" class="modal-backdrop report-edit-backdrop" @click.self="editOpen = false">
@@ -1087,20 +1616,23 @@ onActivated(() => {
   </Teleport>
 
   <Teleport to="body">
-    <div v-if="eventSheetOpen && eventJob" class="sheet-backdrop job-event-sheet-backdrop" @click.self="eventSheetOpen = false">
+    <div v-if="eventSheetOpen && eventJob" class="sheet-backdrop job-event-sheet-backdrop" @click.self="closeJobEvents">
       <section class="sheet-panel job-event-sheet">
         <span class="sheet-grabber"></span>
         <header class="sheet-header">
           <div>
             <h3>{{ jobLabel(eventJob.jobType) }}详细日志</h3>
-            <p>{{ eventJob.pageNumber ? `第 ${eventJob.pageNumber} 页` : "整份报告" }}{{ eventJob.originalName ? ` · ${eventJob.originalName}` : "" }}</p>
+            <p>
+              {{ eventJob.pageNumber ? `第 ${eventJob.pageNumber} 页` : "整份报告" }}{{ eventJob.originalName ? ` · ${eventJob.originalName}` : "" }}
+              <template v-if="eventPolling"> · 实时更新中</template>
+            </p>
           </div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="eventSheetOpen = false"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="closeJobEvents"><X :size="18" /></button>
         </header>
         <div class="job-event-body">
           <div v-if="eventLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取详细日志</div>
-          <p v-else-if="eventError" class="inline-panel-error">{{ eventError }}</p>
-          <div v-else-if="jobEvents.length" class="job-event-timeline">
+          <p v-if="eventError" class="inline-panel-error">{{ eventError }}</p>
+          <div v-if="!eventLoading && jobEvents.length" class="job-event-timeline">
             <article v-for="event in jobEvents" :key="event.id" class="job-event-item" :class="`job-event-item--${event.eventType}`">
               <span class="job-event-dot"></span>
               <div>
@@ -1111,7 +1643,7 @@ onActivated(() => {
               </div>
             </article>
           </div>
-          <p v-else class="preview-hint">这条任务还没有详细事件记录。</p>
+          <p v-else-if="!eventLoading && !eventError" class="preview-hint">这条任务还没有详细事件记录，处理中会自动更新。</p>
         </div>
       </section>
     </div>

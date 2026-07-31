@@ -2,9 +2,9 @@ import { getDatabase } from "../database/client";
 import { writeLog } from "../utils/logger";
 import { purgeExpiredReports } from "./records.service";
 import { runFileGarbageCollection, scanOrphanStorageFiles } from "./file-gc.service";
-import { builtinIndicatorVersion } from "../domain/indicator-dictionary/builtin-indicators";
 import { backfillBuiltinIndicatorNormalizations } from "./indicator-normalization.service";
 import { startIndicatorNormalizationTaskRunner } from "./indicator-normalization-task.service";
+import { activeIndicatorDictionaryVersion } from "./indicator-dictionary.service";
 
 const maintenanceIntervalMs = 6 * 60 * 60_000;
 const orphanScanIntervalMs = 7 * 24 * 60 * 60_000;
@@ -50,18 +50,20 @@ function indicatorDictionaryVersion() {
 }
 
 function markIndicatorDictionaryVersion() {
+  const version = activeIndicatorDictionaryVersion();
   getDatabase().prepare(`
     INSERT INTO app_settings (setting_key, value_json, updated_at)
     VALUES (?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(setting_key) DO UPDATE SET
       value_json = excluded.value_json,
       updated_at = CURRENT_TIMESTAMP
-  `).run(indicatorDictionaryVersionSetting, JSON.stringify(builtinIndicatorVersion));
+  `).run(indicatorDictionaryVersionSetting, JSON.stringify(version));
 }
 
 export function runIndicatorDictionaryBackfillIfNeeded() {
+  const currentVersion = activeIndicatorDictionaryVersion();
   const previousVersion = indicatorDictionaryVersion();
-  if (previousVersion === builtinIndicatorVersion) return null;
+  if (previousVersion === currentVersion) return null;
   const result = backfillBuiltinIndicatorNormalizations();
   markIndicatorDictionaryVersion();
   return { previousVersion, ...result };

@@ -9,15 +9,13 @@ import { getAppConfig } from "../utils/runtime-config";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import { requestWorker, type WorkerRequest, type WorkerResponse } from "./ocr-worker-client";
 import {
-  buildAiExtractionInput, isAiExtractionConfigured, persistAiExtraction, requestAiExtraction,
+  isAiExtractionConfigured, persistAiExtraction, requestAiExtraction,
   type AiExecutor
 } from "./ai-extraction.service";
-import {
-  normalizeReportObservationsWithAiFallback,
-  requestAiIndicatorNormalization,
-  type AiIndicatorExecutor
-} from "./indicator-normalization.service";
+import { executeAiExtractionPlan } from "./ai-extraction-orchestrator.service";
+import { rebuildMorphologyTrackingForReport } from "./morphology-finding.service";
 import { listManualReportFieldKeys, reportFieldDefinitions } from "./report-field-overrides.service";
+import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
 
 type JobRow = {
   id: string;
@@ -36,6 +34,7 @@ export type WorkerExecutor = (request: WorkerRequest) => Promise<WorkerResponse>
 
 const maxAttempts = 3;
 const retryDelays = [30, 120, 600];
+const leaseHeartbeatIntervalMs = 60_000;
 let started = false;
 let busy = false;
 let timer: NodeJS.Timeout | null = null;
@@ -43,7 +42,14 @@ let lastRunAt: string | null = null;
 let lastError: string | null = null;
 let activeJob: { id: string; reportId: string } | null = null;
 
-type JobEventType = "queued" | "started" | "completed" | "retry_scheduled" | "failed" | "manual_retry" | "cancelled";
+type JobEventType =
+  | "queued"
+  | "started"
+  | "completed"
+  | "retry_scheduled"
+  | "failed"
+  | "manual_retry"
+  | "cancelled";
 
 function safeDetailJson(detail?: Record<string, unknown>) {
   if (!detail) return "{}";
@@ -84,6 +90,41 @@ function appendJobEvent(input: {
     Math.max(0, Math.round(input.attempt || 0)), input.message?.slice(0, 500) || null,
     safeDetailJson(input.detail)
   );
+}
+
+function appendDuplicateDetectedEvent(
+  reportId: string,
+  candidates: Array<{ reason: string }>,
+  sourceJobId?: string
+) {
+  const job = sourceJobId
+    ? { id: sourceJobId }
+    : getDatabase().prepare(`
+        SELECT id FROM processing_jobs
+        WHERE report_id = ? AND job_type = 'ocr' AND status = 'completed'
+        ORDER BY finished_at DESC, created_at DESC, id DESC
+        LIMIT 1
+      `).get(reportId) as { id: string } | undefined;
+  if (!job) return;
+  const existing = getDatabase().prepare(`
+    SELECT 1 AS found FROM processing_job_events
+    WHERE job_id = ? AND detail_json LIKE '%"stage":"duplicate_precheck"%'
+    LIMIT 1
+  `).get(job.id);
+  if (existing) return;
+  appendJobEvent({
+    jobId: job.id,
+    reportId,
+    eventType: "completed",
+    status: "completed",
+    message: "本地重复检测发现高度重复候选，已暂缓自动 AI 整理",
+    detail: {
+      jobType: "ocr",
+      stage: "duplicate_precheck",
+      candidateCount: candidates.length,
+      reasons: candidates.map((candidate) => candidate.reason)
+    }
+  });
 }
 
 function safeStoragePath(relativePath: string) {
@@ -219,7 +260,7 @@ function isLastActiveOcrJobForReport(job: JobRow) {
   return Number(row.count || 0) === 0;
 }
 
-function queueAiJobIfReady(reportId: string) {
+function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
   if (!isAiExtractionConfigured()) return false;
   const db = getDatabase();
   const counts = db.prepare(`
@@ -234,6 +275,12 @@ function queueAiJobIfReady(reportId: string) {
   if (Number(counts.activeLocal) > 0 || Number(counts.failedLocal) > 0 || Number(counts.completedOcr) < 1) return false;
   if (reportOcrTextLength(reportId) < 1) return false;
   if (Number(counts.activeAi) > 0) return false;
+  const duplicateCandidates = findLocalDuplicateEvidence(reportId)
+    .filter((candidate) => candidate.confidence === "high");
+  if (duplicateCandidates.length) {
+    appendDuplicateDetectedEvent(reportId, duplicateCandidates, sourceJobId);
+    return false;
+  }
   if (Number(counts.completedAi) > 0) {
     const report = db.prepare("SELECT title FROM reports WHERE id = ?").get(reportId) as { title: string } | undefined;
     if (report?.title !== "待识别报告") return false;
@@ -263,6 +310,20 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
   if (pageCount < 1 || pageCount > 500) {
     throw Object.assign(new Error("PDF 页数无效或超过 500 页"), { code: "INVALID_PDF_PAGE_COUNT" });
   }
+  const inspectedPages = Array.isArray(response.pages) ? response.pages : [];
+  const inspectedPageNumbers = inspectedPages
+    .map((page) => Math.round(Number(page.pageNumber)))
+    .filter((pageNumber) => Number.isFinite(pageNumber))
+    .sort((left, right) => left - right);
+  if (
+    inspectedPageNumbers.length !== pageCount
+    || inspectedPageNumbers.some((pageNumber, index) => pageNumber !== index + 1)
+  ) {
+    throw Object.assign(
+      new Error(`PDF 页数检查不完整：声明 ${pageCount} 页，实际返回 ${inspectedPageNumbers.length} 页`),
+      { code: "PDF_INSPECTION_INCOMPLETE" }
+    );
+  }
   const db = getDatabase();
   const source = db.prepare(`
     SELECT original_name AS originalName, storage_path AS storagePath, mime_type AS mimeType,
@@ -274,6 +335,12 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
   };
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (source.sourcePageCount && source.sourcePageCount !== pageCount) {
+      throw Object.assign(
+        new Error(`PDF 页数发生变化：已记录 ${source.sourcePageCount} 页，本次检查为 ${pageCount} 页`),
+        { code: "PDF_PAGE_COUNT_MISMATCH" }
+      );
+    }
     if (!source.sourcePageCount) {
       if (pageCount > 1) {
         db.prepare(`
@@ -304,6 +371,26 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
         queueJob(job.reportId, pageId, "ocr");
       }
       queueJob(job.reportId, job.pageId, "ocr");
+    }
+    const expandedPages = db.prepare(`
+      SELECT source_page_number AS sourcePageNumber, source_page_count AS sourcePageCount
+      FROM report_pages
+      WHERE report_id = ? AND storage_path = ?
+      ORDER BY source_page_number
+    `).all(job.reportId, source.storagePath) as Array<{
+      sourcePageNumber: number | null;
+      sourcePageCount: number | null;
+    }>;
+    if (
+      expandedPages.length !== pageCount
+      || expandedPages.some((page, index) =>
+        page.sourcePageNumber !== index + 1 || page.sourcePageCount !== pageCount
+      )
+    ) {
+      throw Object.assign(
+        new Error(`PDF 拆页记录不完整：应有 ${pageCount} 页，实际生成 ${expandedPages.length} 页`),
+        { code: "PDF_PAGE_EXPANSION_INCOMPLETE" }
+      );
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -412,7 +499,7 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       elapsedMs: response.elapsedMs
     }
   });
-  if (job.jobType === "ocr") queueAiJobIfReady(job.reportId);
+  if (job.jobType === "ocr") queueAiJobIfReady(job.reportId, job.id);
 }
 
 function updateReportStatus(reportId: string) {
@@ -434,6 +521,11 @@ function updateReportStatus(reportId: string) {
   if (status === "needs_review") {
     const hasAiResult = Number(counts.completedAi) > 0;
     const ocrTextEmpty = !hasAiResult && reportOcrTextLength(reportId) < 1;
+    const duplicateCandidates = !hasAiResult && !ocrTextEmpty
+      ? findLocalDuplicateEvidence(reportId).filter((candidate) => candidate.confidence === "high")
+      : [];
+    const duplicateDetected = duplicateCandidates.length > 0;
+    if (duplicateDetected) appendDuplicateDetectedEvent(reportId, duplicateCandidates);
     db.prepare(`
       INSERT INTO app_notifications (id, member_id, report_id, type, title, message, severity)
       VALUES (?, ?, ?, 'report_processed', ?, ?, ?)
@@ -441,13 +533,15 @@ function updateReportStatus(reportId: string) {
       createId("notice"),
       previous.memberId,
       reportId,
-      ocrTextEmpty ? "报告未识别到文字" : "报告处理完成",
+      ocrTextEmpty ? "报告未识别到文字" : duplicateDetected ? "发现可能重复报告" : "报告处理完成",
       ocrTextEmpty
         ? `「${previous.title}」OCR 未提取到任何文字，可能不是有效的体检报告。请确认原件清晰后重新上传，或手动录入报告内容。`
+        : duplicateDetected
+          ? `「${previous.title}」已完成 OCR，本地检测到 ${duplicateCandidates.length} 份高度重复候选${isAiExtractionConfigured() ? "，已暂缓自动 AI 整理" : ""}。请先核对已有报告，也可以在详情中手动继续 AI 整理。`
         : hasAiResult
           ? `「${previous.title}」已完成 OCR 和 AI 整理，等待确认归档。`
           : `「${previous.title}」已完成 OCR 识别，等待确认归档。`,
-      ocrTextEmpty ? "warning" : "success"
+      ocrTextEmpty || duplicateDetected ? "warning" : "success"
     );
   } else if (status === "failed") {
     db.prepare(`
@@ -497,31 +591,50 @@ function failJob(job: JobRow, error: unknown) {
 
 export async function processNextJob(
   executor: WorkerExecutor = requestWorker,
-  aiExecutor: AiExecutor = requestAiExtraction,
-  indicatorAiExecutor: AiIndicatorExecutor = requestAiIndicatorNormalization
+  aiExecutor: AiExecutor = requestAiExtraction
 ) {
   const job = claimNextJob();
   if (!job) return false;
   activeJob = { id: job.id, reportId: job.reportId };
+  let rebuildMorphology = false;
+  const renewLease = () => {
+    getDatabase().prepare(`
+      UPDATE processing_jobs SET lease_expires_at = datetime('now', '+5 minutes')
+      WHERE id = ? AND status = 'processing'
+    `).run(job.id);
+  };
+  const leaseHeartbeat = job.jobType === "ai_extract"
+    ? setInterval(renewLease, leaseHeartbeatIntervalMs)
+    : null;
+  leaseHeartbeat?.unref();
   try {
     if (job.jobType === "ai_extract") {
       const persisted = getDatabase().prepare("SELECT 1 AS found FROM report_extractions WHERE job_id = ?")
         .get(job.id) as { found: number } | undefined;
       if (!persisted) {
-        const input = buildAiExtractionInput(job.reportId);
-        const extraction = await aiExecutor(input);
+        const execution = await executeAiExtractionPlan(job.id, job.reportId, aiExecutor, {
+          shouldContinue: () => isJobStillProcessable(job),
+          onEvent: (unitEvent) => {
+            renewLease();
+            const eventType = unitEvent.type === "unit_completed"
+              ? "completed"
+              : ["unit_failed", "format_retry"].includes(unitEvent.type) ? "retry_scheduled" : "started";
+            appendJobEvent({
+              jobId: job.id,
+              reportId: job.reportId,
+              eventType,
+              status: "processing",
+              attempt: job.attempts,
+              message: unitEvent.message,
+              detail: { jobType: "ai_extract", stage: unitEvent.type, ...unitEvent.detail }
+            });
+          }
+        });
+        const extraction = execution.result;
         if (!isJobStillProcessable(job)) return true;
-        persistAiExtraction(job.reportId, job.id, extraction, input.inputCharacters);
-        let indicatorNormalization: Record<string, unknown> | null = null;
-        try {
-          const fallback = await normalizeReportObservationsWithAiFallback(job.reportId, job.id, indicatorAiExecutor);
-          indicatorNormalization = fallback.ai;
-        } catch (error) {
-          indicatorNormalization = {
-            skipped: true,
-            error: error instanceof Error ? error.message : "AI 指标兜底失败"
-          };
-        }
+        const indicatorNormalization = persistAiExtraction(
+          job.reportId, job.id, extraction, execution.inputCharacters
+        );
         if (!isJobStillProcessable(job)) return true;
         appendJobEvent({
           jobId: job.id,
@@ -534,7 +647,12 @@ export async function processNextJob(
             provider: extraction.provider,
             model: extraction.model,
             promptVersion: extraction.promptVersion,
-            inputCharacters: input.inputCharacters,
+            inputCharacters: execution.inputCharacters,
+            planHash: execution.plan.planHash,
+            plannedUnits: execution.plan.unitCount,
+            processedPages: execution.plan.pageCount,
+            warningUnits: execution.warningUnits,
+            unmatchedCandidates: execution.unmatchedCandidates,
             promptTokens: extraction.promptTokens,
             completionTokens: extraction.completionTokens,
             elapsedMs: extraction.elapsedMs,
@@ -546,6 +664,7 @@ export async function processNextJob(
         UPDATE processing_jobs SET status = 'completed', locked_at = NULL, lease_expires_at = NULL,
           error_code = NULL, error_message = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?
       `).run(job.id);
+      rebuildMorphology = true;
     } else {
       if (!job.storagePath || !job.pageId) throw new Error("页面任务缺少原件信息");
       const imagePath = safeStoragePath(job.storagePath);
@@ -572,8 +691,19 @@ export async function processNextJob(
     failJob(job, error);
     throw error;
   } finally {
+    if (leaseHeartbeat) clearInterval(leaseHeartbeat);
     if (activeJob?.id === job.id) activeJob = null;
     updateReportStatus(job.reportId);
+    if (rebuildMorphology) {
+      try {
+        rebuildMorphologyTrackingForReport(job.reportId);
+      } catch (error) {
+        await writeLog("warn", "morphology-tracking-rebuild-failed", {
+          reportId: job.reportId,
+          error: error instanceof Error ? error.message : "形态变化关联失败"
+        });
+      }
+    }
   }
   return true;
 }
@@ -694,6 +824,7 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
           OR NULLIF(TRIM(COALESCE(purpose, '')), '') IS NOT NULL
           OR NULLIF(TRIM(COALESCE(chief_complaint, '')), '') IS NOT NULL
           OR EXISTS (SELECT 1 FROM observations WHERE report_id = reports.id)
+          OR EXISTS (SELECT 1 FROM morphology_findings WHERE report_id = reports.id)
         ) AS hasContent
       FROM reports WHERE id = ?
     `).get(reportId) as { hasContent: number } | undefined;
@@ -782,6 +913,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
       WHERE page_id IN (SELECT id FROM report_pages WHERE report_id = ?)
     `).run(reportId);
     db.prepare("DELETE FROM observations WHERE report_id = ?").run(reportId);
+    /* 形态记录在 AI 原子落库时按人工字段保护策略替换，不能在 OCR 阶段提前删除。 */
     db.prepare(`
       UPDATE reports SET
         status = 'processing',
