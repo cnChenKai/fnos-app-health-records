@@ -551,7 +551,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   margin: -4px 0 0; padding: 8px 10px; border-radius: var(--radius-m); background: var(--fill-1);
   color: var(--muted); font-size: 12px; line-height: 1.45;
 }
-.trend-detail-popover-wrap { position: relative; flex: 0 0 auto; }
+.trend-detail-popover-wrap { position: relative; flex: 0 0 auto; margin-left: auto; }
 .trend-detail-toggle {
   min-height: 28px; border: 0; border-radius: 999px; padding: 0 10px;
   background: transparent; color: var(--brand-strong); font-size: 12px; font-weight: 800;
@@ -1693,6 +1693,65 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   max-height: 320px; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap;
   color: var(--ink-2); font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+.ai-job-plan { display: grid; gap: 10px; min-width: 0; }
+.ai-job-plan-summary {
+  display: grid; gap: 9px; padding: 12px; border: 1px solid var(--line);
+  border-radius: var(--radius-s); background: var(--fill-2);
+}
+.ai-job-plan-summary__main {
+  display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 9px;
+}
+.ai-job-plan-summary__icon { display: grid; place-items: center; color: var(--muted); }
+.ai-job-plan-summary.is-processing .ai-job-plan-summary__icon { color: var(--info); }
+.ai-job-plan-summary.is-completed .ai-job-plan-summary__icon { color: var(--green-ok); }
+.ai-job-plan-summary.is-failed .ai-job-plan-summary__icon { color: var(--danger); }
+.ai-job-plan-summary__main > div { min-width: 0; display: grid; gap: 2px; }
+.ai-job-plan-summary__main strong { font-size: 14px; }
+.ai-job-plan-summary__main div > span { color: var(--muted); font-size: 12px; }
+.ai-job-status-label, .ai-unit-status-label {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px;
+  border-radius: 999px; background: var(--fill-1); color: var(--muted);
+  font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.ai-job-status-label.is-processing, .ai-unit-status-label.is-processing { background: var(--info-soft); color: var(--info); }
+.ai-job-status-label.is-completed, .ai-unit-status-label.is-completed { background: var(--green-ok-soft); color: var(--green-ok); }
+.ai-job-status-label.is-failed, .ai-unit-status-label.is-failed { background: var(--danger-soft); color: var(--danger); }
+.ai-unit-status-label.is-warning { background: var(--amber-soft); color: var(--amber); }
+.ai-job-plan-progress { height: 4px; overflow: hidden; border-radius: 999px; background: var(--track); }
+.ai-job-plan-progress span {
+  display: block; height: 100%; border-radius: inherit; background: var(--brand); transition: width .2s ease;
+}
+.ai-job-plan-error { color: var(--danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-unit-list { display: grid; gap: 6px; }
+.ai-unit-row {
+  min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface);
+}
+.ai-unit-row.is-processing { border-color: #cbd9ed; }
+.ai-unit-row.is-warning { border-color: #ead6ad; }
+.ai-unit-row.is-failed { border-color: #efcaca; }
+.ai-unit-row__header {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 10px 11px;
+}
+.ai-unit-status-icon { display: grid; place-items: center; margin-top: 1px; color: var(--muted); }
+.ai-unit-row.is-processing .ai-unit-status-icon { color: var(--info); }
+.ai-unit-row.is-completed .ai-unit-status-icon { color: var(--green-ok); }
+.ai-unit-row.is-warning .ai-unit-status-icon { color: var(--amber); }
+.ai-unit-row.is-failed .ai-unit-status-icon { color: var(--danger); }
+.ai-unit-row__content { min-width: 0; display: grid; gap: 3px; }
+.ai-unit-row__title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.ai-unit-row__title strong { flex: 0 0 auto; font-size: 13px; }
+.ai-unit-row__title span { overflow: hidden; color: var(--ink-2); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.ai-unit-row__content small { color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.ai-unit-row__content p { color: var(--danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-unit-history, .ai-job-general-history { border-top: 1px solid var(--line); }
+.ai-unit-history > summary, .ai-job-general-history > summary {
+  min-height: 36px; padding: 8px 11px; color: var(--ink-2); cursor: pointer;
+  font-size: 12px; font-weight: 600; list-style-position: inside;
+}
+.ai-unit-history[open] > summary, .ai-job-general-history[open] > summary { background: var(--fill-2); }
+.ai-unit-history .job-event-timeline, .ai-job-general-history .job-event-timeline { margin: 0 11px 4px; }
+.ai-job-general-history { border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--surface); }
+.ai-job-plan-waiting { padding: 8px 2px; color: var(--muted); font-size: 12px; }
 .job-event-timeline { position: relative; display: grid; gap: 0; }
 .job-event-timeline::before {
   content: ""; position: absolute; left: 8px; top: 14px; bottom: 14px; width: 2px; border-radius: 999px; background: var(--line);
@@ -1714,6 +1773,17 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .job-event-item strong { font-size: 14px; }
 .job-event-item p { color: var(--danger); font-size: 12px; line-height: 1.55; }
 .job-event-item small { color: var(--muted); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.job-event-timeline--compact .job-event-item { gap: 9px; padding: 8px 0 9px; }
+.job-event-timeline--compact .job-event-item strong { font-size: 12px; }
+.job-event-timeline--compact .job-event-item p,
+.job-event-timeline--compact .job-event-item small { font-size: 11px; }
+@media (max-width: 520px) {
+  .job-event-body { padding-inline: 12px; }
+  .ai-job-plan-summary__main, .ai-unit-row__header { grid-template-columns: 20px minmax(0, 1fr); }
+  .ai-job-status-label, .ai-unit-status-label { grid-column: 2; justify-self: start; }
+  .ai-unit-row__title { align-items: flex-start; flex-direction: column; gap: 1px; }
+  .ai-unit-row__title span { max-width: 100%; white-space: normal; }
+}
 .member-sheet-list { display: grid; gap: 2px; padding: 4px 10px 14px; }
 .member-sheet-item {
   display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px;

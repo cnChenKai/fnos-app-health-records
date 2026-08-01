@@ -7,6 +7,7 @@ import { request } from "../../utils/api";
 import { formatDatabaseTime } from "../../utils/time";
 import type { AiAuditSummary } from "../../types/api";
 import { usePullRefresh } from "../../composables/usePullRefresh";
+import { useRefreshOnActivate } from "../../composables/useRefreshOnActivate";
 import { useToast } from "../../composables/useToast";
 
 const PAGE_SIZE = 30;
@@ -133,6 +134,7 @@ onMounted(async () => {
   await load(true);
   attachObserver(sentinel.value);
 });
+useRefreshOnActivate(() => load(true));
 onBeforeUnmount(() => observer?.disconnect());
 </script>
 

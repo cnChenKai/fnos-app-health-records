@@ -21,7 +21,7 @@ test("initializes the health records schema with WAL", () => {
       "report_pages", "observations", "processing_jobs", "reminders", "local_accounts",
       "morphology_findings",
       "auth_sessions", "audit_logs", "report_extractions", "processing_job_events", "app_notifications",
-      "ai_extraction_units", "ai_extraction_unit_routes", "ai_extraction_attempts",
+      "ai_extraction_units", "ai_extraction_unit_routes", "ai_extraction_attempts", "ai_extraction_candidates",
       "report_diagnoses", "report_medications", "report_procedures",
       "vaccination_records", "billing_summaries", "billing_items", "report_structured_sections",
       "app_upgrade_history", "indicator_catalog", "indicator_aliases", "observation_normalizations",
@@ -358,7 +358,7 @@ test("repairs an early v15 dictionary catalog without losing existing rows", () 
   }
 });
 
-test("completes an early v16 database with final morphology and AI unit tables without changing the schema version", () => {
+test("upgrades an early v16 database and adds AI candidate tracking in v17", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v16-final-"));
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(join(storageDir, "db"), { recursive: true });
@@ -368,6 +368,7 @@ test("completes an early v16 database with final morphology and AI unit tables w
   legacy.exec("DROP TABLE morphology_findings");
   legacy.exec("DROP TABLE ai_extraction_unit_routes");
   legacy.exec("DROP TABLE ai_extraction_attempts");
+  legacy.exec("DROP TABLE ai_extraction_candidates");
   legacy.exec("DROP TABLE ai_extraction_units");
   legacy.exec("DROP TABLE billing_items");
   legacy.exec("DROP TABLE billing_summaries");
@@ -377,7 +378,7 @@ test("completes an early v16 database with final morphology and AI unit tables w
   legacy.exec("DROP TABLE report_structured_sections");
   legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN manual_fields_json");
   legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN is_deleted");
-  for (let version = 1; version <= schemaVersion; version += 1) {
+  for (let version = 1; version <= 16; version += 1) {
     legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
   }
   legacy.close();
@@ -385,19 +386,19 @@ test("completes an early v16 database with final morphology and AI unit tables w
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 17);
     const tables = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'table' AND name IN (
         'morphology_findings', 'ai_extraction_units', 'ai_extraction_unit_routes',
-        'ai_extraction_attempts', 'report_diagnoses', 'report_medications',
+        'ai_extraction_attempts', 'ai_extraction_candidates', 'report_diagnoses', 'report_medications',
         'report_procedures', 'vaccination_records', 'billing_summaries', 'billing_items',
         'report_structured_sections'
       )
     `).all() as Array<{ name: string }>;
     assert.deepEqual(new Set(tables.map((table) => table.name)), new Set([
       "morphology_findings", "ai_extraction_units", "ai_extraction_unit_routes",
-      "ai_extraction_attempts", "report_diagnoses", "report_medications",
+      "ai_extraction_attempts", "ai_extraction_candidates", "report_diagnoses", "report_medications",
       "report_procedures", "vaccination_records", "billing_summaries", "billing_items",
       "report_structured_sections"
     ]));
@@ -419,6 +420,11 @@ test("completes an early v16 database with final morphology and AI unit tables w
     `).get() as { name: string; checksum: string };
     assert.equal(migration.name, "finalize_indicator_dictionary_morphology_and_ai_units");
     assert.match(migration.checksum, /ai-units/);
+    const candidateMigration = db.prepare(`
+      SELECT name, checksum FROM schema_migrations WHERE version = 17
+    `).get() as { name: string; checksum: string };
+    assert.equal(candidateMigration.name, "add_ai_extraction_candidate_tracking");
+    assert.match(candidateMigration.checksum, /candidate-tracking/);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -426,7 +432,7 @@ test("completes an early v16 database with final morphology and AI unit tables w
   }
 });
 
-test("repairs report-type enum values persisted as body parts without changing schema v16", () => {
+test("repairs report-type enum values persisted as body parts on the current schema", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-v16-report-metadata-repair-"));
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(join(storageDir, "db"), { recursive: true });
@@ -465,7 +471,49 @@ test("repairs report-type enum values persisted as body parts without changing s
       parent: null,
       laterality: "unspecified"
     }]);
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs incompatible AI report sections without removing manual content", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-v16-section-repair-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  for (let version = 1; version <= schemaVersion; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.exec(`
+    INSERT INTO users (id, display_name) VALUES ('legacy-user', '旧用户');
+    INSERT INTO health_members (id, display_name, created_by)
+      VALUES ('legacy-member', '本人', 'legacy-user');
+    INSERT INTO reports (id, member_id, created_by, report_type, title, status)
+      VALUES ('legacy-checkup', 'legacy-member', 'legacy-user', 'checkup', '体检报告', 'ready');
+    INSERT INTO report_structured_sections (
+      id, report_id, section_key, section_title, content_text, source, manual_fields_json
+    ) VALUES
+      ('ai-outpatient', 'legacy-checkup', 'outpatient_history', '病史', '主诉 | 无特殊', 'ai', '[]'),
+      ('manual-outpatient', 'legacy-checkup', 'outpatient_history', '人工病史', '用户确认内容', 'manual', '["*"]'),
+      ('ai-checkup', 'legacy-checkup', 'checkup_final_conclusion', '总检结论', '体检完成', 'ai', '[]');
+  `);
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    const rows = db.prepare(`
+      SELECT id, source FROM report_structured_sections ORDER BY id
+    `).all() as Array<{ id: string; source: string }>;
+    assert.deepEqual(rows.map((row) => ({ ...row })), [
+      { id: "ai-checkup", source: "ai" },
+      { id: "manual-outpatient", source: "manual" }
+    ]);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

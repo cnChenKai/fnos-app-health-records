@@ -33,7 +33,7 @@ function page(pageNumber: number, lines: string[]) {
   };
 }
 
-test("packs complete OCR pages up to six pages without splitting page content", () => {
+test("packs sparse indicator pages together without a small fixed page split", () => {
   const rows = Array.from({ length: 10 }, (_, index) =>
     page(index + 1, [
       `第${index + 1}页说明 ${"内容".repeat(150)}`,
@@ -45,8 +45,8 @@ test("packs complete OCR pages up to six pages without splitting page content", 
   const scalarUnits = plan.units.filter((unit) => unit.route === "scalar");
 
   assert.equal(plan.pageCount, 10);
-  assert.equal(plan.unitCount, 3);
-  assert.deepEqual(scalarUnits.map((unit) => unit.pageNumbers), [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10]]);
+  assert.equal(plan.unitCount, 2);
+  assert.deepEqual(scalarUnits.map((unit) => unit.pageNumbers), [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]]);
   assert.equal(plan.units[0].route, "document");
   assert.doesNotMatch(plan.units[0].text, /本地分类|checkup/);
   assert.ok(plan.units.every((unit) => unit.unitType === "complete_pages"));
@@ -91,8 +91,8 @@ test("uses conservative output estimates to plan a dense 24-page report before p
 
   assert.equal(plan.pageCount, 24);
   const scalarUnits = plan.units.filter((unit) => unit.route === "scalar");
-  assert.equal(plan.unitCount, 9);
-  assert.equal(scalarUnits.length, 8);
+  assert.equal(plan.unitCount, 8);
+  assert.equal(scalarUnits.length, 7);
   assert.equal(scalarUnits.flatMap((unit) => unit.pageNumbers).join(","), candidateCounts.map((_, index) => index + 1).join(","));
   assert.ok(scalarUnits.every((unit) => unit.pageNumbers.length <= aiInputPlanningPolicy.maxPagesPerUnit));
   assert.ok(scalarUnits.every((unit) =>
@@ -392,7 +392,12 @@ test("includes common ECG vascular tumor-marker and urine microscopy measurement
       "镜检管型 | 0 | Cast/LP | 0~1"
     ])
   ]));
-  const candidates = plan.units.flatMap((unit) => unit.candidateFacts.map((fact) => fact.sourceText));
+  const candidates = [
+    ...plan.units.flatMap((unit) => unit.candidateFacts.map((fact) => fact.sourceText)),
+    ...plan.pages.flatMap((item) => item.lines.flatMap((line) =>
+      line.localObservation ? [line.localObservation.sourceText] : []
+    ))
+  ];
   for (const name of ["PR间期", "QRS时限", "QTc间期", "右侧ABI", "右侧baPWV", "DOB", "f-PSA/T-PSA", "镜检管型"]) {
     assert.equal(candidates.some((line) => line.includes(name)), true, name);
   }
@@ -511,7 +516,132 @@ test("keeps the current single-request adapter while exposing the full OCR plan"
     assert.match(input.planHash || "", /^[a-f0-9]{64}$/);
   } finally {
     closeDatabaseForTests();
-    delete process.env.STORAGE_DIR;
     rmSync(storageDir, { recursive: true, force: true });
+    process.env.STORAGE_DIR = plannerStorageDir;
   }
+});
+
+test("parses reliable dictionary table rows locally even when OCR loses the table header", () => {
+  const rebuilt = rebuildOcrPages([page(1, [
+    "【一般检查】",
+    "身高 | 175.5 cm | 175.0 cm",
+    "体重 | 76.7 kg | 76.1 kg",
+    "体重指数BMI | 24.9 ↑ | 18.5~23.9 | 24.8 ↑"
+  ])]);
+  const facts = rebuilt[0].lines.flatMap((line) => line.localObservation ? [line.localObservation] : []);
+
+  assert.deepEqual(facts.map((fact) => ({
+    name: fact.normalizedName,
+    value: fact.numericValue,
+    unit: fact.unit,
+    low: fact.referenceLow,
+    high: fact.referenceHigh
+  })), [
+    { name: "身高", value: 175.5, unit: "cm", low: null, high: null },
+    { name: "体重", value: 76.7, unit: "kg", low: null, high: null },
+    { name: "体重指数", value: 24.9, unit: null, low: 18.5, high: 23.9 }
+  ]);
+  assert.equal(planRebuiltOcrPages("local-table", rebuilt).units.filter((unit) => unit.route === "scalar").length, 0);
+});
+
+test("parses simple categorical table rows locally without turning value rows into headings", () => {
+  const rebuilt = rebuildOcrPages([page(1, [
+    "【内科】",
+    "主诉 | 无特殊",
+    "面容 | 正常 | 正常",
+    "心音 | 正常 | 正常",
+    "腹部 | 未见异常 | 未见异常",
+    "【便常规】",
+    "虫卵 | -"
+  ])]);
+  const rows = rebuilt[0].lines.filter((line) => /主诉|面容|心音|腹部|虫卵/.test(line.text));
+  const facts = rows.flatMap((line) => line.localObservation ? [line.localObservation] : []);
+
+  assert.equal(rows.find((line) => line.text.startsWith("主诉"))?.boundary, null);
+  assert.deepEqual(facts.map((fact) => [fact.itemName, fact.resultText, fact.sectionName]), [
+    ["面容", "正常", "内科"],
+    ["心音", "正常", "内科"],
+    ["腹部", "未见异常", "内科"],
+    ["虫卵", "-", "便常规"]
+  ]);
+});
+
+test("merges wrapped morphology and recommendation lines before candidate planning", () => {
+  const rebuilt = rebuildOcrPages([page(1, [
+    "超声描述",
+    "肝脏形态较饱满，回声细密，深部回声衰减。肝右叶见强回声，直径约7m",
+    "m，后方无声影，未见胆管扩张。",
+    "双叶甲状腺形态大小正常，左叶内见混合回声，大小约2×2mm，水平位（0分）生",
+    "长，边缘光整，其内未见点状强回声。",
+    "超声提示",
+    "肝右叶局灶性钙化灶",
+    "左叶甲状腺结节，C-TIRADS 3类"
+  ])]);
+
+  assert.equal(rebuilt[0].lines.some((line) => line.text.includes("直径约7mm，后方无声影")), true);
+  assert.equal(rebuilt[0].lines.some((line) => line.text.includes("水平位（0分）生长，边缘光整")), true);
+  assert.equal(rebuilt[0].lines.some((line) => line.text === "m，后方无声影，未见胆管扩张。"), false);
+});
+
+test("parses an inline categorical examination result locally", () => {
+  const rebuilt = rebuildOcrPages([page(1, [
+    "13C呼气试验Hp检验报告单",
+    "13c呼气试验Hp检验报告结果：阴性"
+  ])]);
+  const fact = rebuilt[0].lines.find((line) => /结果/.test(line.text))?.localObservation;
+
+  assert.equal(fact?.resultText, "阴性");
+  assert.match(fact?.sectionName || "", /13C呼气试验/);
+  assert.equal(planRebuiltOcrPages("inline-result", rebuilt).units.some((unit) => unit.route === "scalar"), false);
+});
+
+test("routes bilingual checkup summaries and functional conclusions as narrative blocks", () => {
+  const plan = planRebuiltOcrPages("checkup-summary", rebuildOcrPages([
+    page(1, [
+      "个人健康体检报告",
+      "异常结果与健康建议 | Abnormal Findings and Health Recommendations",
+      "【一般检查】",
+      "体重指数BMI值偏高(24.9)(参考值18.5~23.9)；建议合理膳食并控制体重。"
+    ]),
+    page(2, [
+      "动脉阻塞与僵硬度检测报告单 | 身高：175.5cm | 体重：76.7kg | BMI:24.9",
+      "检查所见 | 诊断所见",
+      "双侧下肢静态ABI未见异常。",
+      "双侧baPWV正常范围。"
+    ])
+  ]));
+  const narrative = plan.units.find((unit) => unit.route === "narrative");
+
+  assert.ok(narrative);
+  assert.match(narrative.text, /异常结果与健康建议/);
+  assert.match(narrative.text, /建议合理膳食并控制体重/);
+  assert.match(narrative.text, /双侧下肢静态ABI未见异常/);
+  assert.match(narrative.text, /双侧baPWV正常范围/);
+});
+
+test("resets section context at a new report page while preserving explicit table continuation", () => {
+  const pages = rebuildOcrPages([
+    page(1, [
+      "【肿瘤标志物】",
+      "项目 | 本次结果 | 单位 | 参考值",
+      "癌胚抗原 | 2.1 | ng/mL | <5"
+    ]),
+    page(2, [
+      "心电图检查报告单",
+      "PR间期 | 158 | ms | 120~200"
+    ]),
+    page(3, [
+      "【尿常规】",
+      "尿蛋白 | 阴性 | | 阴性"
+    ]),
+    page(4, [
+      "项目 | 参考值",
+      "2026-06-14 | 2025-07-12",
+      "镜检白细胞 | 2 | Cell/HP | 0~5"
+    ])
+  ]);
+
+  assert.match(pages[1].lines.find((line) => line.text.startsWith("PR间期"))?.sectionName || "", /心电图/);
+  assert.doesNotMatch(pages[1].lines.find((line) => line.text.startsWith("PR间期"))?.sectionName || "", /肿瘤/);
+  assert.match(pages[3].lines.find((line) => line.text.startsWith("镜检白细胞"))?.sectionName || "", /尿常规/);
 });

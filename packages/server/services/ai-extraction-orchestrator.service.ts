@@ -26,6 +26,7 @@ import {
   mergeContentClassifications,
   reportContentClassifierVersion
 } from "./report-content-classifier.service";
+import { isAiReportStructuredSectionCompatible } from "../domain/health-record";
 
 export const aiExtractionExecutionPolicy = {
   maxConcurrency: 3
@@ -453,26 +454,30 @@ function nearestContext(
   page: AiExtractionPlan["pages"][number],
   lineIndex: number
 ) {
+  const currentLine = page.lines.find((line) => line.index === lineIndex);
+  if (currentLine?.sectionName || currentLine?.tableHeaderText) {
+    return {
+      section: currentLine.sectionName || null,
+      tableHeader: currentLine.tableHeaderText || null
+    };
+  }
   let section: string | null = null;
   let reportSection: string | null = null;
   let tableHeader: string | null = null;
-  for (const candidatePage of plan.pages) {
-    if (candidatePage.pageNumber > page.pageNumber) break;
-    for (const line of candidatePage.lines) {
-      if (candidatePage.pageNumber === page.pageNumber && line.index >= lineIndex) break;
-      if (line.boundary === "section") {
-        const label = cleanSectionLabel(line.text);
-        if (/(?:检验|检查|体检|超声|心电图|病理|门诊|住院|出院).{0,12}(?:报告|报告单)$/.test(label)) {
-          reportSection = label;
-          section = null;
-          tableHeader = null;
-        } else {
-          section = label;
-          tableHeader = null;
-        }
-      } else if (line.boundary === "table_header") {
-        tableHeader = line.text;
+  for (const line of page.lines) {
+    if (line.index >= lineIndex) break;
+    if (line.boundary === "section") {
+      const label = cleanSectionLabel(line.text);
+      if (/(?:检验|检查|体检|超声|心电图|病理|门诊|住院|出院).{0,12}(?:报告|报告单)$/.test(label)) {
+        reportSection = label;
+        section = null;
+        tableHeader = null;
+      } else {
+        section = label;
+        tableHeader = null;
       }
+    } else if (line.boundary === "table_header") {
+      tableHeader = line.text;
     }
   }
   const sectionLabel = section && reportSection && !section.includes(reportSection)
@@ -596,12 +601,20 @@ function exactEvidenceForMorphology(
     .filter((line) => unit.text.includes(line.text))
     .flatMap((line) => {
       const source = compactEvidence(line.text);
-      const score = Math.max(0, ...anchors.map((anchor) =>
+      const directQuote = item.evidence.some((entry) => {
+        const quote = compactEvidence(entry.quote);
+        return quote.length >= 4 && (source.includes(quote) || quote.includes(source));
+      });
+      const matchedAnchors = anchors.filter((anchor) =>
         source.includes(anchor) || anchor.includes(source)
-          ? Math.min(source.length, anchor.length) / Math.max(source.length, anchor.length)
-          : 0
-      ));
-      return score >= 0.45 ? [{ pageNumber: page.pageNumber, quote: line.text, score }] : [];
+      );
+      const semanticScore = matchedAnchors.reduce((score, anchor) =>
+        score + Math.min(1, anchor.length / 8), 0
+      );
+      const score = directQuote ? 4 : semanticScore;
+      return directQuote || semanticScore >= 1.25
+        ? [{ pageNumber: page.pageNumber, quote: line.text, score }]
+        : [];
     })).sort((left, right) => right.score - left.score);
   return uniqueBy(matches.slice(0, 5).map(({ pageNumber, quote }) => ({ pageNumber, quote })),
     (entry) => `${entry.pageNumber}:${entry.quote}`);
@@ -640,13 +653,14 @@ function validateResultEvidence(
   unit: AiExtractionUnit,
   result: AiExtractionResult
 ) {
-  const observations = (unit.route === "scalar" || (unit.route === "document" && unit.candidateRowCount > 0))
+  const observations = (unit.route === "scalar" || unit.route === "verification"
+    || (unit.route === "document" && unit.candidateRowCount > 0))
     ? result.fields.observations.flatMap((item) => {
         const evidence = exactEvidenceForObservation(plan, unit, item);
         return evidence.length ? [validatedObservation(plan, item, evidence)] : [];
       })
     : [];
-  const morphologyFindings = unit.route === "morphology"
+  const morphologyFindings = unit.route === "morphology" || unit.route === "verification"
     ? result.fields.morphologyFindings.flatMap((item) => {
         const evidence = exactEvidenceForMorphology(plan, unit, item);
         return evidence.length ? [{ ...item, evidence, rawText: evidence[0].quote }] : [];
@@ -703,6 +717,10 @@ function validateResultEvidence(
     : [];
   const reportSections = unit.route === "narrative"
     ? result.fields.reportSections.flatMap((item) => {
+        if (!isAiReportStructuredSectionCompatible(
+          plan.documentClassification.primaryType,
+          item.sectionKey
+        )) return [];
         const evidence = exactEvidenceForClinicalFact(plan, unit, item.evidence, [
           item.title, item.content.slice(0, 300)
         ]);
@@ -737,7 +755,9 @@ function validateResultEvidence(
     summary: result.fields.summary,
     recommendation: result.fields.recommendation
   };
-  const source = unit.route === "morphology"
+  const source = unit.route === "verification"
+    ? { observations, morphologyFindings }
+    : unit.route === "morphology"
     ? { morphologyFindings }
     : unit.route === "document"
       ? { ...result.fields, observations, morphologyFindings: [], ...clinicalFacts }
@@ -870,6 +890,58 @@ function resultMatchesLine(result: AiExtractionResult, line: string) {
   return evidenceTexts.some((value) => compactLine.includes(value) || value.includes(compactLine));
 }
 
+function observationMatchesCandidateLine(result: AiExtractionResult, line: AiExtractionPlan["pages"][number]["lines"][number]) {
+  if (resultMatchesLine(result, line.text)) return true;
+  const source = compactEvidence(line.text);
+  const cells = line.text.split(/[|｜]/).map((cell) => cell.trim());
+  const sourceResult = compactEvidence(cells[1] || "");
+  return result.fields.observations.some((item) => {
+    const names = [item.itemName, item.normalizedName || ""].map(compactEvidence).filter(Boolean);
+    const dictionaryNames = line.dictionaryFacts.flatMap((fact) =>
+      [fact.displayName, fact.alias].map(compactEvidence).filter(Boolean)
+    );
+    const nameMatched = dictionaryNames.length
+      ? dictionaryNames.some((dictionaryName) => names.some((name) =>
+          name === dictionaryName || name.includes(dictionaryName) || dictionaryName.includes(name)
+        ))
+      : names.some((name) => name.length >= 2 && source.includes(name));
+    if (!nameMatched) return false;
+    const resultText = compactEvidence(item.resultText);
+    if (resultText && (sourceResult === resultText || source.includes(resultText))) return true;
+    if (item.numericValue === null) return false;
+    return new RegExp(`(?:^|[^\\d.])${String(item.numericValue).replace(".", "\\.")}(?:$|[^\\d.])`)
+      .test(line.text.normalize("NFKC"));
+  });
+}
+
+function morphologyMatchesCandidateLine(result: AiExtractionResult, line: AiExtractionPlan["pages"][number]["lines"][number]) {
+  if (resultMatchesLine(result, line.text)) return true;
+  const source = compactEvidence(line.text);
+  return result.fields.morphologyFindings.some((item) => {
+    const strongAnchors = [item.findingName, item.findingType, item.organ, item.region]
+      .map(compactEvidence).filter((value) => value.length >= 2);
+    const matchedAnchors = strongAnchors.filter((anchor) => source.includes(anchor) || anchor.includes(source)).length;
+    const measurements = [item.size.length, item.size.width, item.size.height]
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+    const measurementMatched = !measurements.length || measurements.some((value) =>
+      new RegExp(`(?:^|[^\\d.])${String(value).replace(".", "\\.")}(?:$|[^\\d.])`).test(line.text)
+    );
+    return measurementMatched && (
+      matchedAnchors >= 2
+      || strongAnchors.some((anchor) => anchor.length >= 4 && source.includes(anchor))
+    );
+  });
+}
+
+function resultMatchesCandidateLine(
+  result: AiExtractionResult,
+  line: AiExtractionPlan["pages"][number]["lines"][number]
+) {
+  return line.candidateKind === "morphology"
+    ? morphologyMatchesCandidateLine(result, line)
+    : observationMatchesCandidateLine(result, line);
+}
+
 function unitCandidateLines(plan: AiExtractionPlan, unit: AiExtractionUnit) {
   if (unit.route === "narrative" || (unit.route === "document" && unit.candidateRowCount === 0)) return [];
   return unit.pageRanges.flatMap((range) => {
@@ -882,7 +954,11 @@ function unitCandidateLines(plan: AiExtractionPlan, unit: AiExtractionUnit) {
         );
     return rangeLines
       .filter((line) =>
-        line.candidateKind === unit.extractionMode
+        (unit.route === "verification"
+          ? unit.candidateFacts.some((fact) =>
+              fact.pageNumber === page.pageNumber && fact.sourceText === line.text
+            )
+          : line.candidateKind === unit.extractionMode)
         && !line.localObservation
         && unit.text.includes(line.text)
       )
@@ -907,7 +983,7 @@ function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
   const byPageAndMode = new Map<string, Candidate[]>();
   for (const unit of plan.units.filter((item) => item.unitType !== "supplement")) {
     for (const candidate of unitCandidateLines(plan, unit)) {
-      if (resultMatchesLine(result, candidate.line.text)) continue;
+      if (resultMatchesCandidateLine(result, candidate.line)) continue;
       const key = `${candidate.page.pageNumber}:${unit.extractionMode}`;
       const current = byPageAndMode.get(key) || [];
       if (!current.some((item) => item.line.id === candidate.line.id)) current.push(candidate);
@@ -963,29 +1039,29 @@ function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
   let pending: typeof blocks = [];
   const flush = () => {
     if (!pending.length) return;
-    const extractionMode = pending[0].extractionMode;
+    const extractionMode: AiExtractionUnit["extractionMode"] = "scalar";
     const text = pending.map((block) => block.text).join("\n\n");
     const inputHash = createHash("sha256").update([
       aiInputPlanningPolicy.version,
       "supplement",
-      extractionMode,
+      "verification",
       text
     ].join("\u0000")).digest("hex");
     const pageNumbers = [...new Set(pending.map((block) => block.pageNumber))];
     const candidateRowCount = pending.reduce((sum, block) => sum + block.candidates.length, 0);
-    const morphologyCandidateCount = extractionMode === "morphology" ? candidateRowCount : 0;
     const candidateFacts = pending.flatMap((block) => block.candidates.map((item) => ({
       pageNumber: block.pageNumber,
-      kind: extractionMode,
+      kind: item.line.candidateKind as "scalar" | "morphology",
       sourceText: item.line.text,
       dictionaryFacts: item.line.dictionaryFacts
     })));
+    const morphologyCandidateCount = candidateFacts.filter((fact) => fact.kind === "morphology").length;
     units.push({
-      unitKey: `unit_${createHash("sha256").update(`supplement|${extractionMode}|${pageNumbers.join(",")}|${inputHash}`).digest("hex").slice(0, 24)}`,
+      unitKey: `unit_${createHash("sha256").update(`supplement|verification|${pageNumbers.join(",")}|${inputHash}`).digest("hex").slice(0, 24)}`,
       inputHash,
       unitType: "supplement",
       extractionMode,
-      route: extractionMode,
+      route: "verification",
       allowDocumentFields: false,
       classification: mergeContentClassifications(
         pending.map((block) => block.page.classification)
@@ -1016,11 +1092,11 @@ function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
     pending = [];
   };
   for (const block of blocks) {
-    if (pending.length && pending[0].extractionMode !== block.extractionMode) flush();
     const combinedCharacters = [...pending, block].map((item) => item.text).join("\n\n").length;
     const combinedCandidates = [...pending, block].reduce((sum, item) => sum + item.candidates.length, 0);
-    const combinedMorphologyCandidates = block.extractionMode === "morphology"
-      ? combinedCandidates : 0;
+    const combinedMorphologyCandidates = [...pending, block].reduce((sum, item) =>
+      sum + (item.extractionMode === "morphology" ? item.candidates.length : 0), 0
+    );
     const estimatedOutputTokens = estimateAiUnitOutputTokens({
       pageCount: new Set([...pending, block].map((item) => item.pageNumber)).size,
       characterCount: combinedCharacters,
@@ -1030,7 +1106,7 @@ function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
     if (
       pending.length
       && (
-        pending.length >= aiInputPlanningPolicy.maxPagesPerUnit
+        new Set([...pending, block].map((item) => item.pageNumber)).size > aiInputPlanningPolicy.maxSparsePagesPerUnit
         || combinedCharacters > aiInputPlanningPolicy.targetCharacters
         || estimatedOutputTokens > aiInputPlanningPolicy.targetOutputTokens
         || combinedCandidates > aiInputPlanningPolicy.maxCandidateRowsPerUnit
@@ -1288,13 +1364,110 @@ function withLocalDocumentClassification(plan: AiExtractionPlan, result: AiExtra
   };
 }
 
+const businessIdentifierDefinitions = [
+  { key: "physicalExamNo", pattern: /(?:体检编号|体检号)\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "reportNo", pattern: /报告号\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "outpatientNo", pattern: /门诊号\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "inpatientNo", pattern: /住院号\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "examNo", pattern: /检查号\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "specimenNo", pattern: /标本号\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i },
+  { key: "barcodeNo", pattern: /(?:条码号|条形码号)\s*[:：]?\s*([A-Z0-9][A-Z0-9._/-]{3,})/i }
+] as const;
+
+function withDeterministicDocumentFields(plan: AiExtractionPlan, result: AiExtractionResult) {
+  const identifiers = { ...result.fields.identifiers };
+  for (const page of plan.pages) {
+    for (const line of page.lines) {
+      for (const definition of businessIdentifierDefinitions) {
+        if (identifiers[definition.key]) continue;
+        const match = line.text.normalize("NFKC").match(definition.pattern);
+        if (match?.[1]) identifiers[definition.key] = match[1];
+      }
+    }
+  }
+  const bodyParts = plan.documentClassification.primaryType === "checkup"
+    ? result.fields.bodyParts.filter((item) =>
+        !/^(?:综合体检|健康体检|体检|physicalexam|checkup)$/i.test(compactEvidence(item.name || item.raw))
+      )
+    : result.fields.bodyParts;
+  if (
+    Object.keys(identifiers).length === Object.keys(result.fields.identifiers).length
+    && bodyParts.length === result.fields.bodyParts.length
+  ) return result;
+  const fields = { ...result.fields, identifiers, bodyParts };
+  return {
+    ...result,
+    fields,
+    rawResponseJson: JSON.stringify({
+      ...fields, evidence: result.evidence, confidence: result.confidence
+    })
+  };
+}
+
 function updateCandidateQuality(jobId: string, plan: AiExtractionPlan, result: AiExtractionResult) {
+  const db = getDatabase();
+  const unitRows = new Map((db.prepare(`
+    SELECT id, unit_key AS unitKey FROM ai_extraction_units WHERE job_id = ?
+  `).all(jobId) as Array<{ id: string; unitKey: string }>).map((row) => [row.unitKey, row.id]));
+  const insertCandidate = db.prepare(`
+    INSERT INTO ai_extraction_candidates (
+      id, job_id, unit_id, report_id, candidate_key, source_hash, page_number,
+      source_line_ids_json, kind, dictionary_keys_json, status, matched_entity_key, reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id, candidate_key) DO UPDATE SET
+      unit_id = COALESCE(excluded.unit_id, ai_extraction_candidates.unit_id),
+      status = excluded.status,
+      matched_entity_key = excluded.matched_entity_key,
+      reason = excluded.reason,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  db.prepare("DELETE FROM ai_extraction_candidates WHERE job_id = ?").run(jobId);
+
+  for (const page of plan.pages) {
+    for (const line of page.lines) {
+      if (!line.localObservation) continue;
+      const sourceHash = createHash("sha256").update(line.text).digest("hex");
+      const candidateKey = createHash("sha256").update([
+        page.pageNumber, line.sourceLineIds.join(","), "scalar", sourceHash
+      ].join("\u0000")).digest("hex");
+      insertCandidate.run(
+        createId("aicandidate"), jobId, null, plan.reportId, candidateKey, sourceHash,
+        page.pageNumber, JSON.stringify(line.sourceLineIds), "scalar",
+        JSON.stringify(line.dictionaryFacts.map((fact) => fact.canonicalKey)),
+        "local_extracted", line.localObservation.normalizedName,
+        "本地字典与表格结构已确定"
+      );
+    }
+  }
+
   let unmatched = 0;
   for (const unit of plan.units.filter((item) => item.unitType !== "supplement")) {
     const candidates = unitCandidateLines(plan, unit);
-    const matched = candidates.filter((item) => resultMatchesLine(result, item.line.text)).length;
-    unmatched += Math.max(0, candidates.length - matched);
-    getDatabase().prepare(`
+    let matched = 0;
+    for (const item of candidates) {
+      const resolved = resultMatchesCandidateLine(result, item.line);
+      const directlyExtracted = resolved && resultMatchesLine(result, item.line.text);
+      if (resolved) matched += 1;
+      else unmatched += 1;
+      const sourceHash = createHash("sha256").update(item.line.text).digest("hex");
+      const candidateKey = createHash("sha256").update([
+        item.page.pageNumber, item.line.sourceLineIds.join(","), item.line.candidateKind, sourceHash
+      ].join("\u0000")).digest("hex");
+      const matchedEntityKey = item.line.dictionaryFacts[0]?.canonicalKey
+        || item.line.text.split(/[|｜]/)[0]?.trim()
+        || null;
+      insertCandidate.run(
+        createId("aicandidate"), jobId, unitRows.get(unit.unitKey) || null, plan.reportId,
+        candidateKey, sourceHash, item.page.pageNumber, JSON.stringify(item.line.sourceLineIds),
+        item.line.candidateKind, JSON.stringify(item.line.dictionaryFacts.map((fact) => fact.canonicalKey)),
+        resolved ? (directlyExtracted ? "ai_extracted" : "redundant") : "unresolved",
+        resolved ? matchedEntityKey : null,
+        resolved
+          ? (directlyExtracted ? "AI 结果已通过原文证据匹配" : "同指标同结果已由其他原文位置覆盖")
+          : "AI 结果中未找到可验证的对应事实"
+      );
+    }
+    db.prepare(`
       UPDATE ai_extraction_units SET candidate_count = ?, matched_count = ?, updated_at = CURRENT_TIMESTAMP
       WHERE job_id = ? AND unit_key = ?
     `).run(candidates.length, matched, jobId, unit.unitKey);
@@ -1477,6 +1650,8 @@ async function executeUnit(
       message: `AI 输出仍超限，已将第 ${unit.pageNumbers.join("、")} 页当前单元拆分后继续处理`,
       detail: {
         unitKey: unit.unitKey,
+        unitIndex: row.unitIndex,
+        unitType: unit.unitType,
         pageNumbers: unit.pageNumbers,
         childUnits: children.map((child) => ({
           unitKey: child.unitKey,
@@ -1522,6 +1697,8 @@ async function executeUnit(
           message: "AI 输出达到当前预算，正在扩大输出空间重试当前单元",
           detail: {
             unitKey: unit.unitKey,
+            unitIndex: row.unitIndex,
+            unitType: unit.unitType,
             pageNumbers: unit.pageNumbers,
             previousMaxTokens: truncation.requestedMaxTokens || null,
             modelMaxOutputTokens: truncation.modelMaxOutputTokens || null,
@@ -1548,7 +1725,8 @@ async function executeUnit(
     } catch (finalError) {
       failUnit(row, finalError);
       options.onEvent?.({ type: "unit_failed", message: errorDetails(finalError).message,
-        detail: { unitKey: unit.unitKey, pageNumbers: unit.pageNumbers, ...errorDetails(finalError) } });
+        detail: { unitKey: unit.unitKey, unitIndex: row.unitIndex, unitType: unit.unitType,
+          pageNumbers: unit.pageNumbers, ...errorDetails(finalError) } });
       throw finalError;
     }
   }
@@ -1556,7 +1734,8 @@ async function executeUnit(
   options.onEvent?.({
     type: "unit_completed",
     message: `AI 整理单元 ${row.unitIndex + 1}/${plan.unitCount} 完成`,
-    detail: { unitKey: unit.unitKey, unitIndex: row.unitIndex, pageNumbers: unit.pageNumbers,
+    detail: { unitKey: unit.unitKey, unitIndex: row.unitIndex, unitType: unit.unitType,
+      pageNumbers: unit.pageNumbers,
       extractionMode: unit.extractionMode,
       route: unit.route,
       primaryContentType: unit.classification.primaryType,
@@ -1586,9 +1765,9 @@ export async function executeAiExtractionPlan(
     if (!row) throw new Error(`AI 解析单元未持久化：${unit.unitKey}`);
     return executeUnit(jobId, reportId, plan, unit, row, executor, options);
   }, { stopOnError: true });
-  let merged = withLocalDocumentClassification(plan, withDeterministicFallback(
+  let merged = withDeterministicDocumentFields(plan, withLocalDocumentClassification(
     plan,
-    withSourceDeduplication(plan, mergeAiExtractionResults(results))
+    withDeterministicFallback(plan, withSourceDeduplication(plan, mergeAiExtractionResults(results)))
   ));
   const supplements = supplementUnits(plan, merged);
   let effectivePlan = plan;
@@ -1619,9 +1798,9 @@ export async function executeAiExtractionPlan(
       }
     }, { stopOnError: true });
     results.push(...supplementResults.filter((result): result is AiExtractionResult => result !== null));
-    merged = withLocalDocumentClassification(plan, withDeterministicFallback(
+    merged = withDeterministicDocumentFields(plan, withLocalDocumentClassification(
       plan,
-      withSourceDeduplication(plan, mergeAiExtractionResults(results))
+      withDeterministicFallback(plan, withSourceDeduplication(plan, mergeAiExtractionResults(results)))
     ));
   }
   const unmatchedCandidates = updateCandidateQuality(jobId, plan, merged);
@@ -1635,7 +1814,7 @@ export async function executeAiExtractionPlan(
   ).length;
   for (const unit of supplements) {
     const unresolved = unitCandidateLines(plan, unit)
-      .filter((item) => !resultMatchesLine(merged, item.line.text)).length;
+      .filter((item) => !resultMatchesCandidateLine(merged, item.line)).length;
     if (!unresolved) continue;
     warningUnits += 1;
     getDatabase().prepare(`

@@ -1,4 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  isAiReportStructuredSectionCompatible,
+  type ReportStructuredSectionKey
+} from "../domain/health-record";
 
 export type DatabaseMigration = {
   version: number;
@@ -396,6 +400,14 @@ export const databaseMigrations: DatabaseMigration[] = [
       ensureClinicalFactColumns(db);
       db.exec(aiExtractionUnitSchemaSql);
     }
+  },
+  {
+    version: 17,
+    name: "add_ai_extraction_candidate_tracking",
+    checksum: "manual:017-add-ai-extraction-candidate-tracking",
+    up: (db) => {
+      db.exec(aiExtractionCandidateSchemaSql);
+    }
   }
 ];
 
@@ -551,6 +563,32 @@ export function repairReportDisplayMetadata(db: DatabaseSync) {
       && JSON.stringify(repairedParts) === JSON.stringify(bodyParts)
     ) continue;
     update.run(repairedSubtype, JSON.stringify(repairedParts), row.id);
+    repaired += 1;
+  }
+  return repaired;
+}
+
+/**
+ * Some early v16 AI runs treated checkup table labels such as 主诉/体格检查 as
+ * outpatient document sections. Remove only untouched AI rows; manual content
+ * remains authoritative and is never changed by this compatibility repair.
+ */
+export function repairIncompatibleAiReportSections(db: DatabaseSync) {
+  const rows = db.prepare(`
+    SELECT s.id, s.section_key AS sectionKey, r.report_type AS reportType
+    FROM report_structured_sections s
+    JOIN reports r ON r.id = s.report_id
+    WHERE s.source = 'ai' AND json_array_length(s.manual_fields_json) = 0
+  `).all() as Array<{
+    id: string;
+    sectionKey: ReportStructuredSectionKey;
+    reportType: string;
+  }>;
+  const remove = db.prepare("DELETE FROM report_structured_sections WHERE id = ?");
+  let repaired = 0;
+  for (const row of rows) {
+    if (isAiReportStructuredSectionCompatible(row.reportType, row.sectionKey)) continue;
+    remove.run(row.id);
     repaired += 1;
   }
   return repaired;
@@ -948,4 +986,32 @@ CREATE INDEX IF NOT EXISTS ai_extraction_attempts_unit_idx
   ON ai_extraction_attempts(unit_id, attempt_number, created_at);
 CREATE INDEX IF NOT EXISTS ai_extraction_attempts_report_idx
   ON ai_extraction_attempts(report_id, created_at DESC);
+`;
+
+export const aiExtractionCandidateSchemaSql = `
+CREATE TABLE IF NOT EXISTS ai_extraction_candidates (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL REFERENCES processing_jobs(id) ON DELETE CASCADE,
+  unit_id TEXT REFERENCES ai_extraction_units(id) ON DELETE SET NULL,
+  report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  candidate_key TEXT NOT NULL,
+  source_hash TEXT NOT NULL,
+  page_number INTEGER NOT NULL,
+  source_line_ids_json TEXT NOT NULL DEFAULT '[]',
+  kind TEXT NOT NULL CHECK (kind IN ('scalar', 'morphology')),
+  dictionary_keys_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL CHECK (
+    status IN ('local_extracted', 'ai_extracted', 'redundant', 'ignored', 'unresolved')
+  ),
+  matched_entity_key TEXT,
+  reason TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(job_id, candidate_key)
+);
+
+CREATE INDEX IF NOT EXISTS ai_extraction_candidates_job_idx
+  ON ai_extraction_candidates(job_id, status, page_number, id);
+CREATE INDEX IF NOT EXISTS ai_extraction_candidates_report_idx
+  ON ai_extraction_candidates(report_id, created_at DESC);
 `;

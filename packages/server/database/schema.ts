@@ -1,4 +1,5 @@
 import {
+  aiExtractionCandidateSchemaSql,
   aiExtractionUnitSchemaSql,
   clinicalFactSchemaSql,
   indicatorDictionarySchemaSql,
@@ -325,6 +326,7 @@ CREATE INDEX IF NOT EXISTS report_extractions_report_idx
   ON report_extractions(report_id, created_at DESC);
 
 ${aiExtractionUnitSchemaSql}
+${aiExtractionCandidateSchemaSql}
 
 CREATE TABLE IF NOT EXISTS ai_audit_events (
   id TEXT PRIMARY KEY,

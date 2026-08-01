@@ -190,6 +190,42 @@ export type ProcessingJobEvent = {
   createdAt: string;
 };
 
+export type AiExtractionUnitProgress = {
+  id: string;
+  unitKey: string;
+  unitIndex: number;
+  unitType: "complete_pages" | "page_chunk" | "supplement";
+  pageNumbers: number[];
+  status: "planned" | "processing" | "completed" | "warning" | "failed";
+  attempts: number;
+  model: string | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  elapsedMs: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  events: ProcessingJobEvent[];
+};
+
+export type ProcessingJobEventDetail = {
+  job: {
+    id: string;
+    reportId: string;
+    jobType: ProcessingJob["jobType"];
+    status: ProcessingJob["status"];
+    attempts: number;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+  };
+  units: AiExtractionUnitProgress[];
+  generalEvents: ProcessingJobEvent[];
+};
+
 export type OcrPageText = {
   pageId: string;
   pageNumber: number;

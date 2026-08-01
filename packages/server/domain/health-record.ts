@@ -216,6 +216,21 @@ export const reportStructuredSectionKeys = [
 
 export type ReportStructuredSectionKey = typeof reportStructuredSectionKeys[number];
 
+/**
+ * These section families describe the document itself, not any matching words
+ * inside a composite report. A checkup table row named "体格检查" must not turn
+ * into an outpatient-record section merely because the label is the same.
+ */
+export function isAiReportStructuredSectionCompatible(
+  reportType: string | null | undefined,
+  sectionKey: ReportStructuredSectionKey
+) {
+  if (sectionKey.startsWith("checkup_")) return reportType === "checkup";
+  if (sectionKey.startsWith("outpatient_")) return reportType === "outpatient";
+  if (sectionKey.startsWith("inpatient_")) return reportType === "inpatient";
+  return true;
+}
+
 export type ReportStructuredSection = {
   id: string;
   reportId: string;

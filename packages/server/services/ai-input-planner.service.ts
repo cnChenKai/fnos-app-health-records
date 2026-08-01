@@ -12,10 +12,11 @@ import {
 } from "./report-content-classifier.service";
 
 export const aiInputPlanningPolicy = {
-  version: "ocr-unit-plan-v9",
+  version: "ocr-unit-plan-v11",
   targetCharacters: 8_000,
-  maxPagesPerUnit: 6,
-  targetOutputTokens: 7_000,
+  maxPagesPerUnit: 12,
+  maxSparsePagesPerUnit: 24,
+  targetOutputTokens: 12_000,
   maxCandidateRowsPerUnit: 60
 } as const;
 
@@ -73,6 +74,9 @@ export type PlannedOcrLine = {
   boundary: "section" | "table_header" | null;
   role: OcrLineRole;
   localObservation: LocalObservationFact | null;
+  sectionName?: string | null;
+  reportSectionName?: string | null;
+  tableHeaderText?: string | null;
 };
 
 export type RebuiltOcrPage = {
@@ -98,7 +102,7 @@ export type AiExtractionUnit = {
   inputHash: string;
   unitType: "complete_pages" | "page_chunk" | "supplement";
   extractionMode: "scalar" | "morphology";
-  route: "document" | "scalar" | "morphology" | "narrative";
+  route: "document" | "scalar" | "morphology" | "narrative" | "verification";
   allowDocumentFields: boolean;
   classification: ReportContentClassification;
   pageNumbers: number[];
@@ -146,7 +150,7 @@ export type AiExtractionPlan = {
 };
 
 const sectionHeadingPattern =
-  /^(一般检查|基础测量|体格检查|内科|外科|眼科|耳鼻喉科?|口腔科?|妇科|检验检查|血液常规|血常规|便常规|尿常规|肝功能|肾功能|血脂|血糖|电解质|甲状腺功能|动脉粥样硬化指数|肿瘤标志物|功能检查|影像检查|超声检查|彩超|心电图|肺功能|骨密度|呼气试验|检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|建议|主诉|现病史|既往史|门诊诊断|处理意见|处置|入院诊断|出院诊断|住院经过|手术经过|出院用药|出院医嘱|病理诊断|肉眼所见|镜下所见|免疫组化|病理分级|病理分期|处方)(?:[（(].*?[）)]|[一二三四五六七八九十\d]+项|[:：]|\s|$)/;
+  /^(一般检查|基础测量|体格检查|内科|外科|眼科|耳鼻喉科?|口腔科?|妇科|检验检查|血液常规|血常规|便常规|尿常规|肝功能|肾功能|血脂|血糖|电解质|甲状腺功能|动脉粥样硬化指数|肿瘤标志物|功能检查|影像检查|超声检查|彩超|心电图|肺功能|骨密度|呼气试验|检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|异常结果与健康建议|本次体检的异常结果汇总及建议|建议|主诉|现病史|既往史|门诊诊断|处理意见|处置|入院诊断|出院诊断|住院经过|手术经过|出院用药|出院医嘱|病理诊断|肉眼所见|镜下所见|免疫组化|病理分级|病理分期|处方)(?:[（(].*?[）)]|[一二三四五六七八九十\d]+项|[:：]|\s|$)/;
 const tableHeaderPattern =
   /(项目|名称).{0,20}(结果|测定值|检查结果).{0,30}(参考|范围|单位)|(结果|测定值).{0,20}(单位|参考)/;
 const medicalUnitPattern =
@@ -182,11 +186,11 @@ const nonResultTechnicalPattern =
 const interpretationOnlyPattern =
   /(?:正常范围|未见异常)[。.]?$/;
 const narrativeSectionHeadingPattern =
-  /^(?:检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|建议|主诉|现病史|既往史|门诊诊断|处理意见|处置|入院诊断|出院诊断|住院经过|手术经过|出院用药|出院医嘱|病理诊断|肉眼所见|镜下所见|免疫组化|病理分级|病理分期)(?:[：:]|\s|$)/;
+  /^(?:检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|异常结果与健康建议|本次体检的异常结果汇总及建议|建议|主诉|现病史|既往史|门诊诊断|处理意见|处置|入院诊断|出院诊断|住院经过|手术经过|出院用药|出院医嘱|病理诊断|肉眼所见|镜下所见|免疫组化|病理分级|病理分期)(?:[：:]|\s|$)/;
 const narrativeInlinePattern =
   /^(?:主诉|现病史|既往史|检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|建议|处理意见|处置|住院经过|手术经过|出院医嘱|肉眼所见|镜下所见|免疫组化)\s*[:：]/;
 const documentAnchorHeadingPattern =
-  /^(?:总检结论|体检综述|阳性发现|异常汇总|建议|检查结论|影像结论|病理诊断|出院诊断|出院医嘱|住院经过)(?:[：:]|\s|$)/;
+  /^(?:总检结论|体检综述|阳性发现|异常汇总|异常结果与健康建议|本次体检的异常结果汇总及建议|建议|检查结论|影像结论|病理诊断|出院诊断|出院医嘱|住院经过)(?:[：:]|\s|$)/;
 
 function isMorphologyCandidate(text: string) {
   if (!morphologyPattern.test(text)) return false;
@@ -398,18 +402,77 @@ function reconstructPageLayout(lines: PlannedOcrLine[], aliases: DictionaryAlias
   return rows.map((row, index) => mergeVisualRow(row, index, aliases));
 }
 
+function mergeWrappedPageLines(lines: PlannedOcrLine[], aliases: DictionaryAliasRow[]) {
+  const merged: PlannedOcrLine[] = [];
+  for (const line of lines) {
+    const previous = merged.at(-1);
+    const combinedText = previous ? `${previous.text}${line.text}` : "";
+    const shouldMerge = Boolean(
+      previous
+      && !/[|｜]/.test(previous.text)
+      && !/[|｜]/.test(line.text)
+      && !previous.boundary
+      && !line.boundary
+      && !/[。！？；;:：]$/.test(previous.text)
+      && (!isCandidateRow(line.text) || /(?:直径约\d+[a-z]?|水平位(?:[（(][^）)]*[）)])?生|血流充盈)$/i.test(previous.text))
+      && (
+        previous.text.length >= 24
+        || previous.candidateKind === "morphology"
+        || /(?:直径约\d+[a-z]?|水平位(?:[（(][^）)]*[）)])?生|血流充盈|回声|建议|复查|随诊)$/i.test(previous.text)
+      )
+      && (
+        isMorphologyCandidate(combinedText)
+        || /(?:建议|复查|随诊|定期观察)/.test(combinedText)
+        || /^[a-zA-Z，,、）)；;。]/.test(line.text)
+        || previous.text.length >= 36
+      )
+    );
+    if (!previous || !shouldMerge) {
+      merged.push(line);
+      continue;
+    }
+    const rebuilt = mergeVisualRow([{ ...previous, text: combinedText }], previous.index, aliases);
+    merged[merged.length - 1] = {
+      ...rebuilt,
+      id: `wrapped_${previous.id}_${line.id}`,
+      sourceLineIds: [...previous.sourceLineIds, ...line.sourceLineIds],
+      confidence: previous.confidence !== null && line.confidence !== null
+        ? (previous.confidence + line.confidence) / 2
+        : previous.confidence ?? line.confidence,
+      box: previous.box
+    };
+  }
+  return merged.map((line, index) => ({ ...line, index }));
+}
+
 type PageLineContext = {
   section: string | null;
+  reportSection: string | null;
   narrativeActive: boolean;
   tableHeader: string[] | null;
+  pageNumber: number | null;
+  endedWithCandidate: boolean;
 };
 
 function cleanSectionHeading(value: string) {
   return value.replace(/^【\s*|\s*】$/g, "").replace(/[:：]$/, "").trim() || null;
 }
 
+function cleanContextLabel(value: string) {
+  return value.replace(/^【\s*|\s*】$/g, "").replace(/[:：]$/, "").trim();
+}
+
 function splitTableCells(value: string) {
   return value.split(/[|｜]/).map((cell) => cell.trim());
+}
+
+const resultCellPattern = /^(?:<|<=|≤|>|>=|≥)?\s*(?:[-+±]+|[-+]?\d+(?:\.\d+)?|阴性|阳性|弱阳性|正常|异常|未见(?:异常)?|可见|无特殊)(?:\s|$|[↑↓▲▼⬆⬇])/;
+const reportHeadingPattern = /(?:检验|检查|体检|超声|心电图|病理|门诊|住院|出院|动脉阻塞|动脉功能).{0,18}(?:报告|报告单)$/;
+
+function unitFromResultCell(value: string) {
+  return value.match(
+    /(?:10\^?\d+\/L|mmol\/L|μmol\/L|umol\/L|nmol\/L|pmol\/L|mg\/dL|mg\/L|ng\/mL|μg\/L|g\/L|L\/L|U\/mL|U\/L|IU\/L|Cell\/HP|Cast\/LP|\/HPF|\/LPF|cm\/s|mmHg|bpm|kg\s*\/\s*m(?:2|²|㎡)|kg|cm|mm|mL|mV|ms|Angle|pg|fL|%)/i
+  )?.[0]?.replace(/\s+/g, "") || null;
 }
 
 function parseReferenceCell(value: string) {
@@ -442,37 +505,69 @@ function parseLocalObservation(
 ): LocalObservationFact | null {
   if (
     line.candidateKind !== "scalar"
-    || line.dictionaryFacts.length !== 1
-    || !tableHeader
+    || line.dictionaryFacts.length > 1
     || (line.confidence !== null && line.confidence < 0.65)
   ) return null;
+  const inlineResult = line.text.match(
+    /^(.{2,60}?)(?:检验|检查)?结果\s*[:：]\s*(阴性|阳性|弱阳性|正常|异常|未见异常|未见|可见)\s*[。.]?$/i
+  );
+  if (inlineResult && !/[|｜]/.test(line.text) && (section || line.dictionaryFacts.length === 1)) {
+    const dictionary = line.dictionaryFacts[0] || null;
+    return {
+      pageNumber,
+      sourceLineId: line.id,
+      sectionName: section,
+      itemName: inlineResult[1].trim(),
+      normalizedName: dictionary?.displayName || inlineResult[1].trim(),
+      resultText: inlineResult[2],
+      numericValue: null,
+      unit: null,
+      referenceLow: null,
+      referenceHigh: null,
+      referenceText: null,
+      abnormalFlag: localAbnormalFlag(inlineResult[2]),
+      sourceText: line.text
+    };
+  }
   const cells = splitTableCells(line.text);
-  const nameIndex = tableHeader.findIndex((cell) => /^(?:项目|名称|检验项目|检查项目)/.test(cell));
-  const resultIndex = tableHeader.findIndex((cell) =>
+  if (cells.length < 2) return null;
+  const nameIndex = tableHeader?.findIndex((cell) => /^(?:项目|名称|检验项目|检查项目)/.test(cell)) ?? 0;
+  const headerResultIndex = tableHeader?.findIndex((cell) =>
     /(?:本次结果|检查结果|检验结果|测定值|结果)/.test(cell)
     && !/(?:历史|既往|上次|前次|往年)/.test(cell)
-  );
+  ) ?? -1;
+  const resultIndex = headerResultIndex >= 0 ? headerResultIndex : nameIndex + 1;
   if (nameIndex < 0 || resultIndex < 0 || !cells[nameIndex] || !cells[resultIndex]) return null;
   const resultText = cells[resultIndex].trim();
   if (
-    !/^(?:[-+±]+|[-+]?\d+(?:\.\d+)?|阴性|阳性|弱阳性|正常|异常|未见|可见)/.test(resultText)
+    !resultCellPattern.test(resultText)
     || /^\d{4}[-/.年]\d{1,2}/.test(resultText)
   ) return null;
-  const unitIndex = tableHeader.findIndex((cell) => /单位/.test(cell));
-  const referenceIndex = tableHeader.findIndex((cell) => /(?:参考|正常范围)/.test(cell));
-  const unit = unitIndex >= 0 && cells[unitIndex] ? cells[unitIndex].trim() || null : null;
+  const unitIndex = tableHeader?.findIndex((cell) => /单位/.test(cell)) ?? -1;
+  const referenceIndex = tableHeader?.findIndex((cell) => /(?:参考|正常范围)/.test(cell)) ?? -1;
+  const inferredReference = referenceIndex < 0 && cells[resultIndex + 1]
+    ? parseReferenceCell(cells[resultIndex + 1])
+    : { low: null, high: null, text: null };
   const reference = referenceIndex >= 0 && cells[referenceIndex]
     ? parseReferenceCell(cells[referenceIndex])
-    : { low: null, high: null, text: null };
-  const numericMatch = resultText.match(/^[-+]?(\d+(?:\.\d+)?)/);
-  const numericValue = numericMatch ? Number(numericMatch[0]) : null;
-  const dictionary = line.dictionaryFacts[0];
+    : inferredReference.low !== null || inferredReference.high !== null
+      ? inferredReference
+      : { low: null, high: null, text: null };
+  const unit = unitIndex >= 0 && cells[unitIndex]
+    ? cells[unitIndex].trim() || null
+    : unitFromResultCell(resultText);
+  const numericMatch = resultText.match(/^(?:<|<=|≤|>|>=|≥)?\s*([-+]?\d+(?:\.\d+)?)/);
+  const numericValue = numericMatch ? Number(numericMatch[1]) : null;
+  const dictionary = line.dictionaryFacts[0] || null;
+  if (!dictionary && (!section || !/^(?:[-+±]+|阴性|阳性|弱阳性|正常|异常|未见(?:异常)?|可见)$/.test(resultText))) {
+    return null;
+  }
   return {
     pageNumber,
     sourceLineId: line.id,
     sectionName: section,
     itemName: cells[nameIndex],
-    normalizedName: dictionary.displayName,
+    normalizedName: dictionary?.displayName || cells[nameIndex],
     resultText,
     numericValue: numericValue !== null && Number.isFinite(numericValue) ? numericValue : null,
     unit,
@@ -489,14 +584,28 @@ function annotatePageLines(
   pageNumber: number,
   previous: PageLineContext
 ) {
-  let section = previous.section;
-  let narrativeActive = previous.narrativeActive;
-  let tableHeader = previous.tableHeader;
+  const firstContent = lines.find((line) => line.role !== "noise");
+  const hasNewBoundary = lines.slice(0, 8).some((line) =>
+    line.boundary === "section" || line.boundary === "table_header" || reportHeadingPattern.test(cleanContextLabel(line.text))
+  );
+  const inheritContext = previous.pageNumber === pageNumber - 1
+    && previous.endedWithCandidate
+    && Boolean(firstContent?.candidate)
+    && !hasNewBoundary;
+  let section = inheritContext ? previous.section : null;
+  let reportSection = inheritContext ? previous.reportSection : null;
+  let narrativeActive = false;
+  let tableHeader = inheritContext ? previous.tableHeader : null;
   const annotated = lines.map((line): PlannedOcrLine => {
     let role = line.role;
     if (line.boundary === "section") {
       const heading = cleanSectionHeading(line.text);
-      section = heading;
+      if (heading && reportHeadingPattern.test(heading)) {
+        reportSection = heading;
+        section = null;
+      } else {
+        section = heading;
+      }
       narrativeActive = narrativeSectionHeadingPattern.test(line.text);
       tableHeader = null;
       role = "section_heading";
@@ -504,21 +613,50 @@ function annotatePageLines(
       tableHeader = splitTableCells(line.text);
       narrativeActive = false;
       role = "table_header";
+    } else if (reportHeadingPattern.test(cleanContextLabel(splitTableCells(line.text)[0] || ""))) {
+      reportSection = cleanContextLabel(splitTableCells(line.text)[0] || "");
+      section = null;
+      tableHeader = null;
     } else if (narrativeInlinePattern.test(line.text)) {
       narrativeActive = true;
       role = "narrative";
-    } else if (role === "uncertain" && narrativeActive) {
+    } else if (/(?:建议|复查|随诊|定期观察|健康管理)/.test(line.text) && /[。；;]/.test(line.text)) {
+      role = "narrative";
+    } else if ((role === "uncertain" || role === "noise") && narrativeActive) {
       role = "narrative";
     }
     const withRole = { ...line, role };
+    const sectionName = section && reportSection && !section.includes(reportSection)
+      ? `${reportSection} / ${section}`
+      : section || reportSection;
     return {
       ...withRole,
-      localObservation: parseLocalObservation(withRole, pageNumber, section, tableHeader)
+      sectionName,
+      reportSectionName: reportSection,
+      tableHeaderText: tableHeader?.join(" | ") || null,
+      localObservation: parseLocalObservation(withRole, pageNumber, sectionName, tableHeader)
     };
   });
+  let lastCandidateIndex = -1;
+  for (let index = annotated.length - 1; index >= 0; index -= 1) {
+    if (!annotated[index].candidate) continue;
+    lastCandidateIndex = index;
+    break;
+  }
+  const hasLaterBoundary = lastCandidateIndex >= 0 && annotated.slice(lastCandidateIndex + 1)
+    .some((line) => line.boundary === "section" || line.boundary === "table_header");
   return {
     lines: annotated,
-    context: { section, narrativeActive, tableHeader } satisfies PageLineContext
+    context: {
+      section,
+      reportSection,
+      narrativeActive,
+      tableHeader,
+      pageNumber,
+      endedWithCandidate: lastCandidateIndex >= 0
+        && !hasLaterBoundary
+        && annotated.length - lastCandidateIndex <= 24
+    } satisfies PageLineContext
   };
 }
 
@@ -605,14 +743,16 @@ function unitFromRanges(
       line.index >= range.lineStart && line.index <= range.lineEnd
     ) || [];
   });
-  const candidateRowCount = selectedLines.filter((line) =>
-    line.candidateKind === extractionMode
-    && (route !== "scalar" || !line.localObservation)
-  ).length;
-  const morphologyCandidateCount = extractionMode === "morphology" ? candidateRowCount : 0;
+  const candidateRowCount = route === "scalar" || route === "morphology"
+    ? selectedLines.filter((line) =>
+        line.candidateKind === extractionMode
+        && (route !== "scalar" || !line.localObservation)
+      ).length
+    : 0;
+  const morphologyCandidateCount = route === "morphology" ? candidateRowCount : 0;
   const localObservationCount = selectedLines.filter((line) => line.localObservation).length;
   const pageCount = new Set(ranges.map((range) => range.pageNumber)).size;
-  const candidateFacts = ranges.flatMap((range) => {
+  const candidateFacts = route === "scalar" || route === "morphology" ? ranges.flatMap((range) => {
     const page = pages.find((item) => item.pageId === range.pageId);
     return (page?.lines || []).filter((line) =>
       line.index >= range.lineStart
@@ -625,7 +765,7 @@ function unitFromRanges(
       sourceText: line.text,
       dictionaryFacts: line.dictionaryFacts
     }));
-  });
+  }) : [];
   const classification = mergeContentClassifications(ranges.flatMap((range) => {
     const page = pages.find((item) => item.pageId === range.pageId);
     return page ? [page.classification] : [];
@@ -711,6 +851,18 @@ export function redactAiInputText(value: string) {
 function boundaryFor(text: string): PlannedOcrLine["boundary"] {
   const compact = text.trim();
   if (tableHeaderPattern.test(compact)) return "table_header";
+  const cells = splitTableCells(compact).filter(Boolean);
+  if (cells.length > 1) {
+    const first = cleanContextLabel(cells[0]);
+    const allHeadings = cells.every((cell) =>
+      sectionHeadingPattern.test(cleanContextLabel(cell))
+      || /^(?:诊断所见|诊断结果|检查描述|检查提示)$/.test(cleanContextLabel(cell))
+    );
+    const bilingualHeading = (sectionHeadingPattern.test(first) || reportHeadingPattern.test(first))
+      && cells.slice(1).every((cell) => /^[A-Za-z][A-Za-z\s&/()-]{2,}$/.test(cell));
+    if (allHeadings || bilingualHeading) return "section";
+    return null;
+  }
   const sectionText = compact
     .replace(/^【\s*|\s*】$/g, "")
     .replace(/[:：]$/, "")
@@ -801,7 +953,7 @@ function parseLines(value: string, pageNumber: number, aliases: DictionaryAliasR
       localObservation: null
     }];
   });
-  return reconstructPageLayout(lines, aliases);
+  return mergeWrappedPageLines(reconstructPageLayout(lines, aliases), aliases);
 }
 
 function repeatedLineFingerprint(value: string) {
@@ -829,7 +981,7 @@ function isLowValueNoise(line: PlannedOcrLine) {
 }
 
 function isEducationPage(lines: PlannedOcrLine[]) {
-  const heading = lines.slice(0, 10).some((line) => educationHeadingPattern.test(line.text.trim()));
+  const heading = lines.slice(0, 5).some((line) => educationHeadingPattern.test(line.text.trim()));
   if (!heading) return false;
   return !lines.some((line) => line.boundary === "table_header");
 }
@@ -896,6 +1048,35 @@ function cleanRebuiltPages(pages: RebuiltOcrPage[]) {
   });
 }
 
+function repairCrossPageContexts(pages: RebuiltOcrPage[]) {
+  let previousLastCandidate: PlannedOcrLine | null = null;
+  return pages.map((page): RebuiltOcrPage => {
+    const firstBoundaryIndex = page.lines.findIndex((line) => Boolean(line.boundary));
+    const continuationLines = firstBoundaryIndex < 0 ? page.lines : page.lines.slice(0, firstBoundaryIndex);
+    let beforeBoundary = Boolean(
+      continuationLines.some((line) => line.candidate)
+      && previousLastCandidate?.candidate
+      && previousLastCandidate.sectionName
+    );
+    const lines = page.lines.map((line) => {
+      if (line.boundary) beforeBoundary = false;
+      if (!beforeBoundary || !line.candidate || line.sectionName) return line;
+      const sectionName = previousLastCandidate?.sectionName || null;
+      return {
+        ...line,
+        sectionName,
+        reportSectionName: previousLastCandidate?.reportSectionName || null,
+        tableHeaderText: line.tableHeaderText || previousLastCandidate?.tableHeaderText || null,
+        localObservation: line.localObservation
+          ? { ...line.localObservation, sectionName }
+          : null
+      };
+    });
+    previousLastCandidate = [...lines].reverse().find((line) => line.candidate) || null;
+    return { ...page, lines };
+  });
+}
+
 function renderCompletePage(page: Pick<RebuiltOcrPage, "pageNumber" | "lines">) {
   return `[第 ${page.pageNumber} 页]\n${page.lines.map((line) => line.text).join("\n")}`;
 }
@@ -905,8 +1086,11 @@ export function rebuildOcrPages(rows: Array<{ pageId: string; pageNumber: number
   let educationContinuation = false;
   let lineContext: PageLineContext = {
     section: null,
+    reportSection: null,
     narrativeActive: false,
-    tableHeader: null
+    tableHeader: null,
+    pageNumber: null,
+    endedWithCandidate: false
   };
   const pages = rows.map((row): RebuiltOcrPage => {
     const parsed = parseLines(row.linesJson, row.pageNumber, aliases);
@@ -918,7 +1102,9 @@ export function rebuildOcrPages(rows: Array<{ pageId: string; pageNumber: number
     );
     const startsEducation = isEducationPage(parsedLines);
     const restartsReportContent = parsedLines.slice(0, 12).some((line) =>
-      line.boundary === "table_header" || reportContentRestartPattern.test(line.text.trim())
+      line.boundary === "table_header"
+      || reportContentRestartPattern.test(line.text.trim())
+      || documentAnchorHeadingPattern.test(cleanContextLabel(splitTableCells(line.text)[0] || ""))
     );
     if (educationContinuation && restartsReportContent) educationContinuation = false;
     if (startsEducation) educationContinuation = true;
@@ -958,7 +1144,7 @@ export function rebuildOcrPages(rows: Array<{ pageId: string; pageNumber: number
       classification: classifyReportContent(text)
     };
   });
-  return cleanRebuiltPages(pages);
+  return repairCrossPageContexts(cleanRebuiltPages(pages));
 }
 
 function unitFromPages(pages: RebuiltOcrPage[]): AiExtractionUnit {
@@ -1007,8 +1193,38 @@ function unitFromPages(pages: RebuiltOcrPage[]): AiExtractionUnit {
   };
 }
 
-function scalarRouteUnit(unit: AiExtractionUnit, pages: RebuiltOcrPage[]) {
-  return unitFromRanges("complete_pages", unit.pageRanges, pages, "scalar", false);
+function packScalarUnits(baseUnits: AiExtractionUnit[], pages: RebuiltOcrPage[]) {
+  const ranges = baseUnits.flatMap((unit) => unit.pageRanges).filter((range) => {
+    const page = pages.find((item) => item.pageId === range.pageId);
+    return page?.lines.some((line) =>
+      line.index >= range.lineStart
+      && line.index <= range.lineEnd
+      && line.candidateKind === "scalar"
+      && !line.localObservation
+    );
+  });
+  const units: AiExtractionUnit[] = [];
+  let pending: typeof ranges = [];
+  const flush = () => {
+    if (!pending.length) return;
+    units.push(unitFromRanges("complete_pages", pending, pages, "scalar", false));
+    pending = [];
+  };
+  for (const range of ranges) {
+    const combined = unitFromRanges("complete_pages", [...pending, range], pages, "scalar", false);
+    if (
+      pending.length
+      && (
+        combined.pageNumbers.length > aiInputPlanningPolicy.maxPagesPerUnit
+        || combined.characterCount > aiInputPlanningPolicy.targetCharacters
+        || combined.estimatedOutputTokens > aiInputPlanningPolicy.targetOutputTokens
+        || combined.candidateRowCount > aiInputPlanningPolicy.maxCandidateRowsPerUnit
+      )
+    ) flush();
+    pending.push(range);
+  }
+  flush();
+  return units.filter((unit) => unit.candidateRowCount > 0);
 }
 
 function packMorphologyUnits(baseUnits: AiExtractionUnit[], pages: RebuiltOcrPage[]) {
@@ -1045,11 +1261,33 @@ function packMorphologyUnits(baseUnits: AiExtractionUnit[], pages: RebuiltOcrPag
 }
 
 function packNarrativeUnits(baseUnits: AiExtractionUnit[], pages: RebuiltOcrPage[]) {
-  return baseUnits.flatMap((unit) => {
-    const narrative = unitFromRanges("complete_pages", unit.pageRanges, pages, "narrative", false);
-    return narrative.text.replace(/\[解析任务：原文章节\]|\[第 \d+ 页(?: · 内容分块 \d+\/\d+)?\]/g, "").trim()
-      ? [narrative] : [];
+  const ranges = baseUnits.flatMap((unit) => unit.pageRanges).filter((range) => {
+    const narrative = unitFromRanges("complete_pages", [range], pages, "narrative", false);
+    return Boolean(narrative.text
+      .replace(/\[解析任务：原文章节\]|\[第 \d+ 页(?: · 内容分块 \d+\/\d+)?\]/g, "")
+      .trim());
   });
+  const units: AiExtractionUnit[] = [];
+  let pending: typeof ranges = [];
+  const flush = () => {
+    if (!pending.length) return;
+    units.push(unitFromRanges("complete_pages", pending, pages, "narrative", false));
+    pending = [];
+  };
+  for (const range of ranges) {
+    const combined = unitFromRanges("complete_pages", [...pending, range], pages, "narrative", false);
+    if (
+      pending.length
+      && (
+        combined.pageNumbers.length > aiInputPlanningPolicy.maxSparsePagesPerUnit
+        || combined.characterCount > aiInputPlanningPolicy.targetCharacters
+        || combined.estimatedOutputTokens > aiInputPlanningPolicy.targetOutputTokens
+      )
+    ) flush();
+    pending.push(range);
+  }
+  flush();
+  return units;
 }
 
 function documentProfileUnit(
@@ -1223,10 +1461,7 @@ export function planRebuiltOcrPages(reportId: string, pages: RebuiltOcrPage[]): 
   const documentUnit = documentProfileUnit(pages, documentClassification, includeSinglePageScalars);
   const scalarUnits = includeSinglePageScalars
     ? []
-    : baseUnits.flatMap((unit) => {
-        const scalar = scalarRouteUnit(unit, pages);
-        return scalar.candidateRowCount > 0 ? [scalar] : [];
-      });
+    : packScalarUnits(baseUnits, pages);
   const units = [
     documentUnit,
     ...scalarUnits,

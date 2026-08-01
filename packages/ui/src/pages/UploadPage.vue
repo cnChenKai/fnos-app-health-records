@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, ref } from "vue";
 import {
   ArrowDown, ArrowUp, Camera, CheckCircle2, CircleAlert, FileImage, FileText,
   ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
@@ -26,7 +26,7 @@ type UploadResult = {
 type ProcessingJob = {
   id: string;
   jobType: "pdf_extract" | "thumbnail" | "ocr" | "ai_extract";
-  status: "queued" | "processing" | "completed" | "failed";
+  status: "queued" | "processing" | "completed" | "failed" | "cancelled";
   attempts: number;
   errorMessage: string | null;
   ocrTextLength?: number | null;
@@ -44,9 +44,11 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 const totalBytes = computed(() => items.value.reduce((total, item) => total + item.file.size, 0));
 const completedJobs = computed(() => jobs.value.filter((job) => job.status === "completed").length);
 const failedJobs = computed(() => jobs.value.filter((job) => job.status === "failed"));
-const finishedJobs = computed(() => completedJobs.value + failedJobs.value.length);
+const cancelledJobs = computed(() => jobs.value.filter((job) => job.status === "cancelled").length);
+const finishedJobs = computed(() => completedJobs.value + failedJobs.value.length + cancelledJobs.value);
 const progressPercent = computed(() => jobs.value.length ? Math.round(finishedJobs.value / jobs.value.length * 100) : 0);
-const jobsSettled = computed(() => jobs.value.length > 0 && jobs.value.every((job) => ["completed", "failed"].includes(job.status)));
+const jobsSettled = computed(() => jobs.value.length > 0 && jobs.value.every((job) => ["completed", "failed", "cancelled"].includes(job.status)));
+const uploadFinishedSuccessfully = computed(() => jobs.value.length > 0 && jobs.value.every((job) => job.status === "completed"));
 /* 全部任务结束且 OCR 全为空：原件大概率不是有效报告，需要明确告知用户而不是只发一条通知 */
 const ocrEmptyWarning = computed(() => {
   if (!jobsSettled.value || failedJobs.value.length) return false;
@@ -157,26 +159,47 @@ function stopPolling() {
   pollTimer = null;
 }
 
+function clearFinishedUpload() {
+  stopPolling();
+  result.value = null;
+  jobs.value = [];
+  error.value = "";
+}
+
 function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
 }
 
 async function refreshJobs(includeRuntime = false) {
   if (!result.value) return;
+  const reportId = result.value.reportId;
   try {
     /* OCR 运行状态仅在提交后首次刷新时查询，轮询周期内不再重复请求 */
     const [nextJobs, ocr] = await Promise.all([
-      request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(result.value.reportId)}`),
+      request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(reportId)}`),
       includeRuntime && app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
+    if (result.value?.reportId !== reportId) return;
     jobs.value = nextJobs;
     if (ocr) runtimeAvailable.value = ocr.available;
-    if (nextJobs.length && nextJobs.every((job) => ["completed", "failed"].includes(job.status))) {
+    if (nextJobs.some((job) => job.status === "cancelled")) {
+      app.notifyDataChanged();
+      clearFinishedUpload();
+      return;
+    }
+    if (nextJobs.length && nextJobs.every((job) => ["completed", "failed", "cancelled"].includes(job.status))) {
       stopPolling();
       app.notifyDataChanged();
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "无法获取任务状态";
+    if (result.value?.reportId !== reportId) return;
+    const message = cause instanceof Error ? cause.message : "无法获取任务状态";
+    /* 已永久删除的历史上传不再是待处理任务，清掉缓存面板即可。 */
+    if (message.includes("报告不存在") && message.includes("HTTP 404")) {
+      clearFinishedUpload();
+      return;
+    }
+    error.value = message;
     stopPolling();
   }
 }
@@ -225,9 +248,18 @@ onBeforeUnmount(() => {
   clearQueue();
   stopPolling();
 });
+/* 已完成的上传只在当前停留期间保留结果；离开后回到干净的上传工作台。失败任务继续保留以便重试。 */
+onDeactivated(() => {
+  if (uploadFinishedSuccessfully.value || cancelledJobs.value) clearFinishedUpload();
+});
 /* 任务未跑完时后台（KeepAlive 失活）也保持轮询，完成后广播数据变更；回到页面时补一次刷新 */
 onActivated(() => {
-  if (result.value) startPolling();
+  if (!result.value) return;
+  if (uploadFinishedSuccessfully.value || cancelledJobs.value) {
+    clearFinishedUpload();
+    return;
+  }
+  startPolling();
 });
 </script>
 

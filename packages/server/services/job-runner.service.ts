@@ -14,6 +14,7 @@ import {
 } from "./ai-extraction.service";
 import { executeAiExtractionPlan } from "./ai-extraction-orchestrator.service";
 import { rebuildMorphologyTrackingForReport } from "./morphology-finding.service";
+import { normalizeReportObservations } from "./indicator-normalization.service";
 import { listManualReportFieldKeys, reportFieldDefinitions } from "./report-field-overrides.service";
 import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
 
@@ -659,6 +660,21 @@ export async function processNextJob(
             indicatorNormalization
           }
         });
+      } else {
+        const indicatorNormalization = normalizeReportObservations(job.reportId);
+        appendJobEvent({
+          jobId: job.id,
+          reportId: job.reportId,
+          eventType: "completed",
+          status: "completed",
+          attempt: job.attempts,
+          message: "已恢复指标归一化并完成任务",
+          detail: {
+            jobType: "ai_extract",
+            resumedFromPersistedExtraction: true,
+            indicatorNormalization
+          }
+        });
       }
       getDatabase().prepare(`
         UPDATE processing_jobs SET status = 'completed', locked_at = NULL, lease_expires_at = NULL,
@@ -812,27 +828,6 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
     throw createError({ statusCode: 409, statusMessage: "暂无可用于 AI 整理的 OCR 文本" });
   }
   if (Number(counts.activeAi) > 0) throw createError({ statusCode: 409, statusMessage: "AI 整理任务已在队列中" });
-  if (Number(counts.completedAi) > 0) {
-    const content = db.prepare(`
-      SELECT
-        (
-          NULLIF(TRIM(COALESCE(summary, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(findings, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(impression, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(recommendation, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(clinical_diagnosis, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(purpose, '')), '') IS NOT NULL
-          OR NULLIF(TRIM(COALESCE(chief_complaint, '')), '') IS NOT NULL
-          OR EXISTS (SELECT 1 FROM observations WHERE report_id = reports.id)
-          OR EXISTS (SELECT 1 FROM morphology_findings WHERE report_id = reports.id)
-        ) AS hasContent
-      FROM reports WHERE id = ?
-    `).get(reportId) as { hasContent: number } | undefined;
-    if (Number(content?.hasContent || 0) > 0) {
-      throw createError({ statusCode: 409, statusMessage: "这份报告已经完成 AI 整理" });
-    }
-  }
-
   const failedAi = db.prepare(`
     SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'ai_extract' AND status = 'failed'
     ORDER BY created_at DESC LIMIT 1
@@ -1035,4 +1030,123 @@ export function listProcessingJobEvents(user: RequestUser, jobId: string) {
     try { detail = JSON.parse(event.detailJson) as Record<string, unknown>; } catch { /* ignore malformed legacy detail */ }
     return { ...event, detail, detailJson: undefined };
   });
+}
+
+type ProcessingJobEventItem = ReturnType<typeof listProcessingJobEvents>[number];
+
+function parseNumberArray(value: string) {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is number => typeof item === "number" && Number.isFinite(item))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AI jobs execute units concurrently, so raw event timestamps do not represent
+ * the planned reading order. This projection keeps the raw history intact but
+ * makes the extraction plan the primary progress model for clients.
+ */
+export function getProcessingJobEventDetail(user: RequestUser, jobId: string) {
+  const db = getDatabase();
+  const job = db.prepare(`
+    SELECT j.id, j.report_id AS reportId, r.member_id AS memberId,
+      j.job_type AS jobType, j.status, j.attempts, j.error_code AS errorCode,
+      j.error_message AS errorMessage, j.created_at AS createdAt,
+      j.started_at AS startedAt, j.finished_at AS finishedAt
+    FROM processing_jobs j JOIN reports r ON r.id = j.report_id WHERE j.id = ?
+  `).get(jobId) as {
+    id: string;
+    reportId: string;
+    memberId: string;
+    jobType: JobRow["jobType"];
+    status: string;
+    attempts: number;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+  } | undefined;
+  if (!job) throw createError({ statusCode: 404, statusMessage: "处理任务不存在" });
+  assertMemberAccess(user, job.memberId);
+  const { memberId: _memberId, ...publicJob } = job;
+
+  const events = listProcessingJobEvents(user, jobId);
+  if (job.jobType !== "ai_extract") {
+    return { job: publicJob, units: [], generalEvents: events };
+  }
+
+  const unitRows = db.prepare(`
+    SELECT id, unit_key AS unitKey, unit_index AS unitIndex, unit_type AS unitType,
+      page_numbers_json AS pageNumbersJson, status, attempts, model,
+      prompt_tokens AS promptTokens, completion_tokens AS completionTokens,
+      elapsed_ms AS elapsedMs, error_code AS errorCode, error_message AS errorMessage,
+      started_at AS startedAt, finished_at AS finishedAt
+    FROM ai_extraction_units
+    WHERE job_id = ? AND status <> 'superseded'
+    ORDER BY CASE WHEN unit_type = 'supplement' THEN 1 ELSE 0 END, unit_index, id
+  `).all(jobId) as Array<{
+    id: string;
+    unitKey: string;
+    unitIndex: number;
+    unitType: "complete_pages" | "page_chunk" | "supplement";
+    pageNumbersJson: string;
+    status: "planned" | "processing" | "completed" | "warning" | "failed";
+    attempts: number;
+    model: string | null;
+    promptTokens: number | null;
+    completionTokens: number | null;
+    elapsedMs: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+  }>;
+  const unitEvents = new Map<string, ProcessingJobEventItem[]>();
+  const generalEvents: ProcessingJobEventItem[] = [];
+  const unitKeys = new Set(unitRows.map((unit) => unit.unitKey));
+  const unitsByIndex = new Map<number, typeof unitRows>();
+  for (const unit of unitRows) {
+    const matches = unitsByIndex.get(unit.unitIndex) || [];
+    matches.push(unit);
+    unitsByIndex.set(unit.unitIndex, matches);
+  }
+  for (const event of events) {
+    const detail = (event.detail || {}) as Record<string, unknown>;
+    const eventUnitKey = typeof detail.unitKey === "string" ? detail.unitKey : null;
+    const eventUnitIndex = typeof detail.unitIndex === "number" ? detail.unitIndex : null;
+    const legacyIndexMatch = eventUnitIndex == null ? null : unitsByIndex.get(eventUnitIndex);
+    const resolvedKey = eventUnitKey && unitKeys.has(eventUnitKey)
+      ? eventUnitKey
+      : legacyIndexMatch?.length === 1 ? legacyIndexMatch[0]?.unitKey : null;
+    if (!resolvedKey) {
+      generalEvents.push(event);
+      continue;
+    }
+    const matched = unitEvents.get(resolvedKey) || [];
+    matched.push(event);
+    unitEvents.set(resolvedKey, matched);
+  }
+
+  const units = unitRows.map(({ pageNumbersJson, ...unit }) => ({
+    ...unit,
+    pageNumbers: parseNumberArray(pageNumbersJson),
+    events: unitEvents.get(unit.unitKey) || []
+  })).sort((left, right) => {
+    const leftSupplement = left.unitType === "supplement" ? 1 : 0;
+    const rightSupplement = right.unitType === "supplement" ? 1 : 0;
+    return leftSupplement - rightSupplement
+      || (left.pageNumbers[0] ?? Number.MAX_SAFE_INTEGER) - (right.pageNumbers[0] ?? Number.MAX_SAFE_INTEGER)
+      || left.unitIndex - right.unitIndex
+      || left.id.localeCompare(right.id);
+  });
+  return {
+    job: publicJob,
+    units,
+    generalEvents
+  };
 }

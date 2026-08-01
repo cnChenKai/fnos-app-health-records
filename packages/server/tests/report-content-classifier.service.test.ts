@@ -77,6 +77,26 @@ test("builds a routed prompt from the local content classification", () => {
   assert.doesNotMatch(prompt, /票据内容：重点识别/);
 });
 
+test("does not treat checkup history and physical-exam rows as an outpatient record", () => {
+  const prompt = promptForInput({
+    reportId: "report",
+    text: "[第 6 页]\n主诉 | 无特殊\n体格检查\n营养 | 营养良好",
+    inputCharacters: 42,
+    pageCount: 1,
+    primaryContentType: "outpatient",
+    contentTypes: ["outpatient"],
+    classificationConfidence: 0.8,
+    documentContentType: "checkup",
+    extractionMode: "scalar",
+    route: "narrative",
+    allowDocumentFields: false
+  });
+  assert.match(prompt, /当前单元为体检内容/);
+  assert.match(prompt, /整份文档主类型为体检/);
+  assert.doesNotMatch(prompt, /outpatient_history/);
+  assert.doesNotMatch(prompt, /门诊内容：重点提取/);
+});
+
 test("uses a minimal output contract for scalar units", () => {
   const prompt = promptForInput({
     reportId: "report",
@@ -94,6 +114,24 @@ test("uses a minimal output contract for scalar units", () => {
   assert.doesNotMatch(prompt, /medications 使用/);
   assert.doesNotMatch(prompt, /billingSummary 使用/);
   assert.doesNotMatch(prompt, /morphologyFindings.size/);
+});
+
+test("uses one typed contract for consolidated omission verification", () => {
+  const prompt = promptForInput({
+    reportId: "report",
+    text: "[第 1 页 · 指标遗漏候选补提取]\n总胆固醇 5.3 mmol/L\n[第 2 页 · 形态发现遗漏候选补提取]\n右肾囊肿 8×6 mm",
+    inputCharacters: 88,
+    pageCount: 2,
+    promptMode: "supplement",
+    extractionMode: "scalar",
+    route: "verification",
+    primaryContentType: "checkup",
+    contentTypes: ["checkup", "imaging"],
+    documentContentType: "checkup"
+  });
+  assert.match(prompt, /统一遗漏核对/);
+  assert.match(prompt, /只输出 observations 和 morphologyFindings/);
+  assert.match(prompt, /不能把形态发现写入 observations/);
 });
 
 test("keeps internal checkup routing metadata out of document fields", () => {

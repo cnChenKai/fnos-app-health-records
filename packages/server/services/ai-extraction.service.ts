@@ -21,7 +21,7 @@ import {
 } from "../domain/health-record";
 import { reportStructuredSectionLabels } from "./report-structured-section.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v4";
+export const aiExtractionPromptVersion = "health-record-routed-v6";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -259,7 +259,7 @@ export type AiExtractionInput = {
   pageNumbers?: number[];
   promptMode?: "standard" | "json_retry" | "supplement";
   extractionMode?: "scalar" | "morphology";
-  route?: "document" | "scalar" | "morphology" | "narrative";
+  route?: "document" | "scalar" | "morphology" | "narrative" | "verification";
   allowDocumentFields?: boolean;
   primaryContentType?: ReportContentType;
   contentTypes?: ReportContentType[];
@@ -1014,8 +1014,32 @@ size 只使用原文明确的 length、width、height、unit；measurements 每�
 检查标题、占位名称、一般正常描述、检查方法和建议不得作为形态发现。presence=absent 仅限原文点名具体对象，例如“未见甲状腺结节”。没有符合项时返回 {"morphologyFindings":[]}。`;
 }
 
+function verificationContract() {
+  return `当前任务是所有主解析单元完成后的统一遗漏核对，只输出 observations 和 morphologyFindings。
+输入已按“指标遗漏候选”或“形态发现遗漏候选”标明类型；必须逐行核对，不能把形态发现写入 observations，也不能把定量、定性指标写入 morphologyFindings。
+
+指标规则：
+${observationContract().replace(/^只输出 observations。/, "")}
+
+形态发现规则：
+${morphologyContract().replace(/^当前任务只输出 morphologyFindings。/, "")}`;
+}
+
+function effectiveContentTypes(input: AiExtractionInput) {
+  const source = input.contentTypes?.length ? input.contentTypes : [input.primaryContentType || "other"];
+  const unique = source.filter((type, index, list) => list.indexOf(type) === index);
+  if (input.documentContentType !== "checkup") return unique.slice(0, 2);
+  /*
+   * Composite checkups commonly contain table labels such as 主诉、既往史 and
+   * 体格检查. They are checkup items, not embedded outpatient/inpatient records.
+   * Strongly typed laboratory/imaging/etc. component pages remain available.
+   */
+  return ["checkup", ...unique.filter((type) => !["checkup", "outpatient", "inpatient"].includes(type))]
+    .slice(0, 2) as ReportContentType[];
+}
+
 function narrativeContract(input: AiExtractionInput) {
-  const types = new Set(input.contentTypes?.length ? input.contentTypes : [input.primaryContentType || "other"]);
+  const types = new Set(effectiveContentTypes(input));
   const parts = [
     `当前任务只整理原报告叙事章节，不输出 observations、morphologyFindings 或文档概况字段。所有 content 必须忠实保留原文，不得概括或补写。`
   ];
@@ -1075,9 +1099,7 @@ const typePromptPlugins: Partial<Record<ReportContentType, string>> = {
 };
 
 function routedPrompt(input: AiExtractionInput) {
-  const types = (input.contentTypes?.length ? input.contentTypes : [input.primaryContentType || "other"])
-    .filter((type, index, list) => list.indexOf(type) === index)
-    .slice(0, 2);
+  const types = effectiveContentTypes(input);
   const plugins = types.flatMap((type) => typePromptPlugins[type] ? [typePromptPlugins[type]!] : []);
   const routeSummary = `\n服务端本地分类：当前单元为${types.map((type) => contentTypeLabels[type]).join("、")}内容`
     + `；整份文档主类型为${contentTypeLabels[input.documentContentType || input.primaryContentType || "other"]}`
@@ -1093,6 +1115,8 @@ export function promptForInput(input: AiExtractionInput) {
     ? documentContract(input)
     : route === "morphology"
       ? morphologyContract()
+      : route === "verification"
+        ? verificationContract()
       : route === "narrative"
         ? narrativeContract(input)
         : observationContract();
@@ -1747,7 +1771,7 @@ function protectedStructuredSections(reportId: string) {
 export function persistAiExtraction(reportId: string, jobId: string, result: AiExtractionResult, inputCharacters: number) {
   const db = getDatabase();
   const existing = db.prepare("SELECT 1 AS found FROM report_extractions WHERE job_id = ?").get(jobId) as { found: number } | undefined;
-  if (existing) return;
+  if (existing) return normalizeReportObservations(reportId);
   const initial = normalizeAiExtraction({ ...result.fields, evidence: result.evidence, confidence: result.confidence });
   const normalized = normalizeAiExtraction({
     ...initial.fields,
@@ -1772,6 +1796,13 @@ export function persistAiExtraction(reportId: string, jobId: string, result: AiE
     values.push(value);
   };
   const generatedTitle = buildReportTitle(fields);
+  if (fields.reportType === "checkup") {
+    fields.bodyParts = fields.bodyParts.filter((item) =>
+      !/^(?:综合体检|健康体检|体检|physicalexam|checkup)$/i.test(
+        `${item.name || item.raw}`.normalize("NFKC").replace(/[\s_-]+/g, "")
+      )
+    );
+  }
   if (!manualFieldKeys.has("title")) {
     updates.push("title = CASE WHEN title = '待识别报告' THEN ? ELSE title END");
     values.push(generatedTitle);
@@ -1787,8 +1818,8 @@ export function persistAiExtraction(reportId: string, jobId: string, result: AiE
   set("performingDepartment", "performing_department", fields.performingDepartment);
   set("reportingDepartment", "reporting_department", fields.reportingDepartment);
   set("inpatientWard", "inpatient_ward", fields.inpatientWard);
-  if (fields.bodyParts.length) set("bodyParts", "body_parts_json", JSON.stringify(fields.bodyParts));
-  if (Object.keys(fields.identifiers).length) set("identifiers", "identifiers_json", JSON.stringify(fields.identifiers));
+  set("bodyParts", "body_parts_json", JSON.stringify(fields.bodyParts));
+  set("identifiers", "identifiers_json", JSON.stringify(fields.identifiers));
   set("reportIssuedAt", "report_issued_at", deterministicDates.reportIssuedAt || fields.reportIssuedAt);
   set("examinedAt", "examined_at", deterministicDates.examinedAt || fields.examinedAt);
   set("orderedAt", "ordered_at", fields.orderedAt);

@@ -6,6 +6,7 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
+  getProcessingJobEventDetail,
   listProcessingJobEvents,
   processNextJob,
   queueManualAiExtraction,
@@ -423,6 +424,49 @@ test("records processing job event history for attempts and failures", async () 
   });
 });
 
+test("projects concurrent AI events onto the stable planned unit order", async () => {
+  await withDatabase(async () => {
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "ordered-ai-report.png", data: pngBytes() }
+    ]);
+    const job = getDatabase().prepare(`
+      SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'thumbnail'
+    `).get(upload.reportId) as { id: string };
+    getDatabase().prepare(`
+      UPDATE processing_jobs SET job_type = 'ai_extract', status = 'processing', started_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(job.id);
+    const insertUnit = getDatabase().prepare(`
+      INSERT INTO ai_extraction_units (
+        id, job_id, report_id, plan_hash, unit_key, unit_index, unit_type,
+        page_numbers_json, input_hash, status, attempts, elapsed_ms
+      ) VALUES (?, ?, ?, 'plan', ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertUnit.run("unit-second", job.id, upload.reportId, "key-second", 1, "complete_pages", "[3,4]", "hash-2", "completed", 1, 900);
+    // Split child indexes can be much larger than later top-level units; page order remains authoritative for display.
+    insertUnit.run("unit-first", job.id, upload.reportId, "key-first", 1001, "page_chunk", "[1,2]", "hash-1", "processing", 2, null);
+    insertUnit.run("unit-supplement", job.id, upload.reportId, "key-supplement", 99, "supplement", "[2]", "hash-3", "planned", 0, null);
+    const insertEvent = getDatabase().prepare(`
+      INSERT INTO processing_job_events (
+        id, job_id, report_id, event_type, status, attempt, message, detail_json, created_at
+      ) VALUES (?, ?, ?, ?, 'processing', 1, ?, ?, ?)
+    `);
+    insertEvent.run("event-second", job.id, upload.reportId, "completed", "第二单元先完成", JSON.stringify({
+      unitKey: "key-second", unitIndex: 1, pageNumbers: [3, 4]
+    }), "2026-07-31 10:00:00");
+    insertEvent.run("event-first", job.id, upload.reportId, "started", "第一单元仍在处理", JSON.stringify({
+      unitKey: "key-first", unitIndex: 1001, pageNumbers: [1, 2]
+    }), "2026-07-31 10:00:01");
+
+    const detail = getProcessingJobEventDetail(manager, job.id);
+    assert.deepEqual(detail.units.map((unit) => unit.unitKey), ["key-first", "key-second", "key-supplement"]);
+    assert.deepEqual(detail.units.map((unit) => unit.status), ["processing", "completed", "planned"]);
+    assert.deepEqual(detail.units[0]?.events.map((event) => event.id), ["event-first"]);
+    assert.deepEqual(detail.units[1]?.events.map((event) => event.id), ["event-second"]);
+    assert.equal(detail.generalEvents.some((event) => event.eventType === "queued"), true);
+  });
+});
+
 test("queues AI extraction after OCR, redacts identity data, and persists validated fields", async () => {
   await withDatabase(async () => {
     saveAiSettings({
@@ -603,12 +647,21 @@ test("queues AI extraction after OCR, redacts identity data, and persists valida
     assert.deepEqual({ promptTokens: extraction.promptTokens, completionTokens: extraction.completionTokens }, { promptTokens: 240, completionTokens: 160 });
     assert.doesNotMatch(extraction.rawResponseJson, new RegExp(`${samplePhone}|${sampleIdentityCard}`));
 
+    getDatabase().prepare(`
+      DELETE FROM observation_normalizations
+      WHERE observation_id IN (SELECT id FROM observations WHERE report_id = ?)
+    `).run(upload.reportId);
     getDatabase().prepare("UPDATE processing_jobs SET status = 'queued' WHERE id = ?").run(queuedAi.id);
     assert.equal(await processNextJob(worker, ai), true);
     assert.equal(aiCalls, 2);
     const observationCount = getDatabase().prepare("SELECT COUNT(*) AS count FROM observations WHERE report_id = ?")
       .get(upload.reportId) as { count: number };
     assert.equal(observationCount.count, 1);
+    const restoredNormalization = getDatabase().prepare(`
+      SELECT COUNT(*) AS count FROM observation_normalizations
+      WHERE observation_id IN (SELECT id FROM observations WHERE report_id = ?)
+    `).get(upload.reportId) as { count: number };
+    assert.equal(restoredNormalization.count, 1);
   });
 });
 
@@ -650,6 +703,49 @@ test("allows manual AI extraction again when a previous AI job produced no struc
       WHERE report_id = ? AND job_type = 'ai_extract' AND status = 'queued'
     `).get(upload.reportId) as { count: number };
     assert.equal(queuedManualCount.count, 1);
+  });
+});
+
+test("queues a new AI job for a completed report without deleting the current structured content", async () => {
+  await withDatabase(async () => {
+    saveAiSettings({
+      enabled: true,
+      baseUrl: "https://ai.example.test/v1",
+      textModel: "health-structurer",
+      apiKey: "test-secret"
+    });
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "completed-ai.png", data: pngBytes() }
+    ]);
+    const worker: WorkerExecutor = async (request) => request.action === "thumbnail"
+      ? { ok: true, width: 240, height: 320, elapsedMs: 5 }
+      : {
+          ok: true,
+          engine: "test-ocr",
+          modelVersion: "test-v1",
+          lines: [{ text: "体检报告 血糖 5.2 mmol/L", confidence: 0.99, box: [0, 0, 10, 10] }],
+          elapsedMs: 6
+        };
+    assert.equal(await processNextJob(worker), true);
+    assert.equal(await processNextJob(worker), true);
+    const db = getDatabase();
+    const completedAi = db.prepare(`
+      SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'ai_extract'
+    `).get(upload.reportId) as { id: string };
+    db.prepare(`
+      UPDATE processing_jobs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(completedAi.id);
+    db.prepare(`
+      INSERT INTO observations (id, report_id, item_name, result_text, numeric_value)
+      VALUES ('existing-observation', ?, '现有指标', '5.2', 5.2)
+    `).run(upload.reportId);
+
+    const queued = queueManualAiExtraction(manager, upload.reportId);
+    assert.equal(queued.status, "queued");
+    assert.notEqual(queued.id, completedAi.id);
+    assert.equal((db.prepare(`
+      SELECT COUNT(*) AS count FROM observations WHERE id = 'existing-observation'
+    `).get() as { count: number }).count, 1);
   });
 });
 

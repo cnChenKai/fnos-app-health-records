@@ -138,6 +138,15 @@ test("processes a long report as multiple persisted units and merges every page"
     `).get(jobId) as { total: number; completed: number };
     assert.equal(counts.total, execution.plan.unitCount);
     assert.equal(counts.completed, execution.plan.unitCount);
+    const candidates = getDatabase().prepare(`
+      SELECT COUNT(*) AS total,
+        SUM(status = 'ai_extracted') AS aiExtracted,
+        SUM(status = 'unresolved') AS unresolved
+      FROM ai_extraction_candidates WHERE job_id = ?
+    `).get(jobId) as { total: number; aiExtracted: number; unresolved: number };
+    assert.equal(candidates.total, 10);
+    assert.equal(candidates.aiExtracted, 10);
+    assert.equal(candidates.unresolved, 0);
   });
 });
 
@@ -167,6 +176,36 @@ test("keeps document title and type anchored to the first scalar unit", async ()
   }, (pageNumber) => [
     pageNumber === 1 ? "个人健康体检报告" : `第${pageNumber}页专项检查`,
     `指标${pageNumber} ${pageNumber}.2 mmol/L 参考范围 1.0-20.0`
+  ]);
+});
+
+test("fills business identifiers locally and does not persist a generic checkup body part", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "physical_exam",
+        title: "综合健康体检报告",
+        bodyParts: [{ raw: "综合体检", name: "综合体检", parent: null, laterality: "unspecified" }],
+        identifiers: {}
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.identifiers.physicalExamNo, "EXAM-2026-001");
+    assert.deepEqual(execution.result.fields.bodyParts, []);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const stored = getDatabase().prepare(`
+      SELECT body_parts_json AS bodyPartsJson, identifiers_json AS identifiersJson
+      FROM reports WHERE id = ?
+    `).get(reportId) as { bodyPartsJson: string; identifiersJson: string };
+    assert.deepEqual(JSON.parse(stored.bodyPartsJson), []);
+    assert.equal(JSON.parse(stored.identifiersJson).physicalExamNo, "EXAM-2026-001");
+  }, () => [
+    "个人健康体检报告",
+    "体检编号：EXAM-2026-001"
   ]);
 });
 
@@ -583,13 +622,13 @@ test("merges duplicate indicator variants that resolve to the same OCR source ro
 test("deduplicates the same normalized indicator across report pages before persistence", async () => {
   await withReport(9, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async (input) => {
-      const pageNumber = input.text.includes("白细胞数目(WBC)") ? 1 : 9;
-      const itemName = pageNumber === 1 ? "白细胞数目(WBC)" : "白细胞数目";
-      const resultText = pageNumber === 1 ? "5.0" : "5.00";
-      const quote = `${itemName} ${resultText} 10^9/L 参考范围 3.5-9.5`;
+      const variants = [
+        { pageNumber: 1, itemName: "白细胞数目(WBC)", resultText: "5.0" },
+        { pageNumber: 9, itemName: "白细胞数目", resultText: "5.00" }
+      ].filter((item) => input.text.includes(`${item.itemName} ${item.resultText}`));
       const normalized = normalizeAiExtraction({
         reportType: "laboratory",
-        observations: [{
+        observations: variants.map(({ pageNumber, itemName, resultText }) => ({
           sectionName: "血常规",
           itemName,
           resultText,
@@ -597,8 +636,11 @@ test("deduplicates the same normalized indicator across report pages before pers
           unit: "10^9/L",
           referenceLow: pageNumber === 1 ? null : 3.5,
           referenceHigh: pageNumber === 1 ? null : 9.5,
-          evidence: [{ pageNumber, quote }]
-        }]
+          evidence: [{
+            pageNumber,
+            quote: `${itemName} ${resultText} 10^9/L 参考范围 3.5-9.5`
+          }]
+        }))
       });
       return {
         provider: "test", model: "test", promptVersion: "test", ...normalized,
@@ -1036,6 +1078,38 @@ test("supplements only unmatched candidate rows once per page", async () => {
   }, () => ["血脂", "总胆固醇 5.3 mmol/L 参考范围 0-5.2"]);
 });
 
+test("treats a checkup summary as redundant when the detailed local table has the same indicator and result", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const modes: Array<string | undefined> = [];
+    const executor: AiExecutor = async (input) => {
+      modes.push(input.promptMode);
+      const normalized = normalizeAiExtraction({ reportType: "physical_exam", observations: [] });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(modes.includes("supplement"), false);
+    assert.equal(execution.unmatchedCandidates, 0);
+    assert.equal(execution.result.fields.observations.some((item) =>
+      /体重指数|BMI/i.test(item.itemName) && item.numericValue === 24.9
+    ), true);
+    const statuses = getDatabase().prepare(`
+      SELECT status, COUNT(*) AS count FROM ai_extraction_candidates
+      WHERE job_id = ? GROUP BY status
+    `).all(jobId) as Array<{ status: string; count: number }>;
+    assert.equal(statuses.some((item) => item.status === "local_extracted" && item.count >= 1), true);
+    assert.equal(statuses.some((item) => item.status === "redundant" && item.count >= 1), true);
+  }, () => [
+    "异常结果与健康建议",
+    "体重指数BMI值偏高(24.9)(参考值18.5~23.9)；建议合理膳食并控制体重。",
+    "【一般检查】",
+    "项目 | 本次结果 | 参考值 | 历史结果",
+    "体重指数BMI | 24.9 ↑ | 18.5~23.9 | 24.8 ↑"
+  ]);
+});
+
 test("processes every omission candidate when one page contains more than thirty rows", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     let supplementCalls = 0;
@@ -1126,7 +1200,7 @@ test("rejects fabricated observations and canonicalizes valid evidence to the OC
   }, () => ["血脂", "总胆固醇 5.3 mmol/L 参考范围 0-5.2"]);
 });
 
-test("passes dictionary facts and keeps scalar and morphology output in separate calls", async () => {
+test("passes dictionary facts and keeps scalar and morphology main output in separate calls", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const calls: Array<{ mode: string | undefined; candidates: number }> = [];
     const executor: AiExecutor = async (input) => {
@@ -1168,6 +1242,59 @@ test("passes dictionary facts and keeps scalar and morphology output in separate
     assert.deepEqual(execution.result.fields.morphologyFindings.map((item) => item.findingName), ["右肾囊肿"]);
     assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
     assert.equal(execution.result.evidenceValidation?.rejectedMorphologyFindings, 0);
+  }, () => [
+    "血脂",
+    "总胆固醇 5.3 mmol/L 参考范围 0-5.2",
+    "超声检查",
+    "右肾见囊肿，大小约 8×6 mm"
+  ]);
+});
+
+test("consolidates scalar and morphology omissions into one final verification call", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const supplementRoutes: Array<string | undefined> = [];
+    const executor: AiExecutor = async (input) => {
+      if (input.promptMode !== "supplement") {
+        const normalized = normalizeAiExtraction({ reportType: "physical_exam" });
+        return {
+          provider: "test", model: "test", promptVersion: "test", ...normalized,
+          rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+        };
+      }
+      supplementRoutes.push(input.route);
+      assert.deepEqual(
+        [...new Set((input.candidateFacts || []).map((fact) => fact.kind))].sort(),
+        ["morphology", "scalar"]
+      );
+      const normalized = normalizeAiExtraction({
+        reportType: "physical_exam",
+        observations: (input.candidateFacts || []).filter((fact) => fact.kind === "scalar").map((fact) => ({
+          itemName: "总胆固醇",
+          resultText: "5.3",
+          numericValue: 5.3,
+          unit: "mmol/L",
+          evidence: [{ pageNumber: fact.pageNumber, quote: fact.sourceText }]
+        })),
+        morphologyFindings: (input.candidateFacts || []).filter((fact) => fact.kind === "morphology").map((fact) => ({
+          sectionName: "超声检查",
+          organ: "右肾",
+          findingType: "囊肿",
+          findingName: "右肾囊肿",
+          presence: "present" as const,
+          rawText: fact.sourceText,
+          evidence: [{ pageNumber: fact.pageNumber, quote: fact.sourceText }]
+        }))
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 20, completionTokens: 10, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.deepEqual(supplementRoutes, ["verification"]);
+    assert.deepEqual(execution.result.fields.observations.map((item) => item.itemName), ["总胆固醇"]);
+    assert.deepEqual(execution.result.fields.morphologyFindings.map((item) => item.findingName), ["右肾囊肿"]);
+    assert.equal(execution.unmatchedCandidates, 0);
   }, () => [
     "血脂",
     "总胆固醇 5.3 mmol/L 参考范围 0-5.2",
@@ -1323,4 +1450,54 @@ test("routes and persists outpatient inpatient billing vaccination and pathology
       scenario.verify();
     }, () => [...scenario.lines]);
   }
+});
+
+test("rejects outpatient sections inferred from composite checkup table labels", async () => {
+  await withReport(2, async ({ reportId, jobId }) => {
+    let narrativeCalls = 0;
+    const executor: AiExecutor = async (input) => {
+      const fields = input.route === "narrative" ? {
+        reportSections: [
+          {
+            sectionKey: "outpatient_history",
+            title: "病史",
+            content: "主诉 | 无特殊",
+            p: 2,
+            q: "主诉 | 无特殊"
+          },
+          {
+            sectionKey: "outpatient_physical_examination",
+            title: "体格检查",
+            content: "营养 | 营养良好 | 营养良好",
+            p: 2,
+            q: "营养 | 营养良好 | 营养良好"
+          }
+        ]
+      } : { reportType: "physical_exam", title: "个人健康体检报告" };
+      if (input.route === "narrative") narrativeCalls += 1;
+      const normalized = normalizeAiExtraction(fields);
+      return {
+        provider: "test", model: "test", promptVersion: aiExtractionPromptVersion,
+        ...normalized, rawResponseJson: "{}", promptTokens: 10,
+        completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.ok(narrativeCalls > 0);
+    assert.deepEqual(execution.result.fields.reportSections, []);
+    assert.equal(execution.result.evidenceValidation?.rejectedStructuredSections, 2);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const stored = getDatabase().prepare(`
+      SELECT COUNT(*) AS count FROM report_structured_sections WHERE report_id = ?
+    `).get(reportId) as { count: number };
+    assert.equal(stored.count, 0);
+  }, (pageNumber) => pageNumber === 1 ? [
+    "个人健康体检报告",
+    "总检结论：本次体检完成"
+  ] : [
+    "主诉 | 无特殊",
+    "个人史 | 无特殊",
+    "体格检查",
+    "营养 | 营养良好 | 营养良好"
+  ]);
 });

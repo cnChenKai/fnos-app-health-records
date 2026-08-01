@@ -229,7 +229,7 @@ npm run pack:app
 
 当前健康档案应用已经建立：
 
-- 当前目标数据库版本为 `v16`；v13 为指标归一化结果增加标准分类和通俗说明字段，v14 为全局指标目录增加 AI 管理标记，v15 增加核心/远程指标字典运行时，v16 最终补齐字典物化列并新增 `morphology_findings`、`ai_extraction_units`、`ai_extraction_attempts`、诊断/用药/诊疗/接种/费用领域表和 `report_structured_sections`。这些结构直接并入尚未发布的 v16，因此不额外增加 v17；已记录早期 v16 的数据库会在启动时通过最终 Schema 幂等补表且仍保持 v16。v16 正式发布后再调整任何表结构必须新增迁移版本。
+- 当前目标数据库版本为 `v17`；v13 为指标归一化结果增加标准分类和通俗说明字段，v14 为全局指标目录增加 AI 管理标记，v15 增加核心/远程指标字典运行时，v16 最终补齐字典物化列并新增 `morphology_findings`、`ai_extraction_units`、`ai_extraction_attempts`、诊断/用药/诊疗/接种/费用领域表和 `report_structured_sections`，v17 新增 `ai_extraction_candidates` 保存解析候选的本地提取、AI 提取、冗余、忽略和待核对状态。完整 v16 会按标准迁移升级到 v17，升级过程不会自动调用外部 AI。
 - 形态变化追踪复用 v16 `morphology_findings.tracking_group_id` 和 `match_confidence`，本次闭环不新增表、字段或数据库版本。应用启动仅在本地规则版本变化时幂等重建一次追踪关系，不调用外部 AI；管理员维护操作同样只更新这两个关联字段。
 - `schema_migrations`：数据库迁移记录。
 - `app_upgrade_history`：应用版本升级记录。

@@ -6,6 +6,7 @@ import { getAppConfig } from "../utils/runtime-config";
 import {
   databaseMigrations,
   ensureClinicalFactColumns,
+  repairIncompatibleAiReportSections,
   repairReportDisplayMetadata,
   tableColumnNames
 } from "./migrations";
@@ -35,6 +36,7 @@ const countedTables = [
   "ai_extraction_units",
   "ai_extraction_unit_routes",
   "ai_extraction_attempts",
+  "ai_extraction_candidates",
   "report_field_overrides",
   "reminders",
   "app_notifications",
@@ -186,6 +188,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
     repairReportDisplayMetadata(db);
+    repairIncompatibleAiReportSections(db);
     ensureMigrationMetadataColumns(db);
     const upgradeId = beginUpgradeHistory(db, null, appVersion, 0);
     for (const migration of databaseMigrations) recordMigration(db, migration.version, 0);
@@ -231,6 +234,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
     repairReportDisplayMetadata(db);
+    repairIncompatibleAiReportSections(db);
     ensureMigrationMetadataColumns(db);
     if (needsUpgradeRecord && !upgradeId && tableExists(db, "app_upgrade_history")) {
       upgradeId = beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion);

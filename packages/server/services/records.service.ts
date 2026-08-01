@@ -38,6 +38,7 @@ import type {
   ReportSummary,
   VaccinationRecord
 } from "../domain/health-record";
+import { isAiReportStructuredSectionCompatible } from "../domain/health-record";
 import { getAppConfig } from "../utils/runtime-config";
 import { createId } from "../utils/identifier";
 import { schemaVersion } from "../database/schema";
@@ -978,7 +979,9 @@ export function getReportDetail(user: RequestUser, reportId: string): ReportDeta
       evidenceJson: undefined,
       manualFieldsJson: undefined
     };
-  }).sort((left, right) => {
+  }).filter((section) => section.source === "manual"
+    || isAiReportStructuredSectionCompatible(row.reportType, section.sectionKey)
+  ).sort((left, right) => {
     const leftIndex = structuredSectionOrder.indexOf(left.sectionKey);
     const rightIndex = structuredSectionOrder.indexOf(right.sectionKey);
     return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex)

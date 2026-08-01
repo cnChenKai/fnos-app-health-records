@@ -7,6 +7,7 @@ import { request } from "../../utils/api";
 import type { CursorPage, ReportSummary } from "../../types/api";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
+import { useRefreshOnActivate } from "../../composables/useRefreshOnActivate";
 import { useToast } from "../../composables/useToast";
 
 const PAGE_SIZE = 30;
@@ -95,6 +96,10 @@ async function purge(report: ReportSummary) {
 }
 
 watch(() => app.selectedMemberId.value, (memberId) => { if (memberId) void load(memberId); }, { immediate: true });
+useRefreshOnActivate(() => {
+  const memberId = app.selectedMemberId.value;
+  if (memberId) return load(memberId);
+});
 </script>
 
 <template>

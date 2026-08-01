@@ -13,7 +13,8 @@ import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
 import { formatDatabaseTime } from "../utils/time";
 import type {
-  ClinicalEvidence, ClinicalFactType, OcrPageText, ProcessingJob, ProcessingJobEvent,
+  AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageText, ProcessingJob, ProcessingJobEvent,
+  ProcessingJobEventDetail,
   ReportDetail, ReportPage, ReportSummary
 } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
@@ -22,6 +23,7 @@ import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
 
 type DuplicateCandidate = ReportDetail["duplicateCandidates"][number];
+type DisplayAiUnit = AiExtractionUnitProgress & { displayLabel: string };
 
 const props = defineProps<{
   reportId: string;
@@ -51,6 +53,7 @@ const eventPolling = ref(false);
 const eventError = ref("");
 const eventJob = ref<ProcessingJob | null>(null);
 const jobEvents = ref<ProcessingJobEvent[]>([]);
+const jobEventDetail = ref<ProcessingJobEventDetail | null>(null);
 const viewerOpen = ref(false);
 const viewerIndex = ref(0);
 const pdfViewerOpen = ref(false);
@@ -106,6 +109,36 @@ const currentSummary = computed(() =>
   props.summary?.id === props.reportId ? props.summary : null
 );
 const source = computed(() => currentDetail.value || currentSummary.value || null);
+const isAiEventLog = computed(() => eventJob.value?.jobType === "ai_extract");
+const orderedAiUnits = computed<DisplayAiUnit[]>(() => {
+  const units = [...(jobEventDetail.value?.units || [])].sort((left, right) => {
+    const leftSupplement = left.unitType === "supplement" ? 1 : 0;
+    const rightSupplement = right.unitType === "supplement" ? 1 : 0;
+    return leftSupplement - rightSupplement
+      || (left.pageNumbers[0] ?? Number.MAX_SAFE_INTEGER) - (right.pageNumbers[0] ?? Number.MAX_SAFE_INTEGER)
+      || left.unitIndex - right.unitIndex
+      || left.id.localeCompare(right.id);
+  });
+  let mainSequence = 0;
+  let supplementSequence = 0;
+  return units.map((unit) => ({
+    ...unit,
+    displayLabel: unit.unitType === "supplement"
+      ? `遗漏补提取 ${++supplementSequence}`
+      : `解析单元 ${++mainSequence}`
+  }));
+});
+const completedAiUnits = computed(() => orderedAiUnits.value.filter((unit) =>
+  unit.status === "completed" || unit.status === "warning"
+).length);
+const aiUnitProgressPercent = computed(() => orderedAiUnits.value.length
+  ? Math.round(completedAiUnits.value / orderedAiUnits.value.length * 100)
+  : 0
+);
+const eventLogHasContent = computed(() => isAiEventLog.value
+  ? Boolean(jobEventDetail.value)
+  : jobEvents.value.length > 0
+);
 /* OCR 全部完成但没有任何文字：原件大概率不是有效报告，在详情顶部明确提示而非仅发通知 */
 const ocrEmptyNotice = computed(() => {
   const localJobs = selectedJobs.value.filter((job) => job.jobType !== "ai_extract");
@@ -329,6 +362,62 @@ function eventDetail(event: ProcessingJobEvent) {
       : ""
   ].filter(Boolean);
   return parts.join(" · ");
+}
+
+function aiUnitStatusLabel(status: AiExtractionUnitProgress["status"]) {
+  return {
+    planned: "等待处理",
+    processing: "处理中",
+    completed: "已完成",
+    warning: "已完成，有待核对",
+    failed: "处理失败"
+  }[status];
+}
+
+function aiJobStatusLabel(status: string) {
+  return {
+    queued: "等待开始",
+    processing: "处理中",
+    completed: "全部完成",
+    failed: "任务失败",
+    cancelled: "已取消"
+  }[status] || status;
+}
+
+function aiUnitTypeLabel(type: AiExtractionUnitProgress["unitType"]) {
+  return type === "page_chunk" ? "页内分块" : type === "supplement" ? "遗漏补提取" : "完整页面";
+}
+
+function formatPageNumbers(pages: number[]) {
+  if (!pages.length) return "页码待规划";
+  const sorted = [...new Set(pages)].sort((left, right) => left - right);
+  const ranges: string[] = [];
+  let start = sorted[0]!;
+  let end = start;
+  for (const page of sorted.slice(1)) {
+    if (page === end + 1) {
+      end = page;
+      continue;
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+    start = page;
+    end = page;
+  }
+  ranges.push(start === end ? String(start) : `${start}-${end}`);
+  return `第 ${ranges.join("、")} 页`;
+}
+
+function aiUnitMeta(unit: AiExtractionUnitProgress) {
+  const tokens = unit.promptTokens != null || unit.completionTokens != null
+    ? `${unit.promptTokens || 0}/${unit.completionTokens || 0} tokens`
+    : "";
+  return [
+    aiUnitTypeLabel(unit.unitType),
+    unit.attempts > 1 ? `${unit.attempts} 次调用` : unit.attempts === 1 ? "1 次调用" : "",
+    formatMs(unit.elapsedMs),
+    tokens,
+    unit.model
+  ].filter(Boolean).join(" · ");
 }
 
 function originalUrl(page: ReportPage) {
@@ -929,6 +1018,7 @@ async function openJobEvents(job: ProcessingJob) {
   eventSheetOpen.value = true;
   eventError.value = "";
   jobEvents.value = [];
+  jobEventDetail.value = null;
   await loadJobEvents(job.id, false, seq);
   if (seq === eventSeq && eventSheetOpen.value) startEventPolling(job.id);
 }
@@ -938,9 +1028,10 @@ async function loadJobEvents(jobId: string, silent = false, expectedSeq = eventS
   eventRequestPending = true;
   if (!silent) eventLoading.value = true;
   try {
-    const nextEvents = await request<ProcessingJobEvent[]>(`jobs/${jobId}/events`);
+    const nextDetail = await request<ProcessingJobEventDetail>(`jobs/${jobId}/events`);
     if (expectedSeq !== eventSeq || !eventSheetOpen.value || eventJob.value?.id !== jobId) return;
-    jobEvents.value = nextEvents;
+    jobEventDetail.value = nextDetail;
+    jobEvents.value = nextDetail.generalEvents;
     eventError.value = "";
     if (!eventJobIsRunning(jobId)) stopEventPolling();
   } catch (cause) {
@@ -959,6 +1050,7 @@ function closeJobEvents() {
   eventSheetOpen.value = false;
   eventJob.value = null;
   jobEvents.value = [];
+  jobEventDetail.value = null;
   eventError.value = "";
   eventLoading.value = false;
 }
@@ -1632,7 +1724,91 @@ onActivated(() => {
         <div class="job-event-body">
           <div v-if="eventLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取详细日志</div>
           <p v-if="eventError" class="inline-panel-error">{{ eventError }}</p>
-          <div v-if="!eventLoading && jobEvents.length" class="job-event-timeline">
+          <div v-if="!eventLoading && isAiEventLog && jobEventDetail" class="ai-job-plan">
+            <section class="ai-job-plan-summary" :class="`is-${jobEventDetail.job.status}`">
+              <div class="ai-job-plan-summary__main">
+                <span class="ai-job-plan-summary__icon">
+                  <CheckCircle2 v-if="jobEventDetail.job.status === 'completed'" :size="20" />
+                  <CircleAlert v-else-if="jobEventDetail.job.status === 'failed'" :size="20" />
+                  <LoaderCircle v-else-if="jobEventDetail.job.status === 'processing'" class="spin-icon" :size="20" />
+                  <Clock3 v-else :size="20" />
+                </span>
+                <div>
+                  <strong>AI 报告整理</strong>
+                  <span v-if="orderedAiUnits.length">
+                    已完成 {{ completedAiUnits }}/{{ orderedAiUnits.length }} 个解析单元
+                    <template v-if="jobEventDetail.job.finishedAt"> · {{ formatDatabaseTime(jobEventDetail.job.finishedAt) }} 结束</template>
+                  </span>
+                  <span v-else-if="jobEventDetail.job.status === 'queued' || jobEventDetail.job.status === 'processing'">正在生成解析计划</span>
+                  <span v-else>该历史任务未保存解析单元明细</span>
+                </div>
+                <span class="ai-job-status-label" :class="`is-${jobEventDetail.job.status}`">
+                  {{ aiJobStatusLabel(jobEventDetail.job.status) }}
+                </span>
+              </div>
+              <div v-if="orderedAiUnits.length" class="ai-job-plan-progress" aria-hidden="true">
+                <span :style="{ width: `${aiUnitProgressPercent}%` }"></span>
+              </div>
+              <p v-if="jobEventDetail.job.errorMessage" class="ai-job-plan-error">
+                <template v-if="jobEventDetail.job.errorCode">{{ jobEventDetail.job.errorCode }} · </template>{{ jobEventDetail.job.errorMessage }}
+              </p>
+            </section>
+
+            <div v-if="orderedAiUnits.length" class="ai-unit-list">
+              <article v-for="unit in orderedAiUnits" :key="unit.id" class="ai-unit-row" :class="`is-${unit.status}`">
+                <div class="ai-unit-row__header">
+                  <span class="ai-unit-status-icon">
+                    <CheckCircle2 v-if="unit.status === 'completed'" :size="18" />
+                    <CircleAlert v-else-if="unit.status === 'failed' || unit.status === 'warning'" :size="18" />
+                    <LoaderCircle v-else-if="unit.status === 'processing'" class="spin-icon" :size="18" />
+                    <Clock3 v-else :size="18" />
+                  </span>
+                  <div class="ai-unit-row__content">
+                    <div class="ai-unit-row__title">
+                      <strong>{{ unit.displayLabel }}</strong>
+                      <span>{{ formatPageNumbers(unit.pageNumbers) }}</span>
+                    </div>
+                    <small v-if="aiUnitMeta(unit)">{{ aiUnitMeta(unit) }}</small>
+                    <p v-if="unit.errorMessage">{{ unit.errorCode ? `${unit.errorCode} · ` : "" }}{{ unit.errorMessage }}</p>
+                  </div>
+                  <span class="ai-unit-status-label" :class="`is-${unit.status}`">{{ aiUnitStatusLabel(unit.status) }}</span>
+                </div>
+                <details v-if="unit.events.length" class="ai-unit-history" :open="unit.status === 'failed'">
+                  <summary>执行记录 {{ unit.events.length }} 条</summary>
+                  <div class="job-event-timeline job-event-timeline--compact">
+                    <article v-for="event in unit.events" :key="event.id" class="job-event-item" :class="`job-event-item--${event.eventType}`">
+                      <span class="job-event-dot"></span>
+                      <div>
+                        <time>{{ formatDatabaseTime(event.createdAt) }}</time>
+                        <strong>{{ eventTitle(event) }}</strong>
+                        <p v-if="event.message">{{ event.message }}</p>
+                        <small v-if="eventDetail(event)">{{ eventDetail(event) }}</small>
+                      </div>
+                    </article>
+                  </div>
+                </details>
+              </article>
+            </div>
+            <p v-else-if="jobEventDetail.job.status === 'queued' || jobEventDetail.job.status === 'processing'" class="ai-job-plan-waiting">
+              任务启动后会按规划顺序显示解析单元。
+            </p>
+
+            <details v-if="jobEventDetail.generalEvents.length" class="ai-job-general-history">
+              <summary>任务记录 {{ jobEventDetail.generalEvents.length }} 条</summary>
+              <div class="job-event-timeline job-event-timeline--compact">
+                <article v-for="event in jobEventDetail.generalEvents" :key="event.id" class="job-event-item" :class="`job-event-item--${event.eventType}`">
+                  <span class="job-event-dot"></span>
+                  <div>
+                    <time>{{ formatDatabaseTime(event.createdAt) }}</time>
+                    <strong>{{ eventTitle(event) }}</strong>
+                    <p v-if="event.message">{{ event.message }}</p>
+                    <small v-if="eventDetail(event)">{{ eventDetail(event) }}</small>
+                  </div>
+                </article>
+              </div>
+            </details>
+          </div>
+          <div v-else-if="!eventLoading && !isAiEventLog && jobEvents.length" class="job-event-timeline">
             <article v-for="event in jobEvents" :key="event.id" class="job-event-item" :class="`job-event-item--${event.eventType}`">
               <span class="job-event-dot"></span>
               <div>
@@ -1643,7 +1819,7 @@ onActivated(() => {
               </div>
             </article>
           </div>
-          <p v-else-if="!eventLoading && !eventError" class="preview-hint">这条任务还没有详细事件记录，处理中会自动更新。</p>
+          <p v-else-if="!eventLoading && !eventError && !eventLogHasContent" class="preview-hint">这条任务还没有详细事件记录，处理中会自动更新。</p>
         </div>
       </section>
     </div>
