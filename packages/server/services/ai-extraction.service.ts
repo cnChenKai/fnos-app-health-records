@@ -2015,8 +2015,8 @@ export function persistAiExtraction(reportId: string, jobId: string, result: AiE
           classification_value, classification_text, comparison_text, raw_text,
           evidence_json, confidence, tracking_group_id, match_confidence, source, manual_fields_json
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-          ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
         )
         ON CONFLICT(id) DO UPDATE SET
           section_name = excluded.section_name, organ = excluded.organ, region = excluded.region,

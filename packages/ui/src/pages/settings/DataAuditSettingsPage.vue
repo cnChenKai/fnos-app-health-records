@@ -3,7 +3,7 @@ import { onMounted, ref } from "vue";
 import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Trash2, UploadCloud } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import MarqueeText from "../../components/MarqueeText.vue";
-import { request } from "../../utils/api";
+import { request, requestUpload } from "../../utils/api";
 import { downloadFile } from "../../utils/download";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
@@ -155,9 +155,9 @@ async function restoreUploadedBackup(event: Event) {
       try {
         const body = new FormData();
         body.append("backup", file);
-        const result = await request<{ restored: boolean; backupId: string; safetyBackupId: string; filename: string }>(
+        const result = await requestUpload<{ restored: boolean; backupId: string; safetyBackupId: string; filename: string }>(
           "backups/restore-upload",
-          { method: "POST", body }
+          body
         );
         message.value = `外部备份已恢复：${result.filename}。恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。`;
         toast.show("外部备份已恢复");

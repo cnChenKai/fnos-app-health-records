@@ -625,6 +625,69 @@ onDeactivated(() => {
               <span>最新值</span>
               <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
+              <div class="trend-detail-popover-wrap">
+                <button
+                  class="trend-detail-toggle"
+                  type="button"
+                  :aria-expanded="detailsOpen(item)"
+                  @click="toggleDetails(item, $event)"
+                >
+                  整理详情
+                  <template v-if="item.excludedPoints.length"> · {{ item.excludedPoints.length }}</template>
+                </button>
+                <Teleport to="body">
+                  <div v-if="detailsOpen(item)" class="trend-detail-popover-backdrop" @click="closeDetails"></div>
+                  <section
+                    v-if="detailsOpen(item)"
+                    class="trend-normalization-popover"
+                    :class="`placement-${detailPopoverPlacement}`"
+                    :style="detailPopoverStyle"
+                    role="dialog"
+                    aria-label="指标整理详情"
+                    @click.stop
+                  >
+                    <header class="trend-normalization-popover-header">
+                      <strong>整理详情</strong>
+                      <button type="button" title="关闭" aria-label="关闭整理详情" @click="closeDetails">
+                        <X :size="17" />
+                      </button>
+                    </header>
+                    <div>
+                      <span>指标说明</span>
+                      <p>{{ item.explanation || "暂未形成可靠说明，可查看原报告或等待指标字典更新。" }}</p>
+                    </div>
+                    <div>
+                      <span>本次结果</span>
+                      <p>
+                        {{ formatNumber(item.latestValue) }}{{ item.unit || "" }}
+                        · {{ referenceSummary(latestPoint(item)) }}
+                        <template v-if="item.attentionReason"> · {{ item.attentionReason }}</template>
+                      </p>
+                    </div>
+                    <p class="trend-detail-part-title">系统整理信息</p>
+                    <div>
+                      <span>整理依据</span>
+                      <p v-if="item.matchReasons.length">{{ item.matchReasons.join("；") }}</p>
+                      <p v-else>按原始名称和单位展示。</p>
+                    </div>
+                    <div>
+                      <span>已纳入名称</span>
+                      <p>{{ item.sourceNames.length ? item.sourceNames.join("、") : "暂无" }}</p>
+                    </div>
+                    <div v-if="item.excludedPoints.length">
+                      <span>相似但未纳入</span>
+                      <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
+                        <div>
+                          <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
+                          <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
+                        </div>
+                        <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
+                        <button type="button" @click="openReport(point.reportId)">报告</button>
+                      </article>
+                    </div>
+                  </section>
+                </Teleport>
+              </div>
             </div>
             <div class="trend-chart-scroll">
               <div class="trend-chart-canvas" :style="{ minWidth: trendChartMinWidth(item) }">
@@ -649,73 +712,10 @@ onDeactivated(() => {
               </div>
             </div>
           </div>
-          <div class="trend-range">
-            <div v-if="trendValueRange(item) || trendDateRange(item)" class="trend-range-copy">
+          <div v-if="trendValueRange(item) || trendDateRange(item)" class="trend-range">
+            <div class="trend-range-copy">
               <span v-if="trendValueRange(item)">变化区间 {{ trendValueRange(item) }}</span>
               <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
-            </div>
-            <div class="trend-detail-popover-wrap">
-              <button
-                class="trend-detail-toggle"
-                type="button"
-                :aria-expanded="detailsOpen(item)"
-                @click="toggleDetails(item, $event)"
-              >
-                整理详情
-                <template v-if="item.excludedPoints.length"> · {{ item.excludedPoints.length }}</template>
-              </button>
-              <Teleport to="body">
-                <div v-if="detailsOpen(item)" class="trend-detail-popover-backdrop" @click="closeDetails"></div>
-                <section
-                  v-if="detailsOpen(item)"
-                  class="trend-normalization-popover"
-                  :class="`placement-${detailPopoverPlacement}`"
-                  :style="detailPopoverStyle"
-                  role="dialog"
-                  aria-label="指标整理详情"
-                  @click.stop
-                >
-                  <header class="trend-normalization-popover-header">
-                    <strong>整理详情</strong>
-                    <button type="button" title="关闭" aria-label="关闭整理详情" @click="closeDetails">
-                      <X :size="17" />
-                    </button>
-                  </header>
-                  <div>
-                    <span>指标说明</span>
-                    <p>{{ item.explanation || "暂未形成可靠说明，可查看原报告或等待指标字典更新。" }}</p>
-                  </div>
-                  <div>
-                    <span>本次结果</span>
-                    <p>
-                      {{ formatNumber(item.latestValue) }}{{ item.unit || "" }}
-                      · {{ referenceSummary(latestPoint(item)) }}
-                      <template v-if="item.attentionReason"> · {{ item.attentionReason }}</template>
-                    </p>
-                  </div>
-                  <p class="trend-detail-part-title">系统整理信息</p>
-                  <div>
-                    <span>整理依据</span>
-                    <p v-if="item.matchReasons.length">{{ item.matchReasons.join("；") }}</p>
-                    <p v-else>按原始名称和单位展示。</p>
-                  </div>
-                  <div>
-                    <span>已纳入名称</span>
-                    <p>{{ item.sourceNames.length ? item.sourceNames.join("、") : "暂无" }}</p>
-                  </div>
-                  <div v-if="item.excludedPoints.length">
-                    <span>相似但未纳入</span>
-                    <article v-for="point in item.excludedPoints" :key="point.observationId" class="trend-excluded-point">
-                      <div>
-                        <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
-                        <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
-                      </div>
-                      <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
-                      <button type="button" @click="openReport(point.reportId)">报告</button>
-                    </article>
-                  </div>
-                </section>
-              </Teleport>
             </div>
           </div>
           <div class="trend-points">

@@ -5,7 +5,7 @@ import {
   ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
 } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
-import { request } from "../utils/api";
+import { request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
 
 type QueueItem = {
@@ -234,7 +234,7 @@ async function submit() {
     body.append("memberId", app.selectedMemberId.value);
     body.append("manifest", JSON.stringify({ pages: items.value.map((item) => ({ rotation: item.rotation })) }));
     for (const item of items.value) body.append("files", item.file, item.file.name);
-    result.value = await request<UploadResult>("uploads", { method: "POST", body });
+    result.value = await requestUpload<UploadResult>("uploads", body);
     clearQueue();
     startPolling();
   } catch (cause) {

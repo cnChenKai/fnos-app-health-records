@@ -503,11 +503,14 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-pin-button:disabled { cursor: wait; opacity: .55; }
 .trend-pin-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .trend-main { display: grid; grid-template-columns: minmax(110px, 160px) minmax(0, 1fr); gap: 10px; align-items: end; }
-.trend-latest { display: grid; gap: 4px; }
+.trend-latest { position: relative; display: grid; gap: 4px; }
 .trend-latest > span { color: var(--muted); font-size: 12px; font-weight: 700; }
 .trend-latest strong { color: var(--ink); font-size: 28px; letter-spacing: 0; line-height: 1; }
 .trend-latest small { margin-left: 4px; color: var(--muted); font-size: 13px; letter-spacing: 0; }
 .trend-latest p, .trend-range { color: var(--muted); font-size: 12px; }
+.trend-latest .trend-detail-popover-wrap { position: absolute; top: -4px; right: -10px; margin: 0; }
+.trend-latest .trend-detail-toggle { background: var(--surface); }
+.trend-latest .trend-detail-toggle[aria-expanded="true"], .trend-latest .trend-detail-toggle:hover { background: var(--brand-softer); }
 .trend-chart-scroll {
   min-width: 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0 3px;
   scrollbar-width: thin; overscroll-behavior-inline: contain;
