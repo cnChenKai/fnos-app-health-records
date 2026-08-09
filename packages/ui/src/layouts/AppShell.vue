@@ -37,7 +37,8 @@ const reminderBadge = computed(() => {
 function isNavActive(to: string) {
   return route.path === to || route.path.startsWith(`${to}/`);
 }
-const isMePage = computed(() => route.path === "/me");
+// “我的”及其二级设置页统一展示账号信息顶栏，页面标题由页面内的 SubPageHeader 承担
+const isMePage = computed(() => route.path === "/me" || route.path.startsWith("/me/"));
 const topbarSearchPageKey = computed(() => {
   if (route.path === "/records") return "records";
   if (route.path === "/trends" || route.path.startsWith("/trends/")) return "trends";
@@ -79,7 +80,7 @@ watch([topbarSearchPageKey, () => app.topbarSearch.value?.key], () => {
   topbarSearchFocused.value = false;
 });
 
-/* 页面缓存（KeepAlive）下的滚动位置记忆：切走前按路径保存，切回时恢复，未访问过的页面回到顶部 */
+/* 页面缓存（KeepAlive）下的滚动位置记忆：切走前按路径保存；恢复放在 enter（新页已插入但淡入未开始），避免过渡期间位置漂移造成跳动 */
 const pageScrollPositions = new Map<string, number>();
 let activePath = route.fullPath;
 function savePageScroll() {
@@ -207,7 +208,7 @@ const navItems = [
       </header>
       <main class="page-content">
         <RouterView v-slot="{ Component }">
-          <Transition name="page-fade" mode="out-in" @before-leave="savePageScroll" @after-enter="restorePageScroll">
+          <Transition name="page-fade" mode="out-in" @before-leave="savePageScroll" @enter="restorePageScroll">
             <KeepAlive>
               <component :is="Component" />
             </KeepAlive>

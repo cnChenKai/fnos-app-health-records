@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的 OCR Worker 长任务心跳、静默卡死、假活硬超时、队列恢复和本地任务租约续期金标，不调用真实 OCR 或 AI。",
+  "expected": {
+    "pythonHeartbeatMinimum": 3,
+    "clientLongHeartbeatMinimum": 5,
+    "silentTimeoutCode": "WORKER_TIMEOUT",
+    "hardTimeoutCode": "OCR_WORKER_HARD_TIMEOUT",
+    "clientSuccessfulResponseCount": 4,
+    "clientProcessCount": 4,
+    "leaseJobAttempts": 1,
+    "leaseOcrResultCount": 1,
+    "leaseActiveJobCount": 0,
+    "persistedHeartbeatCount": 4,
+    "persistedLastHeartbeatElapsedMs": 300,
+    "invalidHeartbeatProtocolCode": "OCR_WORKER_PROTOCOL_ERROR"
+  }
+}

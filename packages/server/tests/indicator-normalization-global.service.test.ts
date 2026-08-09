@@ -9,6 +9,7 @@ import {
   indicatorNameCandidates,
   normalizeReportObservations
 } from "../services/indicator-normalization.service.ts";
+import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
 
 test("splits report codes from names without removing medical qualifiers", () => {
   assert.ok(indicatorNameCandidates("白细胞数目 WBC").includes("白细胞数目"));
@@ -26,6 +27,10 @@ test("splits report codes from names without removing medical qualifiers", () =>
     indicatorNameCandidates("空腹血糖"),
     indicatorNameCandidates("餐后血糖")
   );
+  assert.notDeepEqual(
+    indicatorNameCandidates("FEV1.0%(G)"),
+    indicatorNameCandidates("FEV1.0%(T)")
+  );
 });
 
 test("normalizes English indicator separators consistently", () => {
@@ -35,11 +40,92 @@ test("normalizes English indicator separators consistently", () => {
   );
 });
 
+test("strips trailing value placeholders so alias matching can hit the dictionary", () => {
+  assert.ok(indicatorNameCandidates("血清尿酸值").includes("血清尿酸"));
+  assert.ok(indicatorNameCandidates("尿酸测定值").includes("尿酸"));
+  assert.ok(indicatorNameCandidates("pH值").includes("ph"));
+  // 原名保留，且本身以「值」结尾的指标名不会被剥坏
+  assert.ok(indicatorNameCandidates("国际标准化比值").includes("国际标准化比值"));
+});
+
+test("keeps immunoglobulin class brackets as part of the indicator identity", () => {
+  // TORCH 筛查中 (IgG)/(IgM) 是指标本体：剥掉后 IgM 会错配到 IgG 条目
+  assert.ok(indicatorNameCandidates("弓形虫抗体测定(IgM)").includes("弓形虫抗体测定(igm)"));
+  assert.ok(indicatorNameCandidates("弓形虫抗体测定(IgG)").includes("弓形虫抗体测定(igg)"));
+  assert.notDeepEqual(
+    indicatorNameCandidates("风疹病毒抗体测定(IgM)"),
+    indicatorNameCandidates("风疹病毒抗体测定(IgG)")
+  );
+});
+
+test("reorders bracketed laterality so prefixed dictionary aliases can match", () => {
+  // 字典别名是「右PWV」「左侧baPWV」前置形式，「PWV(右)」需要重排候选才能命中
+  assert.ok(indicatorNameCandidates("PWV(右)").includes("右pwv"));
+  assert.ok(indicatorNameCandidates("PWV(右)").includes("pwv右"));
+  assert.ok(indicatorNameCandidates("baPWV（左侧）").includes("左侧bapwv"));
+  // 左右候选保持区分，不会合并成同一身份
+  assert.notDeepEqual(
+    indicatorNameCandidates("PWV(左)"),
+    indicatorNameCandidates("PWV(右)")
+  );
+});
+
+test("accepts hyphenated canonical names when OCR evidence closes the same normalized loop", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-hyphen-evidence-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('evidence-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('evidence-member', '本人', 'self', 'evidence-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('evidence-report', 'evidence-member', 'evidence-user', 'laboratory', '专项检验', 'ready', '2026-08-01');
+      INSERT INTO processing_jobs (
+        id, report_id, job_type, status, attempts, pipeline_version, deduplication_key, finished_at
+      ) VALUES ('evidence-ai-job', 'evidence-report', 'ai_extract', 'completed', 1, 'test', 'evidence-ai-job', CURRENT_TIMESTAMP);
+      INSERT INTO report_extractions (
+        id, report_id, job_id, provider, model, prompt_version, fields_json,
+        evidence_json, confidence_json, raw_response_json
+      ) VALUES (
+        'evidence-extraction', 'evidence-report', 'evidence-ai-job', 'test', 'test', 'test',
+        '{}', '{}', '{}', '{}'
+      );
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text,
+        numeric_value, unit, reference_low, reference_high, reference_text, evidence_json
+      ) VALUES (
+        'hyphen-evidence-observation', 'evidence-report', '肿瘤标志物',
+        'T-BIL', 'T-BIL', '12.3',
+        12.3, 'μmol/L', 5, 21, '5-21',
+        '[{"pageNumber":1,"quote":"T-BIL | 12.3 | μmol/L | 5-21"}]'
+      );
+    `);
+
+    normalizeReportObservations("evidence-report");
+    const row = db.prepare(`
+      SELECT canonical_key AS canonicalKey, quality, excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id = 'hyphen-evidence-observation'
+    `).get() as { canonicalKey: string | null; quality: string; excludedReason: string | null };
+
+    assert.equal(row.canonicalKey, "liver_tbil");
+    assert.equal(row.quality, "high");
+    assert.equal(row.excludedReason, null);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("normalizes common checkup indicators and keeps ambiguous source types separate", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-common-indicators-"));
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
+    installRemoteDictionarySnapshotForTests();
     db.prepare("INSERT INTO users (id, display_name) VALUES ('global-user', '用户')").run();
     db.prepare(`
       INSERT INTO health_members (id, display_name, relationship, created_by)
@@ -77,6 +163,9 @@ test("normalizes common checkup indicators and keeps ambiguous source types sepa
     insert.run("common-abi-left", "动脉功能检查", "左侧踝肱指数", "左侧踝肱指数", "1.08", 1.08, null);
     insert.run("common-bapwv-right", "动脉功能检查", "右侧肱踝脉搏波传导速度", "右侧肱踝脉搏波传导速度", "1315", 1315, "cm/s");
     insert.run("common-bapwv-left", "动脉功能检查", "左侧肱踝脉搏波传导速度", "左侧肱踝脉搏波传导速度", "1395", 1395, "cm/s");
+    insert.run("common-serum-alp", "肝功能", "血清碱性磷酸酶", null, "72", 72, "U/L");
+    insert.run("common-serum-tbil", "肝功能", "血清总胆红素", null, "12", 12, "μmol/L");
+    insert.run("common-serum-cystatin", "肾功能", "血清胱抑素C测定", null, "0.8", 0.8, "mg/L");
 
     normalizeReportObservations("common-report");
     const rows = db.prepare(`
@@ -122,6 +211,98 @@ test("normalizes common checkup indicators and keeps ambiguous source types sepa
     assert.equal(byId.get("common-abi-left")?.canonicalKey, "vascular_abi_left");
     assert.equal(byId.get("common-bapwv-right")?.canonicalKey, "vascular_bapwv_right");
     assert.equal(byId.get("common-bapwv-left")?.canonicalKey, "vascular_bapwv_left");
+    assert.equal(byId.get("common-serum-alp")?.canonicalKey, "liver_alp");
+    assert.equal(byId.get("common-serum-alp")?.quality, "high");
+    assert.equal(byId.get("common-serum-tbil")?.canonicalKey, "liver_tbil");
+    assert.equal(byId.get("common-serum-tbil")?.quality, "high");
+    assert.equal(byId.get("common-serum-cystatin")?.canonicalKey, "renal_cystatin_c");
+    assert.equal(byId.get("common-serum-cystatin")?.quality, "high");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("standardizes audited laboratory and ophthalmology candidates without merging laterality or deriving ratios", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-audited-candidates-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    installRemoteDictionarySnapshotForTests();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('audit-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('audit-member', '本人', 'self', 'audit-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('audit-report', 'audit-member', 'audit-user', 'checkup', '专项体检', 'ready', '2026-08-01');
+    `);
+    const insert = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES (?, 'audit-report', ?, ?, NULL, ?, ?, ?)
+    `);
+    for (const observation of [
+      ["audit-ldh", "心肌酶谱四项", "乳酸脱氢酶", "180 U/L", 180, "U/L"],
+      ["audit-ck", "心肌酶谱四项", "血清磷酸肌酸激酶", "120 U/L", 120, "U/L"],
+      ["audit-ck-mb", "心肌酶谱四项", "肌酸激酶同工酶(CK-MB)", "12 U/L", 12, "U/L"],
+      ["audit-amylase", "淀粉酶(AMY)", "淀粉酶", "80 U/L", 80, "U/L"],
+      ["audit-iop-right", "眼科", "右眼眼压", "18 mmHg", 18, "mmHg"],
+      ["audit-iop-left", "眼科", "左眼眼压", "17 mmHg", 17, "mmHg"],
+      ["audit-testosterone", "睾酮测定（TTE）", "睾酮测定", "4.2 ng/mL", 4.2, "ng/mL"],
+      ["audit-prolactin", "血清泌乳素测定（PRL）", "血清泌乳素测定", "20 ng/ml", 20, "ng/ml"],
+      ["audit-pepsinogen-i", "胃蛋白酶原测定", "胃蛋白酶原I", "60 μg/L", 60, "μg/L"],
+      ["audit-pepsinogen-ii", "胃蛋白酶原测定", "胃蛋白酶原II", "10 μg/L", 10, "μg/L"],
+      ["audit-pepsinogen-ratio", "胃蛋白酶原测定", "胃蛋白酶原比值", "8.5", 8.5, null]
+    ] as const) insert.run(...observation);
+
+    normalizeReportObservations("audit-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey,
+        canonical_value AS canonicalValue, canonical_unit AS canonicalUnit, quality
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'audit-%'
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      canonicalValue: number | null;
+      canonicalUnit: string | null;
+      quality: string;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+    const expected = new Map([
+      ["audit-ldh", ["laboratory_ldh", "U/L"]],
+      ["audit-ck", ["laboratory_ck", "U/L"]],
+      ["audit-ck-mb", ["laboratory_ck_mb", "U/L"]],
+      ["audit-amylase", ["laboratory_amylase", "U/L"]],
+      ["audit-iop-right", ["ophthalmology_intraocular_pressure_right", "mmHg"]],
+      ["audit-iop-left", ["ophthalmology_intraocular_pressure_left", "mmHg"]],
+      ["audit-testosterone", ["laboratory_testosterone", "ng/mL"]],
+      ["audit-prolactin", ["laboratory_prolactin", "ng/mL"]],
+      ["audit-pepsinogen-i", ["laboratory_pepsinogen_i", "μg/L"]],
+      ["audit-pepsinogen-ii", ["laboratory_pepsinogen_ii", "μg/L"]]
+    ] as const);
+    for (const [observationId, [canonicalKey, canonicalUnit]] of expected) {
+      assert.equal(byId.get(observationId)?.canonicalKey, canonicalKey);
+      assert.equal(byId.get(observationId)?.canonicalUnit, canonicalUnit);
+      assert.equal(byId.get(observationId)?.quality, "high");
+    }
+    assert.notEqual(
+      byId.get("audit-iop-right")?.canonicalKey,
+      byId.get("audit-iop-left")?.canonicalKey,
+      "left and right intraocular pressure must remain separate trends"
+    );
+    assert.equal(byId.get("audit-pepsinogen-ratio")?.canonicalKey, "laboratory_pepsinogen_ratio");
+    assert.equal(byId.get("audit-pepsinogen-ratio")?.canonicalUnit, null);
+    assert.equal(byId.get("audit-pepsinogen-ratio")?.canonicalValue, 8.5);
+    assert.equal(byId.get("audit-pepsinogen-ratio")?.quality, "medium");
+    assert.notEqual(
+      byId.get("audit-pepsinogen-ratio")?.canonicalValue,
+      (byId.get("audit-pepsinogen-i")?.canonicalValue || 0)
+        / (byId.get("audit-pepsinogen-ii")?.canonicalValue || 1),
+      "the system must retain the explicitly reported ratio instead of calculating it"
+    );
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -134,4 +315,227 @@ test("converts units for newly covered common indicators", () => {
   assert.ok(Math.abs(convertUnit("glucose_postprandial_2h", 180, "mg/dL", "mmol/L") - 9.99) < 0.01);
   assert.ok(Math.abs(convertUnit("renal_creatinine", 1, "mg/dL", "μmol/L") - 88.4) < 0.001);
   assert.ok(Math.abs(convertUnit("liver_dbil", 1, "mg/dL", "μmol/L") - 17.104) < 0.001);
+  assert.ok(Math.abs(convertUnit("laboratory_testosterone", 420, "ng/dL", "ng/mL") - 4.2) < 1e-9);
+  assert.equal(convertUnit("laboratory_prolactin", 20, "μg/L", "ng/mL"), 20);
+  assert.equal(convertUnit("laboratory_pepsinogen_i", 60, "ng/mL", "μg/L"), 60);
+});
+
+test("gates ambiguous aliases unless section, unit, or result type uniquely disambiguates them", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-ambiguous-indicators-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('ambiguous-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('ambiguous-member', '本人', 'self', 'ambiguous-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('ambiguous-report', 'ambiguous-member', 'ambiguous-user', 'checkup', '专项检查', 'ready', '2026-08-01');
+    `);
+    const insert = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES (?, 'ambiguous-report', ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of [
+      ["ambiguous-heart-rate", null, "心率", "心率", "72", 72, "bpm"],
+      ["ecg-heart-rate", "心电图", "心率", "心率", "73", 73, "bpm"],
+      ["vital-heart-rate", "生命体征", "心率", "心率", "71", 71, "bpm"],
+      ["ambiguous-wbc", null, "白细胞计数", "白细胞计数", "5.2", 5.2, null],
+      ["blood-wbc-unit", null, "WBC", "WBC", "5.1", 5.1, "10^9/L"],
+      ["urine-wbc-context", "尿沉渣", "白细胞计数", "白细胞计数", "3", 3, "/HPF"],
+      ["stool-wbc-context", "便常规", "白细胞", "白细胞", "-", null, null],
+      ["urine-protein-no-unit", "尿蛋白定量", "尿蛋白定量", "尿蛋白定量", "120", 120, null],
+      ["urine-protein-state", "尿常规", "尿蛋白", "尿蛋白", "阴性", null, null]
+    ] as const) insert.run(...row);
+
+    normalizeReportObservations("ambiguous-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey,
+        quality, match_reason AS matchReason, excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'ambiguous-%'
+         OR observation_id IN ('ecg-heart-rate', 'vital-heart-rate', 'blood-wbc-unit', 'urine-wbc-context', 'stool-wbc-context', 'urine-protein-no-unit', 'urine-protein-state')
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      quality: string;
+      matchReason: string;
+      excludedReason: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+
+    assert.equal(byId.get("ambiguous-heart-rate")?.quality, "low");
+    assert.match(byId.get("ambiguous-heart-rate")?.matchReason || "", /多义名称缺少章节/);
+    assert.equal(byId.get("ecg-heart-rate")?.canonicalKey, "ecg_heart_rate");
+    assert.equal(byId.get("ecg-heart-rate")?.quality, "high");
+    assert.equal(byId.get("vital-heart-rate")?.canonicalKey, "vital_pulse");
+    assert.equal(byId.get("vital-heart-rate")?.quality, "high");
+
+    assert.equal(byId.get("ambiguous-wbc")?.quality, "low");
+    assert.match(byId.get("ambiguous-wbc")?.matchReason || "", /多义名称缺少章节/);
+    assert.equal(byId.get("blood-wbc-unit")?.canonicalKey, "cbc_wbc");
+    assert.equal(byId.get("blood-wbc-unit")?.quality, "high");
+    assert.equal(byId.get("urine-wbc-context")?.canonicalKey, "urine_wbc");
+    assert.equal(byId.get("urine-wbc-context")?.quality, "high");
+    assert.equal(byId.get("stool-wbc-context")?.canonicalKey, "stool_wbc");
+    assert.equal(byId.get("stool-wbc-context")?.quality, "excluded");
+
+    assert.equal(byId.get("urine-protein-no-unit")?.canonicalKey, "urine_protein_quantitative");
+    assert.equal(byId.get("urine-protein-no-unit")?.quality, "low");
+    assert.match(byId.get("urine-protein-no-unit")?.excludedReason || "", /缺少单位/);
+    assert.equal(byId.get("urine-protein-state")?.canonicalKey, "urine_protein");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("maps bare QUS T/Z values only inside quantitative ultrasound bone context", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-qus-context-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('qus-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('qus-member', '本人', 'self', 'qus-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('qus-report', 'qus-member', 'qus-user', 'checkup', '骨健康检查', 'ready', '2026-08-01');
+    `);
+    const insert = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES (?, 'qus-report', ?, ?, ?, ?, ?, ?)
+    `);
+    for (const row of [
+      ["qus-t", "超声骨密度检测报告", "T值", "超声骨密度 T 值", "-1.9", -1.9, null],
+      ["qus-z", "超声骨密度检测报告", "Z值", "超声骨密度 Z 值", "-1.7", -1.7, null],
+      ["generic-t", "其他功能检查", "T值", null, "1.2", 1.2, null],
+      ["generic-z", "其他功能检查", "Z值", null, "0.8", 0.8, null]
+    ] as const) insert.run(...row);
+
+    normalizeReportObservations("qus-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey,
+        canonical_value AS canonicalValue, quality, matched_by AS matchedBy
+      FROM observation_normalizations
+      WHERE observation_id IN ('qus-t', 'qus-z', 'generic-t', 'generic-z')
+      ORDER BY observation_id
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      canonicalValue: number | null;
+      quality: string;
+      matchedBy: string;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+
+    assert.deepEqual(
+      [byId.get("qus-t")?.canonicalKey, byId.get("qus-z")?.canonicalKey],
+      ["qus_bone_t_score", "qus_bone_z_score"]
+    );
+    assert.deepEqual(
+      [byId.get("qus-t")?.canonicalValue, byId.get("qus-z")?.canonicalValue],
+      [-1.9, -1.7]
+    );
+    assert.deepEqual(
+      [byId.get("qus-t")?.quality, byId.get("qus-z")?.quality],
+      ["medium", "medium"]
+    );
+    assert.deepEqual(
+      [byId.get("qus-t")?.matchedBy, byId.get("qus-z")?.matchedBy],
+      ["builtin_alias", "builtin_alias"]
+    );
+    assert.equal(byId.get("generic-t")?.canonicalKey, null);
+    assert.equal(byId.get("generic-z")?.canonicalKey, null);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("keeps side-qualified vascular indicators trend-ready when AI normalizes colloquial evidence names", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-vascular-evidence-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('vascular-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('vascular-member', '本人', 'self', 'vascular-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('vascular-report', 'vascular-member', 'vascular-user', 'checkup', '年度体检', 'ready', '2026-08-01');
+      INSERT INTO processing_jobs (
+        id, report_id, job_type, status, pipeline_version, deduplication_key, finished_at
+      ) VALUES (
+        'vascular-ai-job', 'vascular-report', 'ai_extract', 'completed',
+        'evidence-golden-v1', 'vascular-report:ai_extract:golden', CURRENT_TIMESTAMP
+      );
+      INSERT INTO report_extractions (
+        id, report_id, job_id, provider, model, prompt_version, fields_json,
+        evidence_json, confidence_json, raw_response_json, input_characters
+      ) VALUES (
+        'vascular-extraction', 'vascular-report', 'vascular-ai-job',
+        'offline-golden', 'offline-golden', 'offline-golden-v1', '{}', '{}', '{}', '{}', 0
+      );
+    `);
+    const insert = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, item_code, result_text, numeric_value, unit, evidence_json
+      ) VALUES (?, 'vascular-report', ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    // 真实回归场景：AI 把「右踝：1.07 | 左踝：1.08」规范为「右侧/左侧踝肱指数」，
+    // 名称字面无法回指原文，但数值锚点完整，不应被逐出默认趋势。
+    insert.run("vascular-abi-right", "动脉功能检查", "右侧踝肱指数", "右侧踝肱指数", "ABI", "1.07", 1.07, null,
+      JSON.stringify([{ pageNumber: 21, quote: "右踝：1.07 | 左踝：1.08" }]));
+    insert.run("vascular-abi-left", "动脉功能检查", "左侧踝肱指数", "左侧踝肱指数", "ABI", "1.08", 1.08, null,
+      JSON.stringify([{ pageNumber: 21, quote: "右踝：1.07 | 左踝：1.08" }]));
+    insert.run("vascular-bapwv-right", "动脉功能检查", "右侧肱踝脉搏波传导速度", "右侧肱踝脉搏波传导速度", "baPWV", "1315", 1315, "cm/s",
+      JSON.stringify([{ pageNumber: 21, quote: "右：1315 | 左：1395 | 2000 | PWV(cm/s) | LD | 血管模型" }]));
+    insert.run("vascular-bapwv-left", "动脉功能检查", "左侧肱踝脉搏波传导速度", "左侧肱踝脉搏波传导速度", "baPWV", "1395", 1395, "cm/s",
+      JSON.stringify([{ pageNumber: 21, quote: "右：1315 | 左：1395 | 2000 | PWV(cm/s) | LD | 血管模型" }]));
+    // 名称与数值都无法回指的条目仍然必须拦截。
+    insert.run("vascular-hallucinated", "动脉功能检查", "收缩压", "收缩压", null, "128", 128, "mmHg",
+      JSON.stringify([{ pageNumber: 21, quote: "右踝：1.07 | 左踝：1.08" }]));
+
+    normalizeReportObservations("vascular-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey,
+        canonical_value AS canonicalValue, quality, excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'vascular-%'
+    `).all() as Array<{
+      observationId: string;
+      canonicalKey: string | null;
+      canonicalValue: number | null;
+      quality: string;
+      excludedReason: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+
+    // 通用项 vascular_abi / vascular_bapwv 只是侧别项的父级同族映射，不构成歧义。
+    assert.equal(byId.get("vascular-abi-right")?.canonicalKey, "vascular_abi_right");
+    assert.equal(byId.get("vascular-abi-left")?.canonicalKey, "vascular_abi_left");
+    assert.equal(byId.get("vascular-bapwv-right")?.canonicalKey, "vascular_bapwv_right");
+    assert.equal(byId.get("vascular-bapwv-left")?.canonicalKey, "vascular_bapwv_left");
+    assert.equal(byId.get("vascular-abi-right")?.quality, "medium");
+    assert.equal(byId.get("vascular-abi-left")?.quality, "medium");
+    assert.equal(byId.get("vascular-bapwv-right")?.quality, "high");
+    assert.equal(byId.get("vascular-bapwv-left")?.quality, "high");
+    for (const id of ["vascular-abi-right", "vascular-abi-left", "vascular-bapwv-right", "vascular-bapwv-left"]) {
+      assert.equal(byId.get(id)?.excludedReason, null, `${id} 不应携带趋势禁用原因`);
+    }
+    assert.equal(byId.get("vascular-hallucinated")?.quality, "low");
+    assert.match(byId.get("vascular-hallucinated")?.excludedReason || "", /项目名称无法回指/);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
 });

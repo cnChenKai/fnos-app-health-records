@@ -1,0 +1,76 @@
+{
+  "source": {
+    "reportId": "report_ef64f9e2444847af85b760ce1592fac5",
+    "pageNumber": 4,
+    "description": "脱敏后的真实 PDF 原生文本行；指标名在版心换行处断裂",
+    "lines": [
+      {
+        "id": "line_7",
+        "text": "【血脂、脂蛋白、载脂蛋白测定】",
+        "confidence": 1,
+        "box": [
+          60.094825744628906, 242.29095458984375, 224.951904296875,
+          253.2840118408203
+        ]
+      },
+      {
+        "id": "line_8",
+        "text": "总胆固醇值偏高(6.04mmol/L)(参考值≤5.20)；甘油三酯值偏高(2.67mmol/L)(参考值＜1.7)；低密度脂蛋白胆固",
+        "confidence": 1,
+        "box": [
+          60.094825744628906, 265.3570556640625, 531.5257568359375,
+          276.3598327636719
+        ]
+      },
+      {
+        "id": "line_9",
+        "text": "醇值偏高(3.76mmol/L)(参考值＜3.36)，血脂异常；建议控制饮食和健康的生活方式，心内科诊治。",
+        "confidence": 1,
+        "box": [
+          60.094825744628906, 279.6043701171875, 476.872314453125,
+          290.6071472167969
+        ]
+      },
+      {
+        "id": "line_10",
+        "text": "【肝胆功能】",
+        "confidence": 1,
+        "box": [
+          60.094825744628906, 312.77850341796875, 126.039306640625,
+          323.77154541015625
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "mergedSourceLineIds": ["line_8", "line_9"],
+    "mergedTextFragment": "低密度脂蛋白胆固醇值偏高(3.76mmol/L)",
+    "dictionaryKeys": ["lipid_ldl_c", "lipid_tc", "lipid_tg"],
+    "observations": [
+      {
+        "normalizedName": "总胆固醇",
+        "numericValue": 6.04,
+        "unit": "mmol/L",
+        "referenceLow": null,
+        "referenceHigh": 5.2,
+        "abnormalFlag": "high"
+      },
+      {
+        "normalizedName": "甘油三酯",
+        "numericValue": 2.67,
+        "unit": "mmol/L",
+        "referenceLow": null,
+        "referenceHigh": 1.7,
+        "abnormalFlag": "high"
+      },
+      {
+        "normalizedName": "低密度脂蛋白胆固醇",
+        "numericValue": 3.76,
+        "unit": "mmol/L",
+        "referenceLow": null,
+        "referenceHigh": 3.36,
+        "abnormalFlag": "high"
+      }
+    ]
+  }
+}

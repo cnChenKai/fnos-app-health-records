@@ -5,6 +5,7 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import PullIndicator from "../../components/PullIndicator.vue";
 import { request } from "../../utils/api";
 import { formatDatabaseTime } from "../../utils/time";
+import { processingCodeLabel } from "../../utils/processing-code-labels";
 import type { AiAuditSummary } from "../../types/api";
 import { usePullRefresh } from "../../composables/usePullRefresh";
 import { useRefreshOnActivate } from "../../composables/useRefreshOnActivate";
@@ -182,7 +183,7 @@ onBeforeUnmount(() => observer?.disconnect());
           <small :title="tokenTitle((item.promptTokens || 0) + (item.completionTokens || 0))">
             尝试 {{ item.attempts }} 次 · {{ tokenText((item.promptTokens || 0) + (item.completionTokens || 0)) }} · {{ msText(item.elapsedMs) }}
           </small>
-          <p v-if="item.errorMessage"><CircleAlert :size="14" />{{ item.errorCode || "AI_ERROR" }} · {{ item.errorMessage }}</p>
+          <p v-if="item.errorMessage"><CircleAlert :size="14" />{{ processingCodeLabel(item.errorCode || "AI_ERROR") }} · {{ item.errorMessage }}</p>
         </article>
       </div>
       <div ref="sentinel" class="load-more-indicator" aria-live="polite">

@@ -6,6 +6,11 @@ import { describeTechnical } from "./utils/error";
 import { reportClientSystemError } from "./utils/api";
 import "./styles.css";
 
+/* 滚动恢复由 AppShell 按页面路径手动管理，关闭浏览器默认恢复，避免前进/后退时双重跳动 */
+if ("scrollRestoration" in window.history) {
+  window.history.scrollRestoration = "manual";
+}
+
 const app = createApp(App);
 
 /* 全局兜底：任何漏网的同步渲染错误或未捕获 rejection 都留痕并提示，杜绝“点了没反应” */

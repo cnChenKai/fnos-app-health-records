@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "description": "匿名合成连续大报告 OCR、Worker RSS 高水位与进程请求上限回收金标，不调用真实 OCR 或 AI。",
+  "expected": {
+    "pythonRequestLimitResponseCount": 3,
+    "pythonRequestLimitProcessCount": 2,
+    "pythonRequestLimitRecycleReason": "request_limit",
+    "pythonMemoryResponseCount": 2,
+    "pythonMemoryProcessCount": 2,
+    "pythonMemoryRecycleReason": "memory_high_water",
+    "queuedClientRequestCount": 7,
+    "queuedClientProcessCount": 3,
+    "queuedClientRequestLimitRecycleCount": 2,
+    "queuedClientReportBoundaryRecycleCount": 1,
+    "invalidLifecycleProtocolCode": "OCR_WORKER_PROTOCOL_ERROR",
+    "invalidLifecycleRecoveryProcessCount": 2,
+    "jobReportCount": 2,
+    "jobPageCount": 9,
+    "jobWorkerProcessCount": 4,
+    "jobOcrResultCount": 9,
+    "jobCompletedOcrCount": 9,
+    "jobAttemptTotal": 9,
+    "jobActiveCount": 0,
+    "jobRequestLimitRecycleCount": 2,
+    "jobReportBoundaryRecycleCount": 2
+  }
+}

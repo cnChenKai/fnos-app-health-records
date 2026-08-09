@@ -1,0 +1,24 @@
+{
+  "awaitingWithPrevious": {
+    "tone": "info",
+    "title": "正在更新报告页面",
+    "message": "当前仍展示上一次成功的报告数据和趋势，页面重新识别完成后会自动更新。",
+    "action": null,
+    "actionLabel": null
+  },
+  "awaitingWithoutPrevious": {
+    "tone": "info",
+    "title": "正在更新报告页面",
+    "message": "正在根据调整后的报告页面重新识别，完成后会自动更新报告内容。",
+    "action": null,
+    "actionLabel": null
+  },
+  "button": {
+    "disabled": true,
+    "loading": true,
+    "label": "正在更新页面"
+  },
+  "pipelineVersion": "manual-page-v1",
+  "pollFailureLimit": 3,
+  "detailSyncIntervalMs": 10000
+}

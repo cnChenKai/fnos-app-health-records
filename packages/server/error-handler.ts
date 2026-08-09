@@ -41,7 +41,12 @@ export default async function errorHandler(error: unknown, event: H3Event) {
   if (status === 404) {
     const url = event.url || new URL(event.req.url);
     if (!url.pathname.startsWith(baseURL)) {
-      return Response.redirect(`${baseURL}${url.pathname.slice(1)}${url.search}`, 302);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          location: `${baseURL}${url.pathname.slice(1)}${url.search}`
+        }
+      });
     }
   }
 

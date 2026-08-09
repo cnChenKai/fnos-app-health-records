@@ -1,0 +1,39 @@
+{
+  "description": "以脱敏超声明细为基线构造的同侧同类双病灶跨年度金标；两个病灶均位于肝右叶，但具有稳定、明确的亚区域描述。",
+  "reports": [
+    {
+      "key": "baseline",
+      "examDate": "2024-06-18",
+      "nearDiaphragmMm": 5,
+      "nearHilumMm": 12
+    },
+    {
+      "key": "middle",
+      "examDate": "2025-06-18",
+      "nearDiaphragmMm": 6,
+      "nearHilumMm": 11
+    },
+    {
+      "key": "latest",
+      "examDate": "2026-06-18",
+      "nearDiaphragmMm": 7,
+      "nearHilumMm": 10
+    }
+  ],
+  "manualReview": {
+    "reportKey": "middle",
+    "regionIncludes": "膈面",
+    "sizeMm": 6.2
+  },
+  "expected": {
+    "groupCount": 2,
+    "sourcePage": 18,
+    "nearDiaphragmRegion": "右叶近膈面",
+    "nearHilumRegion": "右叶近肝门区",
+    "nearDiaphragmSizesBeforeReview": [5, 6, 7],
+    "nearDiaphragmSizesAfterReview": [5, 6.2, 7],
+    "nearHilumSizes": [12, 11, 10],
+    "nearDiaphragmChangeKind": "size_stable",
+    "nearHilumChangeKind": "size_stable"
+  }
+}

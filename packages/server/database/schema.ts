@@ -3,7 +3,9 @@ import {
   aiExtractionUnitSchemaSql,
   clinicalFactSchemaSql,
   indicatorDictionarySchemaSql,
+  indicatorGovernanceHistorySchemaSql,
   latestSchemaVersion,
+  reportDuplicateGovernanceSchemaSql,
   morphologyFindingSchemaSql,
   reportStructuredSectionSchemaSql
 } from "./migrations";
@@ -167,6 +169,10 @@ CREATE TABLE IF NOT EXISTS observations (
   abnormal_flag TEXT CHECK (
     abnormal_flag IS NULL OR abnormal_flag IN ('high', 'low', 'abnormal', 'normal')
   ),
+  display_abnormal_flag TEXT CHECK (
+    display_abnormal_flag IS NULL OR display_abnormal_flag IN ('high', 'low', 'abnormal', 'normal')
+  ),
+  abnormal_conflict INTEGER NOT NULL DEFAULT 0,
   method TEXT,
   evidence_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -198,6 +204,8 @@ CREATE TABLE IF NOT EXISTS indicator_catalog (
   unit_dimension TEXT,
   allowed_units_json TEXT NOT NULL DEFAULT '[]',
   section_hints_json TEXT NOT NULL DEFAULT '[]',
+  trend_source_preference_json TEXT NOT NULL DEFAULT '{}',
+  reference_range_json TEXT NOT NULL DEFAULT '{}',
   dictionary_layer TEXT,
   dictionary_revision INTEGER,
   dictionary_snapshot_id TEXT,
@@ -241,6 +249,14 @@ CREATE TABLE IF NOT EXISTS observation_normalizations (
   matched_by TEXT NOT NULL,
   match_reason TEXT NOT NULL,
   excluded_reason TEXT,
+  source_origin TEXT NOT NULL DEFAULT 'none' CHECK (
+    source_origin IN ('item_name', 'item_code', 'combined', 'ai_normalized_name', 'none', 'manual_confirmation', 'manual_exclusion', 'legacy')
+  ),
+  source_name TEXT,
+  alias_source TEXT CHECK (alias_source IS NULL OR alias_source IN ('builtin', 'user', 'ai_suggestion')),
+  review_status TEXT NOT NULL DEFAULT 'unreviewed' CHECK (review_status IN ('unreviewed', 'confirmed', 'excluded')),
+  reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_at TEXT,
   version TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -248,6 +264,25 @@ CREATE TABLE IF NOT EXISTS observation_normalizations (
 
 CREATE INDEX IF NOT EXISTS observation_normalizations_trend_idx
   ON observation_normalizations(canonical_key, canonical_unit, quality);
+
+CREATE TABLE IF NOT EXISTS indicator_governance_decisions (
+  fingerprint TEXT PRIMARY KEY REFERENCES indicator_unmatched_names(fingerprint) ON DELETE CASCADE,
+  action TEXT NOT NULL CHECK (action IN ('confirm', 'exclude')),
+  indicator_id TEXT REFERENCES indicator_catalog(id) ON DELETE SET NULL,
+  canonical_key TEXT,
+  save_alias INTEGER NOT NULL DEFAULT 0 CHECK (save_alias IN (0, 1)),
+  alias_scope TEXT CHECK (alias_scope IS NULL OR alias_scope IN ('global', 'report_type')),
+  alias_id TEXT REFERENCES indicator_aliases(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS indicator_governance_decisions_key_idx
+  ON indicator_governance_decisions(canonical_key, action);
+
+${indicatorGovernanceHistorySchemaSql}
 
 CREATE TABLE IF NOT EXISTS processing_jobs (
   id TEXT PRIMARY KEY,
@@ -301,6 +336,8 @@ CREATE TABLE IF NOT EXISTS ocr_results (
   quality_reason TEXT,
   text_length INTEGER,
   elapsed_ms INTEGER,
+  coord_width REAL,
+  coord_height REAL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -493,6 +530,8 @@ CREATE INDEX IF NOT EXISTS file_gc_queue_pending_idx
   ON file_gc_queue(completed_at, not_before, created_at);
 
 ${indicatorDictionarySchemaSql}
+
+${reportDuplicateGovernanceSchemaSql}
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,

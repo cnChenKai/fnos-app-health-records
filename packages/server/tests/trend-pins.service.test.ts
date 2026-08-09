@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
+import { normalizeReportObservations } from "../services/indicator-normalization.service.ts";
 import { listTrendSeries, updateTrendPin } from "../services/records.service.ts";
 
 const userA: RequestUser = {
@@ -70,11 +71,13 @@ test("keeps trend pins isolated by user and member", () => {
       "5.1",
       5.1
     );
+    normalizeReportObservations("trend-pin-report-old");
+    normalizeReportObservations("trend-pin-report-new");
 
     const initialA = listTrendSeries(userA, "trend-pin-member");
     const initialC = listTrendSeries(userC, "trend-pin-member");
-    assert.deepEqual(initialA.map((series) => series.name), ["空腹血糖", "总胆固醇"]);
-    assert.deepEqual(initialC.map((series) => series.name), ["空腹血糖", "总胆固醇"]);
+    assert.deepEqual(initialA.map((series) => series.name), ["总胆固醇", "空腹血糖"]);
+    assert.deepEqual(initialC.map((series) => series.name), ["总胆固醇", "空腹血糖"]);
 
     const cholesterol = initialA.find((series) => series.name === "总胆固醇");
     assert.ok(cholesterol);
@@ -88,7 +91,7 @@ test("keeps trend pins isolated by user and member", () => {
     const unchangedC = listTrendSeries(userC, "trend-pin-member");
     assert.equal(pinnedA[0]?.name, "总胆固醇");
     assert.equal(pinnedA[0]?.pinned, true);
-    assert.deepEqual(unchangedC.map((series) => series.name), ["空腹血糖", "总胆固醇"]);
+    assert.deepEqual(unchangedC.map((series) => series.name), ["总胆固醇", "空腹血糖"]);
     assert.equal(unchangedC.some((series) => series.pinned), false);
 
     updateTrendPin(userA, {
@@ -98,7 +101,7 @@ test("keeps trend pins isolated by user and member", () => {
     }, false);
     assert.deepEqual(
       listTrendSeries(userA, "trend-pin-member").map((series) => series.name),
-      ["空腹血糖", "总胆固醇"]
+      ["总胆固醇", "空腹血糖"]
     );
   } finally {
     closeDatabaseForTests();

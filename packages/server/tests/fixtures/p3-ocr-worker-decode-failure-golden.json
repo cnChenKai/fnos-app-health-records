@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "description": "匿名合成损坏图片、损坏 PDF、格式伪装和永久解码失败隔离金标，不调用真实 OCR 或 AI。",
+  "expected": {
+    "pdfDecodeCode": "PDF_DECODE_FAILED",
+    "imageDecodeCode": "IMAGE_DECODE_FAILED",
+    "formatMismatchCode": "INPUT_FORMAT_MISMATCH",
+    "ocrEngineLoadsBeforeDecodeFailure": 0,
+    "permanentFailureAttempts": 1,
+    "permanentFailureWorkerRequests": 1,
+    "cancelledSiblingJobs": 1,
+    "activeJobsAfterPermanentFailure": 0,
+    "partialThumbnailExists": false,
+    "failedReportStatus": "failed",
+    "pdfPagesAfterDecodeFailure": 1,
+    "pdfOcrResultsAfterDecodeFailure": 0,
+    "ocrResultsAfterRecovery": 1,
+    "reportStatusAfterRecovery": "needs_review",
+    "preservedOcrResultsAfterRerunFailure": 1,
+    "preservedObservationsAfterRerunFailure": 1,
+    "preservedTrendPointsAfterRerunFailure": 1,
+    "preservedReportStatusAfterRerunFailure": "ready",
+    "previewFailureStatusCode": 422
+  }
+}

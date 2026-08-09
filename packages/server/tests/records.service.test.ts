@@ -10,6 +10,7 @@ import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import { schemaVersion } from "../database/schema.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
+  classifyObservationDisplay,
   createBackup,
   createReminder,
   confirmReportReady,
@@ -17,6 +18,7 @@ import {
   deleteReportPage,
   getReportDetail,
   getReportPageFile,
+  getReportPageOcrDetail,
   getReportSummaryStats,
   getAiAuditSummary,
   getBackupDownload,
@@ -30,9 +32,11 @@ import {
   listTrendSeries,
   listUserOperationAuditLogs,
   mergeDuplicateReport,
+  permanentlyDeleteReport,
   restoreBackup as restoreFullBackup,
   restoreUploadedBackup,
   restoreReport,
+  suppressDuplicateMeasurementCandidates,
   trashReport,
   updateReminderStatus,
   updateAppNotificationStatus,
@@ -45,7 +49,12 @@ import {
   normalizeAllObservations,
   normalizeAllObservationsFromDictionary
 } from "../services/indicator-normalization.service.ts";
+import {
+  setReportDuplicateDecision,
+  undoReportDuplicateDecision
+} from "../services/report-duplicate-governance.service.ts";
 import { createUpload } from "../services/upload.service.ts";
+import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
 
 const manager: RequestUser = {
   id: "records-manager",
@@ -67,6 +76,290 @@ function anotherPngBytes() {
 function thirdPngBytes() {
   return Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x04, 0x05, 0x06]);
 }
+
+test("classifies report observations into standardized, candidate, technical, qualitative and governance display groups", () => {
+  const evidence = [{ pageNumber: 1, quote: "可核验证据" }];
+  assert.deepEqual(classifyObservationDisplay({
+    normalizationQuality: "high",
+    normalizationExcludedReason: null,
+    normalizationMatchedBy: "builtin_alias",
+    canonicalName: "标准指标",
+    evidence
+  }), { displayTier: "primary", displayCategory: "standardized", displayReason: null });
+
+  const unknown = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "待补医学项目",
+    sectionName: "专项检验",
+    numericValue: 1.2,
+    unit: "U/L"
+  });
+  assert.equal(unknown.displayTier, "secondary");
+  assert.equal(unknown.displayCategory, "medical_candidate");
+  assert.match(unknown.displayReason || "", /尚未匹配标准指标/);
+
+  const technical = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "专业参数",
+    sectionName: "心电图检查",
+    numericValue: 42,
+    unit: "ms"
+  });
+  assert.equal(technical.displayTier, "secondary");
+  assert.equal(technical.displayCategory, "technical_measurement");
+
+  const qualitative = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "查体记录",
+    sectionName: "内科",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(qualitative.displayTier, "secondary");
+  assert.equal(qualitative.displayCategory, "qualitative_finding");
+
+  const device = classifyObservationDisplay({
+    normalizationQuality: "excluded",
+    normalizationExcludedReason: "设备过程参数",
+    normalizationMatchedBy: "functional_device_filter",
+    canonicalName: null,
+    evidence
+  });
+  assert.deepEqual(device, {
+    displayTier: "governance_only",
+    displayCategory: "governance_noise",
+    displayReason: "设备过程参数"
+  });
+
+  for (const unverified of [
+    classifyObservationDisplay({
+      normalizationQuality: "low",
+      normalizationExcludedReason: "未命中内置指标字典",
+      normalizationMatchedBy: "none",
+      canonicalName: null,
+      evidence: []
+    }),
+    classifyObservationDisplay({
+      normalizationQuality: "high",
+      normalizationExcludedReason: null,
+      normalizationMatchedBy: "builtin_alias",
+      canonicalName: "标准指标",
+      evidence: [{ quote: "" }, { pageNumber: 0, quote: "无有效页码" }]
+    }),
+    classifyObservationDisplay({
+      normalizationQuality: "low",
+      normalizationExcludedReason: "项目名称无法回指 OCR 证据，禁止进入默认趋势",
+      normalizationMatchedBy: "builtin_alias",
+      canonicalName: "待核验标准指标",
+      evidence
+    })
+  ]) {
+    assert.equal(unverified.displayTier, "governance_only");
+    assert.equal(unverified.displayCategory, "governance_noise");
+  }
+
+  const laboratoryQualitative = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "专项筛查结果",
+    sectionName: "专项筛查",
+    resultText: "阴性",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(laboratoryQualitative.displayTier, "secondary");
+  assert.equal(laboratoryQualitative.displayCategory, "qualitative_finding");
+
+  const breathMeasurement = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "原始测量值",
+    sectionName: "呼气试验",
+    resultText: "0.5",
+    numericValue: 0.5,
+    unit: null
+  });
+  assert.equal(breathMeasurement.displayTier, "secondary");
+  assert.equal(breathMeasurement.displayCategory, "technical_measurement");
+
+  const reportLevelQualitative = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "专项检查报告",
+    sectionName: "专项检查报告",
+    resultText: "阴性",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(reportLevelQualitative.displayTier, "secondary");
+  assert.equal(reportLevelQualitative.displayCategory, "qualitative_finding");
+
+  const narrativeFragment = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence: [{ pageNumber: 1, quote: "某值偏高，建议控制饮食并复查" }],
+    itemName: "某值",
+    sectionName: "检查结论",
+    resultText: "3.7",
+    numericValue: 3.7,
+    unit: null
+  });
+  assert.equal(narrativeFragment.displayTier, "governance_only");
+  assert.equal(narrativeFragment.displayCategory, "governance_noise");
+  assert.match(narrativeFragment.displayReason || "", /结论句残片/);
+
+  const structuralNoise = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "专项检查报告",
+    sectionName: "专项检查报告"
+  });
+  assert.equal(structuralNoise.displayTier, "governance_only");
+  assert.equal(structuralNoise.displayCategory, "governance_noise");
+
+  // 查体表「项目 | 本次结果 | 历史结果」并排印刷时，AI 可能把阳性发现文本当作
+  // 项目名、再从历史结果列取来「未见异常」，语义自相矛盾，必须拦到治理区。
+  const contradictoryFinding = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence: [{ pageNumber: 8, quote: "右侧外耳道耵聍堵塞 | 未见异常" }],
+    itemName: "右侧外耳道耵聍堵塞",
+    sectionName: "耳鼻喉",
+    resultText: "未见异常",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(contradictoryFinding.displayTier, "governance_only");
+  assert.equal(contradictoryFinding.displayCategory, "governance_noise");
+  assert.match(contradictoryFinding.displayReason || "", /矛盾/);
+
+  // 普通查体条目（腹部 | 未见异常）不含阳性发现词，保持定性记录展示。
+  const physicalExamNormal = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence: [{ pageNumber: 7, quote: "腹部 | 未见异常" }],
+    itemName: "腹部",
+    sectionName: "外科",
+    resultText: "未见异常",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(physicalExamNormal.displayTier, "secondary");
+  assert.equal(physicalExamNormal.displayCategory, "qualitative_finding");
+
+  // 带检测语义的名称（肿瘤标志物）缺如类结果合法，不得误伤。
+  const screeningPanel = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence,
+    itemName: "肿瘤标志物",
+    sectionName: "专项筛查",
+    resultText: "正常",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(screeningPanel.displayTier, "secondary");
+  assert.equal(screeningPanel.displayCategory, "qualitative_finding");
+
+  // 便常规中「-」是合法的定性缺如结果（未检出），应归为定性记录而非未匹配候选。
+  const dashQualitative = classifyObservationDisplay({
+    normalizationQuality: "low",
+    normalizationExcludedReason: "未命中内置指标字典",
+    normalizationMatchedBy: "none",
+    canonicalName: null,
+    evidence: [{ pageNumber: 12, quote: "虫卵 | -" }],
+    itemName: "虫卵",
+    sectionName: "便常规",
+    resultText: "-",
+    numericValue: null,
+    unit: null
+  });
+  assert.equal(dashQualitative.displayTier, "secondary");
+  assert.equal(dashQualitative.displayCategory, "qualitative_finding");
+});
+
+test("suppresses bare-name measurement fragments duplicated by standardized entries", () => {
+  type ObservationList = Parameters<typeof suppressDuplicateMeasurementCandidates>[0];
+  const sharedEvidence = [{ pageNumber: 21, quote: "右踝：1.07 | 左踝：1.08" }];
+  const base = {
+    id: "base",
+    reportId: "report",
+    itemName: "条目",
+    numericValue: null as number | null,
+    canonicalName: null as string | null,
+    evidence: null as unknown,
+    displayTier: "secondary",
+    displayCategory: "medical_candidate",
+    displayReason: null as string | null,
+  };
+  const standardized = {
+    ...base,
+    id: "std-left-abi",
+    itemName: "左侧踝肱指数",
+    canonicalName: "左侧踝肱指数",
+    numericValue: 1.08,
+    evidence: sharedEvidence,
+    displayTier: "primary",
+    displayCategory: "standardized",
+  };
+  const fragment = { ...base, id: "frag", itemName: "左踝", numericValue: 1.08, evidence: sharedEvidence };
+  const orphanValue = { ...base, id: "orphan", itemName: "未知碎片", numericValue: 9.99, evidence: sharedEvidence };
+  const differentQuote = {
+    ...base,
+    id: "other-quote",
+    itemName: "左踝",
+    numericValue: 1.08,
+    evidence: [{ pageNumber: 21, quote: "踝肱指数检查结果 1.08" }],
+  };
+  const result = suppressDuplicateMeasurementCandidates([
+    standardized,
+    fragment,
+    orphanValue,
+    differentQuote,
+  ] as unknown as ObservationList);
+  const byId = new Map(result.map((row) => [row.id, row]));
+
+  // 与标准化条目同值同证据的裸名称残片被抑制，标准化条目本身不受影响。
+  assert.equal(byId.get("frag")?.displayTier, "governance_only");
+  assert.equal(byId.get("frag")?.displayCategory, "governance_noise");
+  assert.match(byId.get("frag")?.displayReason || "", /重复测量候选/);
+  assert.equal(byId.get("std-left-abi")?.displayTier, "primary");
+  // 同证据但数值无标准化锚点、或同值但证据不同的条目保持原样。
+  assert.equal(byId.get("orphan")?.displayTier, "secondary");
+  assert.equal(byId.get("other-quote")?.displayTier, "secondary");
+});
 
 test("lists reports with cursors and returns detail pages with original files", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-"));
@@ -275,6 +568,7 @@ test("detects an identical uploaded original despite divergent AI titles and bod
         id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
       ) VALUES ('same-file-incoming-tc', ?, '血脂检查', '血清胆固醇', '总胆固醇', '4.26', 4.26, 'mmol/L')
     `).run(incoming.reportId);
+    normalizeAllObservations(manager);
 
     const detail = getReportDetail(manager, incoming.reportId);
     assert.equal(detail.duplicateCandidates.length, 1);
@@ -403,6 +697,7 @@ test("detects duplicate checkups across equivalent institution names without mer
     ].forEach(([name, resultText, numericValue, unit], index) => {
       insertObservation.run(`alias-different-${index}`, different.reportId, name, name, resultText, numericValue, unit);
     });
+    normalizeAllObservations(manager);
 
     const duplicateDetail = getReportDetail(manager, duplicate.reportId);
     assert.equal(duplicateDetail.duplicateCandidates.some((candidate) => candidate.id === original.reportId), true);
@@ -414,8 +709,8 @@ test("detects duplicate checkups across equivalent institution names without mer
     const differentDetail = getReportDetail(manager, different.reportId);
     assert.equal(differentDetail.duplicateCandidates.length, 0);
 
-    const trends = listTrendSeries(manager, "records-member");
-    const triglycerideSeries = trends.filter((series) => series.name === "甘油三酯");
+    const triglycerideSeries = listTrendSeries(manager, "records-member")
+      .filter((series) => series.name === "甘油三酯");
     assert.equal(
       triglycerideSeries.length,
       1,
@@ -423,10 +718,49 @@ test("detects duplicate checkups across equivalent institution names without mer
     );
     const triglyceride = triglycerideSeries[0];
     assert.ok(triglyceride);
-    assert.equal(triglyceride.pointCount, 2);
+    assert.equal(triglyceride.pointCount, 3);
     assert.deepEqual(
       new Set(triglyceride.points.map((point: { reportId: string }) => point.reportId)),
+      new Set([original.reportId, duplicate.reportId, different.reportId])
+    );
+
+    const duplicateDecision = setReportDuplicateDecision(manager, {
+      reportId: original.reportId,
+      candidateReportId: duplicate.reportId,
+      decision: "duplicate",
+      reason: "金标回归：等价机构名且六项指标完全重合"
+    });
+    assert.ok(duplicateDecision);
+    const collapsed = listTrendSeries(manager, "records-member")
+      .find((series) => series.name === "甘油三酯");
+    assert.ok(collapsed);
+    assert.equal(collapsed.pointCount, 2);
+    assert.deepEqual(
+      new Set(collapsed.points.map((point: { reportId: string }) => point.reportId)),
       new Set([original.reportId, different.reportId])
+    );
+
+    setReportDuplicateDecision(manager, {
+      reportId: original.reportId,
+      candidateReportId: duplicate.reportId,
+      decision: "distinct",
+      reason: "金标回归：人工确认是两次独立检查"
+    });
+    assert.equal(
+      getReportDetail(manager, duplicate.reportId).duplicateCandidates
+        .some((candidate) => candidate.id === original.reportId),
+      false
+    );
+    const preserved = listTrendSeries(manager, "records-member")
+      .find((series) => series.name === "甘油三酯");
+    assert.ok(preserved);
+    assert.equal(preserved.pointCount, 3);
+
+    undoReportDuplicateDecision(manager, duplicateDecision.pairKey);
+    assert.equal(
+      getReportDetail(manager, duplicate.reportId).duplicateCandidates
+        .some((candidate) => candidate.id === original.reportId),
+      true
     );
   } finally {
     closeDatabaseForTests();
@@ -650,6 +984,69 @@ test("moves a duplicate report to the 30 day recycle bin without deleting origin
     const audit = db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE target_id = ? AND action = 'report.trash'")
       .get(upload.reportId) as { count: number };
     assert.equal(audit.count, 1);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("permanent deletion keeps a redacted duplicate-governance snapshot without report titles", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-purge-governance-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const sensitiveTitle = "不应进入审计的敏感报告标题";
+    const source = createUpload(manager, "records-member", [{ originalName: "source.png", data: pngBytes() }]);
+    const target = createUpload(manager, "records-member", [{ originalName: "target.png", data: anotherPngBytes() }]);
+    db.prepare("UPDATE reports SET title = ? WHERE id = ?").run(sensitiveTitle, source.reportId);
+    const decision = setReportDuplicateDecision(manager, {
+      reportId: source.reportId,
+      candidateReportId: target.reportId,
+      decision: "duplicate",
+      reason: "永久删除前治理快照",
+      evidence: { confidence: "high", matchedFields: ["原始文件"] }
+    });
+    assert.ok(decision);
+    trashReport(manager, source.reportId);
+    assert.deepEqual(permanentlyDeleteReport(manager, source.reportId), { id: source.reportId, deleted: true });
+
+    const reportCount = db.prepare("SELECT COUNT(*) AS count FROM reports WHERE id = ?")
+      .get(source.reportId) as { count: number };
+    const decisionCount = db.prepare("SELECT COUNT(*) AS count FROM report_duplicate_decisions WHERE pair_key = ?")
+      .get(decision.pairKey) as { count: number };
+    const historyCount = db.prepare("SELECT COUNT(*) AS count FROM report_duplicate_history WHERE pair_key = ?")
+      .get(decision.pairKey) as { count: number };
+    assert.equal(reportCount.count, 0);
+    assert.equal(decisionCount.count, 0);
+    assert.equal(historyCount.count, 1);
+
+    const audit = db.prepare(`
+      SELECT detail_json AS detailJson FROM audit_logs
+      WHERE action = 'report.purge' AND target_id = ?
+    `).get(source.reportId) as { detailJson: string };
+    const detail = JSON.parse(audit.detailJson) as Record<string, any>;
+    assert.equal("reportTitle" in detail, false);
+    assert.equal(audit.detailJson.includes(sensitiveTitle), false);
+    assert.match(String(detail.reportFingerprint), /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(detail.pageCount, 1);
+    assert.deepEqual(detail.governanceSnapshot, {
+      activeDecisions: 1,
+      duplicateDecisions: 1,
+      distinctDecisions: 0,
+      historyEvents: 1
+    });
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -996,7 +1393,7 @@ test("creates, lists, downloads and restores a full app backup", () => {
   }
 });
 
-test("confirms a reviewed report and returns redacted OCR text", () => {
+test("confirms a reviewed report and returns redacted OCR text", async () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-review-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -1019,9 +1416,9 @@ test("confirms a reviewed report and returns redacted OCR text", () => {
       INSERT INTO ocr_results (id, job_id, page_id, engine, model_version, lines_json, elapsed_ms)
       VALUES ('ocr-test', ?, ?, 'test-ocr', 'v1', ?, 8)
     `).run(job.id, page.id, JSON.stringify([
-      { text: "示例医院 检验报告" },
-      { text: `联系电话 ${samplePhone}` },
-      { text: "空腹血糖 5.2 mmol/L" }
+      { id: "source-title", text: "示例医院 检验报告", confidence: 0.98, box: [10, 10, 200, 32] },
+      { id: "source-private", text: `联系电话 ${samplePhone}`, confidence: 0.97, box: [10, 40, 200, 62] },
+      { text: "空腹血糖 5.2 mmol/L", confidence: 0.95 }
     ]));
     db.prepare("UPDATE reports SET status = 'needs_review' WHERE id = ?").run(upload.reportId);
 
@@ -1031,9 +1428,224 @@ test("confirms a reviewed report and returns redacted OCR text", () => {
     assert.match(ocr[0].text, /示例医院|空腹血糖/);
     assert.doesNotMatch(ocr[0].text, new RegExp(`${samplePhone}|联系电话`));
 
+    const pageOcr = await getReportPageOcrDetail(manager, upload.reportId, page.id);
+    // 图片类历史数据无法可靠反推坐标系，保持 null 让前端按预览图自然尺寸换算。
+    assert.equal(pageOcr?.coordWidth, null);
+    assert.equal(pageOcr?.coordHeight, null);
+    assert.deepEqual(pageOcr?.lines, [
+      { id: "source-title", text: "示例医院 检验报告", confidence: 0.98, box: [10, 10, 200, 32] },
+      { id: "page_1_line_3", text: "空腹血糖 5.2 mmol/L", confidence: 0.95, box: null }
+    ]);
+
     assert.deepEqual(confirmReportReady(manager, upload.reportId), { id: upload.reportId, status: "ready" });
     const status = db.prepare("SELECT status FROM reports WHERE id = ?").get(upload.reportId) as { status: string };
     assert.equal(status.status, "ready");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("heals legacy PDF OCR coordinate space on first read", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-ocr-coord-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    const upload = createUpload(manager, "records-member", [{ originalName: "ocr.png", data: pngBytes() }]);
+    const page = db.prepare("SELECT id FROM report_pages WHERE report_id = ?").get(upload.reportId) as { id: string };
+    // 模拟历史 PDF 页：坐标系未记录，内嵌文本框（点坐标）与 OCR 四点框（渲染像素）混存。
+    db.prepare("UPDATE report_pages SET mime_type = 'application/pdf', storage_path = 'reports/legacy/source.pdf', source_page_number = 1, rotation = 0 WHERE id = ?")
+      .run(page.id);
+    const job = db.prepare("SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'ocr'")
+      .get(upload.reportId) as { id: string };
+    db.prepare(`
+      INSERT INTO ocr_results (id, job_id, page_id, engine, model_version, lines_json, elapsed_ms)
+      VALUES ('ocr-legacy', ?, ?, 'test-ocr', 'v1', ?, 8)
+    `).run(job.id, page.id, JSON.stringify([
+      { id: "pdf-text", text: "内嵌文本行", confidence: 1, box: [10, 10, 200, 32] },
+      { id: "ocr-line", text: "扫描行", confidence: 0.9, box: [[300, 120], [600, 120], [600, 180], [300, 180]] }
+    ]));
+    let inspectCalls = 0;
+    const worker = async () => {
+      inspectCalls += 1;
+      return { pageCount: 1, pages: [{ pageNumber: 1, width: 600, height: 840 }] };
+    };
+
+    const detail = await getReportPageOcrDetail(manager, upload.reportId, page.id, worker as never);
+    assert.equal(detail?.coordWidth, 600);
+    assert.equal(detail?.coordHeight, 840);
+    assert.deepEqual(detail?.lines, [
+      { id: "pdf-text", text: "内嵌文本行", confidence: 1, box: [10, 10, 200, 32] },
+      // 渲染像素按默认 renderScale=3 折算回页面点坐标
+      { id: "ocr-line", text: "扫描行", confidence: 0.9, box: [100, 40, 200, 60] }
+    ]);
+    const persisted = db.prepare("SELECT lines_json AS linesJson, coord_width AS w, coord_height AS h FROM ocr_results WHERE id = 'ocr-legacy'")
+      .get() as { linesJson: string; w: number; h: number };
+    assert.equal(persisted.w, 600);
+    assert.equal(persisted.h, 840);
+    assert.deepEqual((JSON.parse(persisted.linesJson) as Array<{ box: number[] }>)[1].box, [100, 40, 200, 60]);
+
+    // 第二次读取直接命中已归一的数据，不再调用 worker。
+    const again = await getReportPageOcrDetail(manager, upload.reportId, page.id, worker as never);
+    assert.equal(again?.coordWidth, 600);
+    assert.equal(inspectCalls, 1);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("heals legacy PDF OCR coordinate space with page rotation", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-ocr-coord-rot-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    const upload = createUpload(manager, "records-member", [{ originalName: "ocr.png", data: pngBytes() }]);
+    const page = db.prepare("SELECT id FROM report_pages WHERE report_id = ?").get(upload.reportId) as { id: string };
+    db.prepare("UPDATE report_pages SET mime_type = 'application/pdf', storage_path = 'reports/legacy/source.pdf', source_page_number = 1, rotation = 90 WHERE id = ?")
+      .run(page.id);
+    const job = db.prepare("SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'ocr'")
+      .get(upload.reportId) as { id: string };
+    db.prepare(`
+      INSERT INTO ocr_results (id, job_id, page_id, engine, model_version, lines_json, elapsed_ms)
+      VALUES ('ocr-legacy-rot', ?, ?, 'test-ocr', 'v1', ?, 8)
+    `).run(job.id, page.id, JSON.stringify([
+      { id: "pdf-text", text: "内嵌文本行", confidence: 1, box: [10, 10, 200, 32] }
+    ]));
+    const worker = async () => ({ pageCount: 1, pages: [{ pageNumber: 1, width: 600, height: 840 }] });
+
+    const detail = await getReportPageOcrDetail(manager, upload.reportId, page.id, worker as never);
+    // 旋转 90° 后坐标系宽高互换，文本框同步落到旋转后的页面空间。
+    assert.equal(detail?.coordWidth, 840);
+    assert.equal(detail?.coordHeight, 600);
+    assert.deepEqual(detail?.lines[0]?.box, [808, 10, 830, 200]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("sanitizes stored reference bounds when reading report detail", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-reference-detail-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name) VALUES (?, ?)").run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('reference-detail-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('reference-detail-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, report_issued_at)
+      VALUES ('reference-detail-report', 'reference-detail-member', ?, 'laboratory', '参考范围读取测试', 'ready', '2026-08-01')
+    `).run(manager.id);
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, result_text, numeric_value, unit,
+        reference_low, reference_high, reference_text, evidence_json
+      ) VALUES (?, 'reference-detail-report', '检验', ?, ?, ?, 'U/L', ?, ?, ?, '[]')
+    `);
+    insertObservation.run('reference-detail-reversed', '项目甲', '7', 7, 10, 5, '10-5');
+    insertObservation.run('reference-detail-unsafe', '项目乙', '7', 7, 4, 10, '预测范围 4-10');
+    insertObservation.run('reference-detail-one-sided', '项目丙', '7', 7, null, 10, '≤10');
+
+    const observations = getReportDetail(manager, 'reference-detail-report').observations;
+    const reversed = observations.find((item) => item.id === 'reference-detail-reversed');
+    const unsafe = observations.find((item) => item.id === 'reference-detail-unsafe');
+    const oneSided = observations.find((item) => item.id === 'reference-detail-one-sided');
+    assert.ok(reversed);
+    assert.equal(reversed.referenceLow, null);
+    assert.equal(reversed.referenceHigh, null);
+    assert.equal(reversed.referenceText, '10-5');
+    assert.ok(unsafe);
+    assert.equal(unsafe.referenceLow, null);
+    assert.equal(unsafe.referenceHigh, null);
+    assert.equal(unsafe.referenceText, '预测范围 4-10');
+    assert.ok(oneSided);
+    assert.equal(oneSided.referenceLow, null);
+    assert.equal(oneSided.referenceHigh, 10);
+    assert.equal(oneSided.referenceText, '≤10');
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("derives conflict-safe abnormal display fields when reading report detail", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-abnormal-detail-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name) VALUES (?, ?)").run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('abnormal-detail-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('abnormal-detail-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, report_issued_at)
+      VALUES ('abnormal-detail-report', 'abnormal-detail-member', ?, 'laboratory', '异常解释读取测试', 'ready', '2026-08-01')
+    `).run(manager.id);
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, result_text, numeric_value, unit,
+        reference_low, reference_high, reference_text, abnormal_flag, evidence_json
+      ) VALUES (?, 'abnormal-detail-report', '检验', ?, ?, ?, 'U/L', 4, 10, '4-10', ?, ?)
+    `);
+    insertObservation.run('abnormal-detail-conflict', '项目甲', '7', 7, 'high', '[]');
+    insertObservation.run('abnormal-detail-computed', '项目乙', '11', 11, null, '[]');
+    insertObservation.run('abnormal-detail-inferred', '项目丙', '3 ↓', 3, null, JSON.stringify([{ quote: '项目丙 3 ↓' }]));
+
+    const observations = getReportDetail(manager, 'abnormal-detail-report').observations;
+    const conflict = observations.find((item) => item.id === 'abnormal-detail-conflict');
+    const computed = observations.find((item) => item.id === 'abnormal-detail-computed');
+    const inferred = observations.find((item) => item.id === 'abnormal-detail-inferred');
+    assert.ok(conflict);
+    assert.equal(conflict.abnormalFlag, 'high');
+    assert.equal(conflict.reportedAbnormalFlag, 'high');
+    assert.equal(conflict.displayAbnormalFlag, null);
+    assert.equal(conflict.abnormalStatus, 'conflict');
+    assert.equal(conflict.abnormalConflict, true);
+    assert.ok(computed);
+    assert.equal(computed.reportedAbnormalFlag, null);
+    assert.equal(computed.displayAbnormalFlag, 'high');
+    assert.equal(computed.abnormalSource, 'reference_range');
+    assert.equal(computed.abnormalStatus, 'computed');
+    assert.ok(inferred);
+    assert.equal(inferred.reportedAbnormalFlag, 'low');
+    assert.equal(inferred.displayAbnormalFlag, 'low');
+    assert.equal(inferred.abnormalSource, 'result_marker');
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -1058,8 +1670,8 @@ test("returns concrete trend values from reviewed and archived reports", () => {
     `).run(manager.id, manager.id);
 
     const first = createUpload(manager, "records-member", [{ originalName: "first.png", data: pngBytes() }]);
-    const second = createUpload(manager, "records-member", [{ originalName: "second.png", data: pngBytes() }]);
-    const urine = createUpload(manager, "records-member", [{ originalName: "urine.png", data: pngBytes() }]);
+    const second = createUpload(manager, "records-member", [{ originalName: "second.png", data: anotherPngBytes() }]);
+    const urine = createUpload(manager, "records-member", [{ originalName: "urine.png", data: thirdPngBytes() }]);
     db.prepare(`
       UPDATE reports SET title = ?, report_type = 'laboratory', status = ?, hospital_name_raw = '示例医院', report_issued_at = ?
       WHERE id = ?
@@ -1082,7 +1694,7 @@ test("returns concrete trend values from reviewed and archived reports", () => {
     insertObservation.run("obs-second", second.reportId, "生化检验", "血糖", "血糖", "6.8", 6.8, "mmol/L", "3.9-6.1", "high", JSON.stringify([{ pageNumber: 1, quote: "血糖 6.8 mmol/L" }]));
     insertObservation.run("obs-urine-glu", urine.reportId, "尿常规", "GLU", "GLU", "阴性", null, null, "阴性", "normal", JSON.stringify([{ pageNumber: 1, quote: "GLU 阴性" }]));
     /* 同一报告重复上传（一份待确认、一份已归档），趋势应只保留已归档那份的点 */
-    const duplicate = createUpload(manager, "records-member", [{ originalName: "duplicate.png", data: pngBytes() }]);
+    const duplicate = createUpload(manager, "records-member", [{ originalName: "duplicate.png", data: anotherPngBytes() }]);
     db.prepare(`
       UPDATE reports SET title = ?, report_type = 'laboratory', status = ?, hospital_name_raw = '示例医院', report_issued_at = ?
       WHERE id = ?
@@ -1134,9 +1746,117 @@ test("returns concrete trend values from reviewed and archived reports", () => {
     const issues = listIndicatorNormalizationIssues(manager);
     assert.equal(
       issues.some((item) => item.rawName === "GLU"),
-      false,
-      "已命中字典的尿糖定性结果不应进入未命中名称池"
+      true,
+      "low/excluded 的字典命中仍应留在治理池，避免被误认为可进入正式趋势"
     );
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("uses the preferred same-report point for deterministic trend metadata", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-trend-metadata-deterministic-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "trend.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '趋势确定性测试', report_type = 'checkup', status = 'ready',
+        report_issued_at = '2026-07-20'
+      WHERE id = ?
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, evidence_json
+      ) VALUES
+        ('a-medium-weight', ?, '未标注', '身体重量', '体重', '70 kg', 70, 'kg', '[]'),
+        ('z-high-weight', ?, '一般检查', '体重', '体重', '70 kg', 70, 'kg', '[{"pageNumber":1,"quote":"体重 70 kg"}]')
+    `).run(report.reportId, report.reportId);
+    db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, canonical_key, canonical_name, canonical_value, canonical_unit,
+        confidence, quality, matched_by, match_reason, version
+      ) VALUES
+        ('a-medium-weight', 'body_weight', '体重', 70, 'kg', 0.7, 'medium', 'dictionary', '别名匹配', 'test-v1'),
+        ('z-high-weight', 'body_weight', '体重', 70, 'kg', 1.0, 'high', 'dictionary', '精确匹配', 'test-v1')
+    `).run();
+
+    const trend = listTrendSeries(manager, "records-member")
+      .find((series) => series.indicatorKey === "body_weight");
+    assert.ok(trend);
+    assert.equal(trend.pointCount, 1);
+    assert.equal(trend.points[0].observationId, "z-high-weight");
+    assert.equal(trend.quality, "high");
+    assert.equal(trend.confidence, 1);
+    assert.equal(trend.sectionName, "一般检查");
+    assert.deepEqual(trend.sourceNames, ["身体重量", "体重"]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("prefers tabular result rows over narrative summary quotes for same-report trend points", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-trend-tabular-vs-narrative-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "trend.png", data: pngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '表格行优选测试', report_type = 'checkup', status = 'ready',
+        report_issued_at = '2026-07-20'
+      WHERE id = ?
+    `).run(report.reportId);
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, evidence_json
+      ) VALUES
+        ('tabular-uric-acid', ?, '肾功三项', '血清尿酸', '尿酸', '454 μmol/L ↑', 454, 'μmol/L',
+          '[{"pageNumber":11,"quote":"血清尿酸 | 454 μmol/L ↑ | 208~428 μmol/L"}]'),
+        ('narrative-uric-acid', ?, '肾脏功能', '血清尿酸值', '尿酸', '454', 454, 'μmol/L',
+          '[{"pageNumber":4,"quote":"血清尿酸值(454μmol/L)(参考值208-428)，高尿酸血症；建议调整饮食结构，以低嘌呤食物为主，内分泌代谢科随诊。"}]')
+    `).run(report.reportId, report.reportId);
+    db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, canonical_key, canonical_name, canonical_value, canonical_unit,
+        confidence, quality, matched_by, match_reason, version
+      ) VALUES
+        ('tabular-uric-acid', 'renal_uric_acid', '尿酸', 454, 'μmol/L', 0.95, 'high', 'dictionary', '别名匹配', 'test-v1'),
+        ('narrative-uric-acid', 'renal_uric_acid', '尿酸', 454, 'μmol/L', 1.0, 'high', 'dictionary', '章节匹配', 'test-v1')
+    `).run();
+
+    const trend = listTrendSeries(manager, "records-member")
+      .find((series) => series.indicatorKey === "renal_uric_acid");
+    assert.ok(trend);
+    assert.equal(trend.pointCount, 1);
+    // 叙述句 confidence 更高（1.0 vs 0.95），但表格行是原始定量来源，必须胜出
+    assert.equal(trend.points[0].observationId, "tabular-uric-acid");
+    assert.equal(trend.sectionName, "肾功三项");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -1149,6 +1869,7 @@ test("normalizes common health checkup issue-pool indicators", () => {
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
+    installRemoteDictionarySnapshotForTests();
     db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
       .run(manager.id, manager.displayName);
     db.prepare(`
@@ -1311,8 +2032,8 @@ test("summarizes report counts for the current member archive board", () => {
     db.prepare("UPDATE reports SET status = 'needs_review', report_issued_at = '2026-07-21' WHERE id = ?").run(review.reportId);
     db.prepare("UPDATE reports SET status = 'processing' WHERE id = ?").run(processing.reportId);
     db.prepare(`
-      INSERT INTO observations (id, report_id, item_name, normalized_name, result_text, numeric_value, unit, abnormal_flag)
-      VALUES ('summary-obs-1', ?, '血糖', '血糖', '6.8', 6.8, 'mmol/L', 'high')
+      INSERT INTO observations (id, report_id, item_name, normalized_name, result_text, numeric_value, unit, abnormal_flag, display_abnormal_flag, abnormal_conflict)
+      VALUES ('summary-obs-1', ?, '血糖', '血糖', '6.8', 6.8, 'mmol/L', 'high', 'high', 0)
     `).run(review.reportId);
 
     const stats = getReportSummaryStats(manager, "records-member");
@@ -1327,6 +2048,59 @@ test("summarizes report counts for the current member archive board", () => {
       abnormalObservationCount: 1,
       latestReportIssuedAt: "2026-07-21"
     });
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("deduplicates report abnormal counts by canonical indicator", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-abnormal-dedup-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const report = createUpload(manager, "records-member", [{ originalName: "checkup.png", data: pngBytes() }]);
+    db.prepare("UPDATE reports SET status = 'ready', report_issued_at = '2026-07-21' WHERE id = ?").run(report.reportId);
+    // 两套测量值：两个 BMI 观察都偏高且归一到同一 canonical 指标，应只计 1 项
+    db.prepare(`
+      INSERT INTO observations (id, report_id, item_name, result_text, numeric_value, unit, display_abnormal_flag, abnormal_conflict)
+      VALUES
+        ('dedup-bmi-1', ?, '体重指数BMI', '24.8', 24.8, 'kg/m²', 'high', 0),
+        ('dedup-bmi-2', ?, '体重指数', '24.6', 24.6, 'kg/m²', 'high', 0),
+        ('dedup-unmatched', ?, '特殊指标', '9.9', 9.9, 'U/L', 'low', 0),
+        ('dedup-conflict', ?, '冲突指标', '5.0', 5.0, 'mmol/L', 'high', 1)
+    `).run(report.reportId, report.reportId, report.reportId, report.reportId);
+    db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, indicator_id, canonical_key, canonical_name,
+        confidence, quality, matched_by, match_reason, version, source_origin, review_status
+      ) VALUES
+        ('dedup-bmi-1', NULL, 'body_bmi', '体重指数', 0.99, 'high', 'builtin_alias', 'test', 'v1', 'item_name', 'unreviewed'),
+        ('dedup-bmi-2', NULL, 'body_bmi', '体重指数', 0.99, 'high', 'builtin_alias', 'test', 'v1', 'item_name', 'unreviewed'),
+        ('dedup-conflict', NULL, 'metabolic_fpg', '空腹血糖', 0.99, 'high', 'builtin_alias', 'test', 'v1', 'item_name', 'unreviewed')
+    `).run();
+
+    // BMI 去重为 1 项 + 未匹配异常 1 项 = 2；冲突暂停项不计入
+    const detail = getReportDetail(manager, report.reportId);
+    assert.equal(detail.abnormalCount, 2);
+
+    const listed = listReports(manager, 10, "records-member");
+    assert.equal(listed.items.find((item) => item.id === report.reportId)?.abnormalCount, 2);
+
+    const stats = getReportSummaryStats(manager, "records-member");
+    assert.equal(stats.abnormalObservationCount, 2);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

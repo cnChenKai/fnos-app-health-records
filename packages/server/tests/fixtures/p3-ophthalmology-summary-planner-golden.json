@@ -1,0 +1,133 @@
+{
+  "source": {
+    "reportId": "real-archived-ophthalmology-summary-report",
+    "pageNumber": 8,
+    "description": "真实存档眼科检查页第8页 OCR 坐标脱敏金标；该页目标区域不含身份字段，检查结果、置信度及坐标保持真实。",
+    "lines": [
+      {
+        "id": "line_1",
+        "text": "项目",
+        "confidence": 1,
+        "box": [
+          61.59455871582031, 59.32366943359375, 83.57789611816406,
+          70.31672668457031
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_2",
+        "text": "检查结果",
+        "confidence": 1,
+        "box": [
+          235.3294219970703, 59.32366943359375, 279.2933349609375,
+          70.31672668457031
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_3",
+        "text": "参考值",
+        "confidence": 1,
+        "box": [
+          408.6424865722656, 59.32366943359375, 441.6160888671875,
+          70.31672668457031
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_4",
+        "text": "眼底检查",
+        "confidence": 1,
+        "box": [
+          61.59455871582031, 81.76717376708984, 95.57453155517578,
+          90.26316833496094
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_5",
+        "text": "未见明显异常",
+        "confidence": 1,
+        "box": [
+          235.3294219970703, 81.76717376708984, 288.2004699707031,
+          91.6140365600586
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_6",
+        "text": "裂隙灯检查",
+        "confidence": 1,
+        "box": [
+          61.59455871582031, 102.01375579833984, 104.0691909790039,
+          110.50975036621094
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_7",
+        "text": "未见异常",
+        "confidence": 1,
+        "box": [
+          235.3294219970703, 102.01375579833984, 271.2111511230469,
+          111.8606185913086
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_8",
+        "text": "小结：裸眼视力右值偏低(0.8)(参考值1~2)",
+        "confidence": 1,
+        "box": [
+          61.59455871582031, 135.93763732910156, 247.05148315429688,
+          147.52268981933594
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_9",
+        "text": "检查医师：",
+        "confidence": 1,
+        "box": [
+          409.5329284667969, 135.93763732910156, 459.5057678222656,
+          145.93338012695312
+        ],
+        "variant": "pdf_text"
+      },
+      {
+        "id": "line_10",
+        "text": "【耳鼻喉】",
+        "confidence": 1,
+        "box": [
+          52.596153259277344, 210.40679931640625, 122.54751586914062,
+          224.39932250976562
+        ],
+        "variant": "pdf_text"
+      }
+    ]
+  },
+  "expected": {
+    "filteredNegativeExamRow": {
+      "text": "裂隙灯检查 | 未见异常",
+      "sourceLineIds": ["line_6", "line_7"],
+      "sourceCellTexts": ["裂隙灯检查", "未见异常"]
+    },
+    "visionObservation": {
+      "lineText": "小结：裸眼视力右值偏低(0.8)(参考值1~2)",
+      "sourceLineIds": ["line_8"],
+      "removedAdministrativeSourceLineId": "line_9",
+      "itemName": "裸眼视力右",
+      "normalizedName": "右眼裸眼视力",
+      "canonicalKey": "vision_uncorrected_right",
+      "numericValue": 0.8,
+      "unit": null,
+      "referenceLow": 1,
+      "referenceHigh": 2,
+      "abnormalFlag": "low"
+    },
+    "candidateRowCount": 1,
+    "localObservationCount": 1,
+    "unresolvedScalarCandidateCount": 0,
+    "prohibitedAiSourceTexts": ["裂隙灯检查 | 未见异常", "检查医师"]
+  }
+}

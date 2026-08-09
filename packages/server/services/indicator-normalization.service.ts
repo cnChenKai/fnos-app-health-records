@@ -7,9 +7,17 @@ import {
   activeIndicatorDictionaryVersion,
   ensureCoreDictionaryMaterialized
 } from "./indicator-dictionary.service";
+import {
+  deriveObservationDisplayAbnormal,
+  parseDictionaryReferenceRange
+} from "./observation-interpretation.service";
+
+export function activeIndicatorNormalizationVersion() {
+  return `indicator-normalization-p7-laterality-reorder-v1-${activeIndicatorDictionaryVersion()}`;
+}
 
 function normalizationVersion() {
-  return `indicator-normalization-${activeIndicatorDictionaryVersion()}`;
+  return activeIndicatorNormalizationVersion();
 }
 
 type ObservationRow = {
@@ -22,7 +30,11 @@ type ObservationRow = {
   resultText: string;
   numericValue: number | null;
   unit: string | null;
+  referenceLow?: number | null;
+  referenceHigh?: number | null;
   referenceText: string | null;
+  evidenceJson?: string;
+  hasAiExtraction?: number;
   reportType: string;
   hospitalName: string | null;
   performingDepartment: string | null;
@@ -42,9 +54,31 @@ type AliasRow = {
   aliasName: string;
   normalizedAlias: string;
   scope: string;
+  aliasSource: "builtin" | "user" | "ai_suggestion";
+  hospitalName: string | null;
+  departmentName: string | null;
+  reportType: string | null;
   confidence: number;
   allowedUnitsJson: string | null;
   sectionHintsJson: string | null;
+};
+
+export type NormalizationSourceOrigin =
+  | "item_name"
+  | "item_code"
+  | "combined"
+  | "ai_normalized_name"
+  | "none"
+  | "manual_confirmation"
+  | "manual_exclusion"
+  | "legacy";
+
+export type NormalizationReviewStatus = "unreviewed" | "confirmed" | "excluded";
+
+type AliasCandidate = {
+  alias: AliasRow;
+  sourceOrigin: Exclude<NormalizationSourceOrigin, "none" | "manual_confirmation" | "manual_exclusion" | "legacy">;
+  sourceName: string;
 };
 
 export type NormalizationResult = {
@@ -61,6 +95,12 @@ export type NormalizationResult = {
   matchedBy: string;
   matchReason: string;
   excludedReason: string | null;
+  sourceOrigin: NormalizationSourceOrigin;
+  sourceName: string | null;
+  aliasSource: "builtin" | "user" | "ai_suggestion" | null;
+  reviewStatus: NormalizationReviewStatus;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
 };
 
 export type IndicatorNormalizationMaintenanceResult = {
@@ -89,8 +129,11 @@ export type BuiltinIndicatorBackfillResult = {
 };
 
 export type IndicatorNormalizationIssue = {
+  fingerprint: string;
+  representativeObservationId: string;
   rawName: string;
   normalizedName: string | null;
+  resultText: string;
   unit: string | null;
   sectionName: string | null;
   hospitalName: string | null;
@@ -98,20 +141,152 @@ export type IndicatorNormalizationIssue = {
   reason: string;
   count: number;
   latestReportIssuedAt: string | null;
+  candidateCanonicalKey: string | null;
+  candidateCanonicalName: string | null;
+  candidateDefaultUnit: string | null;
+  candidateQuality: "low" | "excluded" | null;
+  matchedBy: string | null;
+  sourceOrigin: NormalizationSourceOrigin;
+};
+
+export type IndicatorCatalogOption = {
+  canonicalKey: string;
+  displayName: string;
+  category: string;
+  defaultUnit: string | null;
+  aliases: string[];
+};
+
+export type IndicatorNormalizationMetrics = {
+  version: string;
+  generatedAt: string;
+  totals: {
+    reports: number;
+    observations: number;
+    normalizationRows: number;
+    mapped: number;
+    trendEligible: number;
+    needsReview: number;
+    reviewed: number;
+    issueGroups: number;
+    decisions: number;
+    userAliases: number;
+  };
+  quality: Record<"high" | "medium" | "low" | "excluded", number>;
+  sourceOrigins: Array<{
+    sourceOrigin: NormalizationSourceOrigin;
+    count: number;
+    trendEligible: number;
+  }>;
+  reportTypes: Array<{
+    reportType: string;
+    reports: number;
+    observations: number;
+    mapped: number;
+    trendEligible: number;
+    needsReview: number;
+  }>;
+};
+
+
+export type IndicatorGovernanceResult = {
+  fingerprint: string;
+  action: "confirm" | "exclude";
+  affectedObservations: number;
+  normalized: number;
+  excluded: number;
+  aliasSaved: boolean;
+  canonicalKey: string | null;
+};
+
+export type IndicatorGovernanceHistoryItem = {
+  id: string;
+  eventType: "apply" | "undo" | "alias_enable" | "alias_disable";
+  fingerprint: string | null;
+  decisionAction: "confirm" | "exclude" | null;
+  rawName: string | null;
+  canonicalKey: string | null;
+  canonicalName: string | null;
+  aliasId: string | null;
+  aliasName: string | null;
+  aliasScope: "global" | "hospital" | "department" | "report_type" | null;
+  reportType: string | null;
+  reason: string | null;
+  affectedObservations: number;
+  actorName: string | null;
+  createdAt: string;
+  canUndo: boolean;
+};
+
+export type IndicatorGovernanceUndoResult = {
+  fingerprint: string;
+  action: "confirm" | "exclude";
+  affectedObservations: number;
+  aliasDisabled: boolean;
+  remainingMapped: number;
+  reopenedIssues: number;
+};
+
+export type IndicatorAliasGovernanceItem = {
+  id: string;
+  aliasName: string;
+  normalizedAlias: string;
+  scope: "global" | "hospital" | "department" | "report_type";
+  hospitalName: string | null;
+  departmentName: string | null;
+  reportType: string | null;
+  canonicalKey: string;
+  canonicalName: string;
+  category: string;
+  enabled: boolean;
+  usageCount: number;
+  conflictCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type IndicatorAliasConflict = {
+  normalizedAlias: string;
+  scope: "global" | "hospital" | "department" | "report_type";
+  hospitalName: string | null;
+  departmentName: string | null;
+  reportType: string | null;
+  targets: Array<{
+    aliasId: string;
+    aliasName: string;
+    canonicalKey: string;
+    canonicalName: string;
+    source: "builtin" | "user" | "ai_suggestion";
+  }>;
+};
+
+export type IndicatorAliasGovernanceOverview = {
+  aliases: IndicatorAliasGovernanceItem[];
+  conflicts: IndicatorAliasConflict[];
+};
+
+export type IndicatorAliasUpdateResult = {
+  aliasId: string;
+  enabled: boolean;
+  affectedObservations: number;
+  normalized: number;
+  reopenedIssues: number;
 };
 
 function compactIndicatorKey(value: string | null | undefined) {
   return (value || "")
     .normalize("NFKC")
+    .replace(/[(]\s*([GT])\s*[)]/gi, "§$1§")
     .toLocaleLowerCase("zh-CN")
     .replace(/[（(].*?[）)]/g, "")
+    .replace(/§([gt])§/g, "($1)")
     .replace(/\s+/g, "")
     .replace(/[：:，,。.;；、_\-]/g, "")
     .replace(/[＋]/g, "+")
     .trim();
 }
 
-const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率/i;
+const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率|^[GT]$|^Ig[GMAED]$/i;
 const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
 
 /**
@@ -134,6 +309,21 @@ export function indicatorNameCandidates(value: string | null | undefined) {
   let withoutCodes = raw;
   for (const match of brackets) {
     const content = (match[1] || "").trim();
+    if (/眼压|IOP/i.test(raw) && /^(?:左|右|L|R)$/i.test(content)) {
+      add(raw.replace(match[0], content));
+    }
+    /**
+     * 「PWV(右)」「踝臂指数（左）」这类括号侧别命名，字典别名通常是
+     * 「右PWV」「右侧baPWV」的前置形式。把侧别词重排到基名前/后生成候选，
+     * 侧别限定本身保留在候选里，不会把左右合并成通用项。
+     */
+    if (/^(?:左|右|左侧|右侧)$/.test(content)) {
+      const base = raw.replace(match[0], " ").trim();
+      if (base) {
+        add(content + base);
+        add(base + content);
+      }
+    }
     if (!indicatorCodePattern.test(content)) continue;
     add(content);
     withoutCodes = withoutCodes.replace(match[0], " ");
@@ -151,6 +341,14 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     add(suffixCode[2]);
   }
   if (indicatorCodePattern.test(raw)) add(raw);
+  /**
+   * 「血清尿酸值」「pH值」「尿酸测定值」这类命名里的「值/测定值」只是结果占位后缀，
+   * 剥掉后才能命中字典别名（如「血清尿酸」）。只追加候选不替换原名，误伤面为零。
+   */
+  const valueSuffixStripped = raw.replace(/(?:测定|检测)?值$/, "").trim();
+  if (valueSuffixStripped.length >= 2 && valueSuffixStripped !== raw) {
+    add(valueSuffixStripped);
+  }
   return [...candidates];
 }
 
@@ -158,7 +356,9 @@ export function indicatorNameCandidates(value: string | null | undefined) {
 function compactQualifiedIndicatorKey(value: string | null | undefined) {
   return (value || "")
     .normalize("NFKC")
+    .replace(/[(]\s*([GT])\s*[)]/gi, "§$1§")
     .toLocaleLowerCase("zh-CN")
+    .replace(/§([gt])§/g, "($1)")
     .replace(/\s+/g, "")
     .replace(/[：:，,。.;；、_\-]/g, "")
     .replace(/[＋]/g, "+")
@@ -184,6 +384,7 @@ function normalizeUnit(value: string | null | undefined) {
     "g/l": "g/L",
     "g/dl": "g/dL",
     "u/l": "U/L",
+    "u/ml": "U/mL",
     "iu/l": "U/L",
     "miu/l": "mIU/L",
     "uiu/ml": "μIU/mL",
@@ -202,12 +403,32 @@ function normalizeUnit(value: string | null | undefined) {
     "kg/m²": "kg/m²",
     "kg/㎡": "kg/m²",
     "mmhg": "mmHg",
+    "mv": "mV",
+    "angle": "°",
+    "deg": "°",
+    "degree": "°",
+    "°": "°",
     "bpm": "次/分",
     "次/min": "次/分",
     "次/分钟": "次/分",
     "次/分": "次/分",
     "fl": "fL",
     "pg": "pg",
+    "l": "L",
+    "ml": "mL",
+    "l/s": "L/s",
+    "l/sec": "L/s",
+    "l/秒": "L/s",
+    "ml/s": "mL/s",
+    "ml/sec": "mL/s",
+    "ml/秒": "mL/s",
+    "mpa.s": "mPa·s",
+    "mpa·s": "mPa·s",
+    "mpa*s": "mPa·s",
+    "mpas": "mPa·s",
+    "mm/hr": "mm/h",
+    "mm/hour": "mm/h",
+    "毫米/小时": "mm/h",
     "l/l": "L/L",
     "ml/min/1.73m2": "mL/min/1.73m²",
     "ml/min/1.73m²": "mL/min/1.73m²",
@@ -253,6 +474,181 @@ function parseNumericResultText(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function observationEvidenceNumbers(value: unknown) {
+  const normalized = String(value || "").normalize("NFKC").replace(/[−–—]/g, "-");
+  return [...normalized.matchAll(/(?:^|[^\d.])([-+]?\d+(?:\.\d+)?)(?![\d.])/g)]
+    .map((match) => Number(match[1]))
+    .filter((number) => Number.isFinite(number));
+}
+
+function sameObservationEvidenceNumber(left: number, right: number) {
+  return Math.abs(left - right) <= Math.max(1e-12, Math.abs(left) * 1e-12);
+}
+
+function compactObservationEvidence(value: unknown) {
+  return String(value || "").normalize("NFKC").toLocaleLowerCase("zh-CN")
+    .replace(/[μµ]/g, "u")
+    .replace(/[×✕✖＊*]/g, "x")
+    .replace(/[²㎡]/g, "2")
+    .replace(/[³]/g, "3")
+    .replace(/[–—−~～]/g, "-")
+    .replace(/[≤≦]/g, "<=")
+    .replace(/[≥≧]/g, ">=")
+    .replace(/[（）()，,。.:：;；、|｜\s_]/g, "");
+}
+
+function observationEvidenceQuotes(row: ObservationRow) {
+  if (typeof row.evidenceJson !== "string") return [];
+  try {
+    const parsed = JSON.parse(row.evidenceJson) as Array<{ pageNumber?: unknown; quote?: unknown }>;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((entry) => {
+      const quote = typeof entry?.quote === "string" ? entry.quote.trim() : "";
+      const pageNumber = Number(entry?.pageNumber);
+      return quote && Number.isFinite(pageNumber) && pageNumber > 0 ? [quote] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 结果层质量闸门不删除 observation，只阻止缺少来源闭环或字段互相矛盾的结果进入默认趋势。
+ * 人工治理仍可在后续明确确认或排除。
+ */
+function pulmonaryObservationContext(row: ObservationRow) {
+  const context = [
+    row.sectionName,
+    row.reportType,
+    row.performingDepartment,
+    row.reportingDepartment
+  ].filter(Boolean).join(" ");
+  return /肺功能|肺通气|呼吸功能|肺量计|spirom/i.test(context);
+}
+
+function compactFunctionalObservationName(value: string | null | undefined) {
+  return (value || "")
+    .normalize("NFKC")
+    .toUpperCase()
+    .replace(/\s+/g, "")
+    .replace(/[％﹪]/g, "%")
+    .replace(/[／⁄]/g, "/")
+    .replace(/[–—~～至]/g, "-");
+}
+
+/**
+ * 功能检查设备会输出大量派生量和质量控制参数。它们仍保留为 observation 便于审计，
+ * 但不进入未知指标队列或默认趋势，避免家庭用户看到设备内部参数堆积。
+ */
+function functionalDeviceObservationExclusionReason(row: ObservationRow) {
+  if (!pulmonaryObservationContext(row)) return null;
+  const name = compactFunctionalObservationName(row.itemName);
+  if (!name) return null;
+  if (/\/HT(?:$|[（(])/.test(name)) return "身高校正派生量不作为独立健康趋势";
+  if (/^(?:PEF[-_]?TIME|FET|V[-_]?EXTRAP|EXTRAP[-_]?V)$/.test(name)) {
+    return "肺功能设备质量控制参数不作为独立健康趋势";
+  }
+  if (/^(?:PRED(?:ICTED)?|%PRED|PRED%|预计值|预测值|参考值|实测值|本次结果)$/.test(name)) {
+    return "预测值、参考值或列标签不是本次独立测量";
+  }
+  if (/^(?:FEF|MEF)\d+(?:\.\d+)?\/(?:FEF|FIF|MEF|MIF)\d+(?:\.\d+)?$/.test(name)) {
+    return "分段流量比属于专用派生参数，不默认进入家庭趋势";
+  }
+  if (/\/VCPR(?:$|[（(])/.test(name)) {
+    return "预测值派生比例不是本次独立测量";
+  }
+  if (/^FEV0[.]5$/.test(name)) {
+    return "次要时段呼气容积不默认进入家庭趋势";
+  }
+  if (/^FEF\d+(?:\.\d+)?-\d+(?:\.\d+)?%?$/.test(name)
+    && !/^FEF25-75%?$/.test(name)) {
+    return "设备分段区间流量不默认进入家庭趋势";
+  }
+  if (/^([A-Z]{2,6})\d{1,3}-\d{1,3}[（(]\1\d{1,2}[）)]$/.test(name)) {
+    return "不透明设备区间代码缺少可解释的医学指标语义";
+  }
+  return null;
+}
+
+function excludedFunctionalDeviceObservation(row: ObservationRow, reason: string): NormalizationResult {
+  return {
+    observationId: row.id,
+    indicatorId: null,
+    canonicalKey: null,
+    canonicalName: null,
+    canonicalValue: null,
+    canonicalUnit: null,
+    canonicalCategory: "功能检查",
+    canonicalExplanation: null,
+    confidence: 1,
+    quality: "excluded",
+    matchedBy: "functional_device_filter",
+    matchReason: reason,
+    excludedReason: reason,
+    sourceOrigin: "item_name",
+    sourceName: row.itemName,
+    aliasSource: null,
+    reviewStatus: "unreviewed",
+    reviewedBy: null,
+    reviewedAt: null
+  };
+}
+
+function observationEvidenceQualityIssue(row: ObservationRow) {
+  // 内存待落库项与未经过 AI 持久化链路的历史/手工数据不套用本闸门。
+  if (row.evidenceJson === undefined || !row.hasAiExtraction) return null;
+  const quotes = observationEvidenceQuotes(row);
+  if (!quotes.length) return "缺少可核验的 OCR 证据，禁止进入默认趋势";
+  const compactQuotes = quotes.map(compactObservationEvidence);
+  const nameSearchQuotes = quotes.flatMap((quote) => [
+    compactObservationEvidence(quote),
+    compactIndicatorKey(quote),
+  ]).filter(Boolean);
+  const nameCandidates = [row.itemName, row.itemCode]
+    .flatMap(indicatorNameCandidates)
+    .map(compactObservationEvidence)
+    .filter((value) => value.length >= 2);
+  const numericValue = row.numericValue ?? parseNumericResultText(row.resultText);
+  const sourceNumbers = quotes.flatMap(observationEvidenceNumbers);
+  const nameBackReferenced = !nameCandidates.length || nameSearchQuotes.some((quote) =>
+    nameCandidates.some((name) => quote.includes(name) || name.includes(quote))
+  );
+  if (!nameBackReferenced) {
+    // AI 常把原文口语化表述规范为标准名（如「左踝：1.08」→「左侧踝肱指数」），
+    // 名称字面无法回指但数值锚点完整时，不否决整条证据链；
+    // 仅当名称与数值都无法回指时才判定证据链断裂。
+    const numericAnchored = numericValue !== null
+      && sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue));
+    if (!numericAnchored) return "项目名称无法回指 OCR 证据，禁止进入默认趋势";
+  }
+
+  const resultValue = parseNumericResultText(row.resultText);
+  if (numericValue !== null && resultValue !== null && !sameObservationEvidenceNumber(numericValue, resultValue)) {
+    return "结构化数值与结果文本不一致，禁止进入默认趋势";
+  }
+  if (numericValue !== null && !sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue))) {
+    return "结果数值无法回指 OCR 证据，禁止进入默认趋势";
+  }
+
+  const rawUnit = row.unit?.trim() || null;
+  if (rawUnit) {
+    const unitCandidates = [...new Set([rawUnit, normalizeUnit(rawUnit)].filter(Boolean))]
+      .map(compactObservationEvidence);
+    if (!compactQuotes.some((quote) => unitCandidates.some((unit) => quote.includes(unit)))) {
+      return "结果单位无法回指 OCR 证据，禁止进入默认趋势";
+    }
+  }
+  if (row.referenceLow != null && row.referenceHigh != null && row.referenceLow > row.referenceHigh) {
+    return "参考范围上下界反向，禁止进入默认趋势";
+  }
+  for (const [label, value] of [["下限", row.referenceLow], ["上限", row.referenceHigh]] as const) {
+    if (value != null && !sourceNumbers.some((source) => sameObservationEvidenceNumber(source, value))) {
+      return `参考范围${label}无法回指 OCR 证据，禁止进入默认趋势`;
+    }
+  }
+  return null;
+}
+
 function canConvertIndicatorUnit(canonicalKey: string, fromUnit: string, toUnit: string) {
   if (fromUnit === toUnit) return true;
   const pair = `${fromUnit}->${toUnit}`;
@@ -270,6 +666,15 @@ function canConvertIndicatorUnit(canonicalKey: string, fromUnit: string, toUnit:
     && ["mg/dL->μmol/L", "μmol/L->mg/dL"].includes(pair)) return true;
   if (["renal_urea", "renal_bun"].includes(canonicalKey)
     && ["mg/dL->mmol/L", "mmol/L->mg/dL"].includes(pair)) return true;
+  if (["pulmonary_vc", "pulmonary_ic", "pulmonary_tv", "pulmonary_irv", "pulmonary_erv",
+    "pulmonary_fvc", "pulmonary_fev1"].includes(canonicalKey)
+    && ["mL->L", "L->mL"].includes(pair)) return true;
+  if (["pulmonary_pef", "pulmonary_fef25", "pulmonary_fef50", "pulmonary_fef75", "pulmonary_mmef"].includes(canonicalKey)
+    && ["mL/s->L/s", "L/s->mL/s"].includes(pair)) return true;
+  if (["laboratory_testosterone", "laboratory_prolactin", "laboratory_pepsinogen_i", "laboratory_pepsinogen_ii"].includes(canonicalKey)
+    && ["μg/L->ng/mL", "ng/mL->μg/L"].includes(pair)) return true;
+  if (canonicalKey === "laboratory_testosterone"
+    && ["ng/dL->ng/mL", "ng/mL->ng/dL"].includes(pair)) return true;
   return false;
 }
 
@@ -288,8 +693,28 @@ function textHasAny(value: string, hints: string[]) {
   return hints.some((hint) => compact.includes(compactIndicatorKey(hint)));
 }
 
-function allowedUnitsFor(row: AliasRow) {
+function allowedUnitsFor(row: Pick<AliasRow, "allowedUnitsJson">) {
   return new Set(parseStringList(row.allowedUnitsJson).map((unit) => normalizeUnit(unit)).filter(Boolean));
+}
+
+function resolveIndicatorUnitCompatibility(
+  canonicalKey: string,
+  rawUnitValue: string | null | undefined,
+  defaultUnitValue: string | null | undefined,
+  allowedUnitsJson: string | null | undefined
+) {
+  const rawUnit = normalizeUnit(rawUnitValue);
+  const defaultUnit = normalizeUnit(defaultUnitValue);
+  const allowedUnits = allowedUnitsFor({ allowedUnitsJson: allowedUnitsJson || null });
+  const compatible = !rawUnit
+    || rawUnit === defaultUnit
+    || allowedUnits.has(rawUnit)
+    || Boolean(defaultUnit && canConvertIndicatorUnit(canonicalKey, rawUnit, defaultUnit));
+  return {
+    rawUnit,
+    compatible,
+    canonicalUnit: compatible ? defaultUnit || rawUnit : null
+  };
 }
 
 export function convertUnit(canonicalKey: string, value: number, fromUnit: string | null, toUnit: string | null) {
@@ -323,6 +748,20 @@ export function convertUnit(canonicalKey: string, value: number, fromUnit: strin
     && fromUnit === "μmol/L" && toUnit === "mg/dL") return value / 17.104;
   if (canonicalKey === "body_weight" && fromUnit === "g" && toUnit === "kg") return value / 1000;
   if (canonicalKey === "body_weight" && fromUnit === "kg" && toUnit === "g") return value * 1000;
+  if (["pulmonary_vc", "pulmonary_ic", "pulmonary_tv", "pulmonary_irv", "pulmonary_erv",
+    "pulmonary_fvc", "pulmonary_fev1"].includes(canonicalKey)
+    && fromUnit === "mL" && toUnit === "L") return value / 1000;
+  if (["pulmonary_vc", "pulmonary_ic", "pulmonary_tv", "pulmonary_irv", "pulmonary_erv",
+    "pulmonary_fvc", "pulmonary_fev1"].includes(canonicalKey)
+    && fromUnit === "L" && toUnit === "mL") return value * 1000;
+  if (["pulmonary_pef", "pulmonary_fef25", "pulmonary_fef50", "pulmonary_fef75", "pulmonary_mmef"].includes(canonicalKey)
+    && fromUnit === "mL/s" && toUnit === "L/s") return value / 1000;
+  if (["pulmonary_pef", "pulmonary_fef25", "pulmonary_fef50", "pulmonary_fef75", "pulmonary_mmef"].includes(canonicalKey)
+    && fromUnit === "L/s" && toUnit === "mL/s") return value * 1000;
+  if (["laboratory_testosterone", "laboratory_prolactin", "laboratory_pepsinogen_i", "laboratory_pepsinogen_ii"].includes(canonicalKey)
+    && ((fromUnit === "μg/L" && toUnit === "ng/mL") || (fromUnit === "ng/mL" && toUnit === "μg/L"))) return value;
+  if (canonicalKey === "laboratory_testosterone" && fromUnit === "ng/dL" && toUnit === "ng/mL") return value / 100;
+  if (canonicalKey === "laboratory_testosterone" && fromUnit === "ng/mL" && toUnit === "ng/dL") return value * 100;
   if (["body_height", "body_waist_circumference", "body_hip_circumference"].includes(canonicalKey)
     && fromUnit === "m" && toUnit === "cm") return value * 100;
   if (["body_height", "body_waist_circumference", "body_hip_circumference"].includes(canonicalKey)
@@ -341,6 +780,11 @@ function classifyQuality(score: number, row: ObservationRow, indicator: AliasRow
   return "low";
 }
 
+/** 判断 genericKey 是否是 specificKey 的侧别通用父项（如 vascular_abi → vascular_abi_left）。 */
+function isLateralityGenericParentOf(genericKey: string, specificKey: string) {
+  return specificKey === `${genericKey}_left` || specificKey === `${genericKey}_right`;
+}
+
 function exclusionReason(row: ObservationRow, indicator: AliasRow, unitCompatible: boolean) {
   if (!indicator.trendEnabled) return "该指标属于状态型或文本型结果，不默认进入折线趋势";
   if (indicator.valueType !== "numeric") return "该指标不是数值型结果，不默认进入折线趋势";
@@ -353,38 +797,102 @@ export function ensureBuiltinIndicatorCatalog() {
   ensureCoreDictionaryMaterialized();
 }
 
-function candidateAliases(row: ObservationRow) {
-  const baseNames = [
-    row.normalizedName,
-    row.itemName,
-    row.itemCode,
-    `${row.itemName}${row.itemCode || ""}`,
-    `${row.normalizedName || ""}${row.itemCode || ""}`
-  ];
-  const names = new Set(baseNames.flatMap(indicatorNameCandidates).filter(Boolean));
+function candidateNameSet(values: Array<string | null | undefined>) {
+  const names = new Set(values.flatMap(indicatorNameCandidates).filter(Boolean));
   for (const name of [...names]) {
     const withoutTirads = name
       .replace(/c?tirads\d+[a-z]?类?/gi, "")
       .replace(/甲状腺影像报告和数据系统\d+[a-z]?类?/g, "");
     if (withoutTirads && withoutTirads !== name) names.add(withoutTirads);
   }
-  if (!names.size) return [];
-  const placeholders = [...names].map(() => "?").join(",");
-  return getDatabase().prepare(`
+  return names;
+}
+
+function aliasAppliesToObservation(alias: AliasRow, row: ObservationRow) {
+  if (alias.scope === "global") return true;
+  if (alias.scope === "report_type") {
+    return compactIndicatorKey(alias.reportType) === compactIndicatorKey(row.reportType);
+  }
+  if (alias.scope === "hospital") {
+    return compactIndicatorKey(alias.hospitalName) === compactIndicatorKey(row.hospitalName);
+  }
+  if (alias.scope === "department") {
+    const expected = compactIndicatorKey(alias.departmentName);
+    return Boolean(expected) && [row.performingDepartment, row.reportingDepartment]
+      .some((value) => compactIndicatorKey(value) === expected);
+  }
+  return false;
+}
+
+function quantitativeUltrasoundBoneObservationContext(row: ObservationRow) {
+  const context = [
+    row.sectionName,
+    row.reportType,
+    row.performingDepartment,
+    row.reportingDepartment
+  ].filter(Boolean).join(" ");
+  return /超声骨密度|超声骨质|定量超声骨|\bQUS\b/i.test(context);
+}
+
+function candidateAliases(row: ObservationRow): AliasCandidate[] {
+  /*
+   * P1 将每一个名称候选绑定到可审计来源。原始项目名/代码优先，
+   * AI 预整理名称只能作为保守兜底，且不会因与原文候选重名而覆盖原文来源。
+   */
+  const origins: Array<{
+    origin: AliasCandidate["sourceOrigin"];
+    sourceName: string | null;
+    names: Set<string>;
+  }> = [
+    { origin: "item_name", sourceName: row.itemName, names: candidateNameSet([row.itemName]) },
+    { origin: "item_code", sourceName: row.itemCode, names: candidateNameSet([row.itemCode]) },
+    {
+      origin: "combined",
+      sourceName: row.itemCode ? `${row.itemName}${row.itemCode}` : null,
+      names: candidateNameSet([row.itemCode ? `${row.itemName}${row.itemCode}` : null])
+    },
+    {
+      origin: "ai_normalized_name",
+      sourceName: row.normalizedName,
+      names: candidateNameSet([row.normalizedName, `${row.normalizedName || ""}${row.itemCode || ""}`])
+    }
+  ];
+  const sourceByName = new Map<string, { origin: AliasCandidate["sourceOrigin"]; sourceName: string }>();
+  for (const source of origins) {
+    if (!source.sourceName) continue;
+    for (const name of source.names) {
+      if (!sourceByName.has(name)) sourceByName.set(name, { origin: source.origin, sourceName: source.sourceName });
+    }
+  }
+  const names = [...sourceByName.keys()];
+  if (!names.length) return [];
+  const placeholders = names.map(() => "?").join(",");
+  const rows = getDatabase().prepare(`
     SELECT a.indicator_id AS indicatorId, c.canonical_key AS canonicalKey, c.display_name AS displayName,
       c.category, c.specimen, c.default_unit AS defaultUnit, c.value_type AS valueType,
       c.trend_enabled AS trendEnabled, c.explanation, a.alias_name AS aliasName,
-      a.normalized_alias AS normalizedAlias, a.scope, a.confidence,
-      c.allowed_units_json AS allowedUnitsJson, c.section_hints_json AS sectionHintsJson
+      a.normalized_alias AS normalizedAlias, a.scope, a.source AS aliasSource,
+      a.hospital_name AS hospitalName, a.department_name AS departmentName, a.report_type AS reportType,
+      a.confidence, c.allowed_units_json AS allowedUnitsJson, c.section_hints_json AS sectionHintsJson
     FROM indicator_aliases a
     JOIN indicator_catalog c ON c.id = a.indicator_id
     WHERE a.enabled = 1 AND a.normalized_alias IN (${placeholders})
   `).all(...names) as AliasRow[];
+  return rows.flatMap((alias) => {
+    if (!aliasAppliesToObservation(alias, row)) return [];
+    if (["qus_bone_t_score", "qus_bone_z_score"].includes(alias.canonicalKey)
+      && !quantitativeUltrasoundBoneObservationContext(row)) return [];
+    const source = sourceByName.get(alias.normalizedAlias)
+      || sourceByName.get(compactIndicatorKey(alias.normalizedAlias));
+    return source ? [{ alias, sourceOrigin: source.origin, sourceName: source.sourceName }] : [];
+  });
 }
 
-function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
-  const aliases = candidateAliases(row);
-  if (!aliases.length) {
+function normalizeObservationAutomatically(row: ObservationRow): NormalizationResult {
+  const deviceExclusionReason = functionalDeviceObservationExclusionReason(row);
+  if (deviceExclusionReason) return excludedFunctionalDeviceObservation(row, deviceExclusionReason);
+  const candidates = candidateAliases(row);
+  if (!candidates.length) {
     return {
       observationId: row.id,
       indicatorId: null,
@@ -398,28 +906,53 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
       quality: "low",
       matchedBy: "none",
       matchReason: "未命中内置指标字典",
-      excludedReason: "未命中内置指标字典"
+      excludedReason: "未命中内置指标字典",
+      sourceOrigin: "none",
+      sourceName: row.itemName,
+      aliasSource: null,
+      reviewStatus: "unreviewed",
+      reviewedBy: null,
+      reviewedAt: null
     };
   }
 
-  let best: { alias: AliasRow; score: number; reasons: string[]; unitCompatible: boolean } | null = null;
+  type ScoredCandidate = {
+    alias: AliasRow;
+    sourceOrigin: AliasCandidate["sourceOrigin"];
+    sourceName: string;
+    score: number;
+    reasons: string[];
+    unitCompatible: boolean;
+    hasSectionHint: boolean;
+    resultTypeCompatible: boolean;
+  };
+  const scoredCandidates: ScoredCandidate[] = [];
   const rawUnit = normalizeUnit(row.unit);
   const context = [row.sectionName, row.reportType, row.performingDepartment, row.reportingDepartment].filter(Boolean).join(" ");
   const stoolContext = /便常规|粪便|大便/.test(context);
   const urineContext = /尿常规|尿沉渣|尿镜检|尿液|尿标本/.test(context);
   const ecgContext = /心电图|心电检查|静态心电|动态心电/.test(context);
   const generalPulseContext = /一般检查|基础测量|生命体征|内科/.test(context);
-  for (const alias of aliases) {
-    const allowedUnits = allowedUnitsFor(alias);
-    const defaultUnit = normalizeUnit(alias.defaultUnit);
-    const unitCompatible = !rawUnit
-      || (!defaultUnit && allowedUnits.size === 0)
-      || allowedUnits.has(rawUnit)
-      || rawUnit === defaultUnit
-      || Boolean(defaultUnit && canConvertIndicatorUnit(alias.canonicalKey, rawUnit, defaultUnit));
-    const hasSectionHint = textHasAny(context, parseStringList(alias.sectionHintsJson));
+  const pulmonaryContext = pulmonaryObservationContext(row);
+  const quantitativeUltrasoundBoneContext = quantitativeUltrasoundBoneObservationContext(row);
+  for (const candidate of candidates) {
+    const alias = candidate.alias;
+    const unitCompatibility = resolveIndicatorUnitCompatibility(
+      alias.canonicalKey,
+      rawUnit,
+      alias.defaultUnit,
+      alias.allowedUnitsJson
+    );
+    const unitCompatible = unitCompatibility.compatible;
+    const strongSectionHints = parseStringList(alias.sectionHintsJson)
+      .filter((hint) => !["体检", "检查", "检验"].includes(compactIndicatorKey(hint)));
+    const hasSectionHint = textHasAny(context, strongSectionHints);
     let score = 55;
     const reasons = [`名称命中「${alias.aliasName}」`];
+    if (candidate.sourceOrigin === "ai_normalized_name") {
+      score -= 35;
+      reasons.push("仅由 AI 预整理名称命中，按低置信度候选处理");
+    }
     if (alias.scope !== "global") {
       score += 15;
       reasons.push("机构/上下文规则命中");
@@ -434,6 +967,15 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
     if (hasSectionHint) {
       score += 15;
       reasons.push(`报告章节匹配「${alias.category}」`);
+    }
+    if (alias.canonicalKey.startsWith("pulmonary_") && !pulmonaryContext) {
+      score -= 140;
+      reasons.push("肺功能缩写缺少肺功能章节上下文");
+    }
+    if (["qus_bone_t_score", "qus_bone_z_score"].includes(alias.canonicalKey)
+      && !quantitativeUltrasoundBoneContext) {
+      score -= 140;
+      reasons.push("QUS 骨密度 T/Z 值缺少定量超声骨检查上下文");
     }
     const hasNumericResult = (row.numericValue ?? parseNumericResultText(row.resultText)) !== null;
     if (hasNumericResult && alias.valueType === "numeric") {
@@ -477,15 +1019,108 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
       score -= 120;
       reasons.push("一般检查脉搏不得归入心电图心率");
     }
-    if (!best || score > best.score) best = { alias, score, reasons, unitCompatible };
+    const resultTypeCompatible = hasNumericResult
+      ? alias.valueType === "numeric"
+      : alias.valueType !== "numeric";
+    scoredCandidates.push({
+      alias,
+      sourceOrigin: candidate.sourceOrigin,
+      sourceName: candidate.sourceName,
+      score,
+      reasons,
+      unitCompatible,
+      hasSectionHint,
+      resultTypeCompatible
+    });
   }
 
-  const selected = best!;
+  const sourcePriority: Record<AliasCandidate["sourceOrigin"], number> = {
+    item_name: 4,
+    item_code: 3,
+    combined: 2,
+    ai_normalized_name: 1
+  };
+  scoredCandidates.sort((left, right) =>
+    right.score - left.score
+    || sourcePriority[right.sourceOrigin] - sourcePriority[left.sourceOrigin]
+    || right.alias.confidence - left.alias.confidence
+    || left.alias.canonicalKey.localeCompare(right.alias.canonicalKey, "en")
+    || left.alias.aliasName.localeCompare(right.alias.aliasName, "zh-CN")
+    || left.alias.indicatorId.localeCompare(right.alias.indicatorId, "en")
+  );
+  const bestCandidateByCanonical = new Map<string, ScoredCandidate>();
+  for (const candidate of scoredCandidates) {
+    /* scoredCandidates 已按最佳证据优先排序；同一 canonical 只保留首个候选，
+       禁止后续较弱的 AI 预整理名称或低优先级来源反向覆盖原始项目名命中。 */
+    if (!bestCandidateByCanonical.has(candidate.alias.canonicalKey)) {
+      bestCandidateByCanonical.set(candidate.alias.canonicalKey, candidate);
+    }
+  }
+  const bestByCanonical = [...bestCandidateByCanonical.values()];
+  const selected = bestByCanonical[0]!;
+  const closeCompetingCandidates = bestByCanonical
+    .slice(1)
+    .filter((candidate) => selected.score - candidate.score <= 15)
+    // 侧别家族中通用父项（如 vascular_abi）与侧别项（vascular_abi_left）不构成真歧义：
+    // 能命中侧别项说明来源名称带侧别限定，父项只是同族的不精确映射。
+    .filter((candidate) => !isLateralityGenericParentOf(candidate.alias.canonicalKey, selected.alias.canonicalKey));
+  const hasUniqueSectionEvidence = selected.hasSectionHint
+    && closeCompetingCandidates.every((candidate) => !candidate.hasSectionHint);
+  const hasUniqueUnitEvidence = Boolean(rawUnit && selected.unitCompatible)
+    && closeCompetingCandidates.every((candidate) => !candidate.unitCompatible);
+  const hasUniqueResultTypeEvidence = selected.resultTypeCompatible
+    && closeCompetingCandidates.every((candidate) => !candidate.resultTypeCompatible);
+  const ambiguousCanonicalMatch = closeCompetingCandidates.length > 0
+    && !hasUniqueSectionEvidence
+    && !hasUniqueUnitEvidence
+    && !hasUniqueResultTypeEvidence;
   const numericValue = row.numericValue ?? parseNumericResultText(row.resultText);
-  const quality = classifyQuality(selected.score, row, selected.alias);
-  const canonicalUnit = normalizeUnit(selected.alias.defaultUnit) || rawUnit;
-  const canonicalValue = numericValue === null ? null : convertUnit(selected.alias.canonicalKey, numericValue, rawUnit, canonicalUnit);
-  const excludedReason = quality === "excluded" ? exclusionReason(row, selected.alias, selected.unitCompatible) : null;
+  let quality = classifyQuality(selected.score, row, selected.alias);
+  let conservativeReason: string | null = null;
+  if (quality !== "excluded" && rawUnit && !selected.unitCompatible) {
+    quality = "low";
+    conservativeReason = "单位与标准指标不兼容，禁止进入默认趋势";
+  } else if (quality !== "excluded" && ambiguousCanonicalMatch) {
+    quality = "low";
+    const competingKeys = closeCompetingCandidates
+      .map((candidate) => candidate.alias.canonicalKey)
+      .sort((left, right) => left.localeCompare(right, "en"));
+    conservativeReason = `多义名称缺少章节、单位或结果类型的唯一证据（候选：${competingKeys.join("、")}），禁止进入默认趋势`;
+    selected.reasons.push(conservativeReason);
+  } else if (
+    quality !== "excluded"
+    && !rawUnit
+    && !selected.alias.defaultUnit
+    && new Set(
+      parseStringList(selected.alias.allowedUnitsJson)
+        .map((unit) => normalizeUnit(unit))
+        .filter(Boolean)
+    ).size > 1
+  ) {
+    quality = "low";
+    conservativeReason = "缺少单位，无法确定趋势计量口径，禁止进入默认趋势";
+    selected.reasons.push(conservativeReason);
+  } else if (quality !== "excluded" && selected.sourceOrigin === "ai_normalized_name") {
+    quality = "low";
+    conservativeReason = "仅由 AI 预整理名称命中，需人工确认后进入趋势";
+  }
+  const evidenceQualityIssue = quality === "excluded" ? null : observationEvidenceQualityIssue(row);
+  if (evidenceQualityIssue) {
+    quality = "low";
+    conservativeReason = evidenceQualityIssue;
+  }
+  const canonicalUnit = resolveIndicatorUnitCompatibility(
+    selected.alias.canonicalKey,
+    rawUnit,
+    selected.alias.defaultUnit,
+    selected.alias.allowedUnitsJson
+  ).canonicalUnit;
+  const canonicalValue = numericValue === null || !selected.unitCompatible
+    ? null
+    : convertUnit(selected.alias.canonicalKey, numericValue, rawUnit, canonicalUnit);
+  const excludedReason = quality === "excluded"
+    ? exclusionReason(row, selected.alias, selected.unitCompatible)
+    : conservativeReason;
   return {
     observationId: row.id,
     indicatorId: selected.alias.indicatorId,
@@ -497,10 +1132,150 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
     canonicalExplanation: selected.alias.explanation,
     confidence: Math.max(0, Math.min(1, selected.score / 100)),
     quality,
-    matchedBy: selected.alias.scope === "global" ? "builtin_alias" : `${selected.alias.scope}_alias`,
+    matchedBy: selected.sourceOrigin === "ai_normalized_name"
+      ? "normalized_name_fallback"
+      : selected.alias.aliasSource === "user"
+        ? "user_alias"
+        : selected.alias.aliasSource === "ai_suggestion"
+          ? "ai_suggestion"
+          : selected.alias.scope === "global"
+            ? "builtin_alias"
+            : `${selected.alias.scope}_alias`,
     matchReason: selected.reasons.join("；"),
-    excludedReason
+    excludedReason,
+    sourceOrigin: selected.sourceOrigin,
+    sourceName: selected.sourceName,
+    aliasSource: selected.alias.aliasSource,
+    reviewStatus: "unreviewed",
+    reviewedBy: null,
+    reviewedAt: null
   };
+}
+
+
+type GovernanceDecisionRow = {
+  action: "confirm" | "exclude";
+  indicatorId: string | null;
+  canonicalKey: string | null;
+  saveAlias: number;
+  aliasScope: "global" | "report_type" | null;
+  aliasId: string | null;
+  reason: string | null;
+  createdBy: string | null;
+  reviewedAt: string;
+};
+
+type CatalogIndicatorRow = {
+  indicatorId: string;
+  canonicalKey: string;
+  displayName: string;
+  category: string;
+  defaultUnit: string | null;
+  valueType: "numeric" | "text" | "positive_negative";
+  trendEnabled: number;
+  explanation: string | null;
+  allowedUnitsJson: string | null;
+};
+
+function governanceDecisionForObservation(row: ObservationRow) {
+  const fingerprint = unmatchedFingerprint(row.normalizedName || row.itemName, row.unit, row.sectionName);
+  return getDatabase().prepare(`
+    SELECT action, indicator_id AS indicatorId, canonical_key AS canonicalKey,
+      save_alias AS saveAlias, alias_scope AS aliasScope, alias_id AS aliasId, reason,
+      created_by AS createdBy, updated_at AS reviewedAt
+    FROM indicator_governance_decisions
+    WHERE fingerprint = ?
+  `).get(fingerprint) as GovernanceDecisionRow | undefined;
+}
+
+function manuallyConfirmedNormalization(
+  row: ObservationRow,
+  decision: GovernanceDecisionRow,
+  indicator: CatalogIndicatorRow
+): NormalizationResult {
+  const unitCompatibility = resolveIndicatorUnitCompatibility(
+    indicator.canonicalKey,
+    row.unit,
+    indicator.defaultUnit,
+    indicator.allowedUnitsJson
+  );
+  const numericValue = row.numericValue ?? parseNumericResultText(row.resultText);
+  const pseudoAlias = {
+    canonicalKey: indicator.canonicalKey,
+    trendEnabled: indicator.trendEnabled,
+    valueType: indicator.valueType
+  } as AliasRow;
+  const structuralExclusionReason = exclusionReason(row, pseudoAlias, true);
+  const unitIssueReason = !structuralExclusionReason && !unitCompatibility.compatible
+    ? "单位与标准指标不兼容，已保留人工确认的指标身份，但禁止进入默认趋势"
+    : null;
+  const quality: NormalizationResult["quality"] = structuralExclusionReason
+    ? "excluded"
+    : unitIssueReason
+      ? "low"
+      : "high";
+  return {
+    observationId: row.id,
+    indicatorId: indicator.indicatorId,
+    canonicalKey: indicator.canonicalKey,
+    canonicalName: indicator.displayName,
+    canonicalValue: numericValue === null || !unitCompatibility.compatible
+      ? null
+      : convertUnit(indicator.canonicalKey, numericValue, unitCompatibility.rawUnit, unitCompatibility.canonicalUnit),
+    canonicalUnit: unitCompatibility.canonicalUnit,
+    canonicalCategory: indicator.category,
+    canonicalExplanation: indicator.explanation,
+    confidence: 1,
+    quality,
+    matchedBy: "manual_confirmation",
+    matchReason: decision.reason?.trim() || "管理员已确认该来源名称对应此标准指标",
+    excludedReason: structuralExclusionReason || unitIssueReason,
+    sourceOrigin: "manual_confirmation",
+    sourceName: row.itemName,
+    aliasSource: "user",
+    reviewStatus: "confirmed",
+    reviewedBy: decision.createdBy,
+    reviewedAt: decision.reviewedAt
+  };
+}
+
+function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
+  const automatic = normalizeObservationAutomatically(row);
+  const decision = governanceDecisionForObservation(row);
+  if (!decision) return automatic;
+  if (decision.action === "exclude") {
+    return {
+      ...automatic,
+      quality: "excluded",
+      matchedBy: "manual_exclusion",
+      matchReason: decision.reason?.trim() || "管理员已确认该来源项目不进入默认趋势",
+      excludedReason: decision.reason?.trim() || "已由管理员排除",
+      sourceOrigin: "manual_exclusion",
+      sourceName: row.itemName,
+      reviewStatus: "excluded",
+      reviewedBy: decision.createdBy,
+      reviewedAt: decision.reviewedAt
+    };
+  }
+  const indicator = getDatabase().prepare(`
+    SELECT id AS indicatorId, canonical_key AS canonicalKey, display_name AS displayName,
+      category, default_unit AS defaultUnit, value_type AS valueType,
+      trend_enabled AS trendEnabled, explanation, allowed_units_json AS allowedUnitsJson
+    FROM indicator_catalog
+    WHERE id = ? AND canonical_key = ?
+  `).get(decision.indicatorId, decision.canonicalKey) as CatalogIndicatorRow | undefined;
+  if (!indicator) {
+    return {
+      ...automatic,
+      quality: "low",
+      matchReason: `${automatic.matchReason}；已确认的标准指标已不存在，需重新治理`,
+      excludedReason: "人工确认目标已不存在",
+      reviewStatus: "unreviewed",
+      reviewedBy: null,
+      reviewedAt: null
+    };
+  }
+  return manuallyConfirmedNormalization(row, decision, indicator);
 }
 
 export function normalizeObservation(row: ObservationRow): NormalizationResult {
@@ -551,6 +1326,64 @@ function migrateTrendPinsAfterNormalizationChange(input: {
   return Number(inserted.changes);
 }
 
+// 字典参考范围兜底：报告未提供参考边界时，用 canonical 指标的字典范围（如骨密度 T 值的 WHO 标准）
+// 重算展示口径异常标记。批量归一化与人工治理等所有 canonical 变化路径都会经过这里。
+function refreshDisplayFlagWithDictionaryReference(observationId: string, indicatorId: string | null) {
+  const db = getDatabase();
+  const row = db.prepare(`
+    SELECT o.abnormal_flag AS abnormalFlag, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText,
+      o.evidence_json AS evidenceJson,
+      o.display_abnormal_flag AS displayAbnormalFlag, o.abnormal_conflict AS abnormalConflict,
+      c.reference_range_json AS dictionaryReferenceJson
+    FROM observations o
+    LEFT JOIN indicator_catalog c ON c.id = ?
+    WHERE o.id = ?
+  `).get(indicatorId, observationId) as {
+    abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+    resultText: string;
+    numericValue: number | null;
+    referenceLow: number | null;
+    referenceHigh: number | null;
+    referenceText: string | null;
+    evidenceJson: string;
+    displayAbnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+    abnormalConflict: number;
+    dictionaryReferenceJson: string | null;
+  } | undefined;
+  if (!row) return;
+  const dictionaryReference = parseDictionaryReferenceRange(row.dictionaryReferenceJson);
+  let supportingText: Array<string | null> = [];
+  try {
+    const evidence = JSON.parse(row.evidenceJson) as unknown;
+    if (Array.isArray(evidence)) {
+      supportingText = evidence.map((entry) =>
+        entry && typeof entry === "object"
+          ? String((entry as { quote?: unknown }).quote || "") || null
+          : null
+      );
+    }
+  } catch {
+    supportingText = [];
+  }
+  const derived = deriveObservationDisplayAbnormal({
+    storedFlag: row.abnormalFlag,
+    resultText: row.resultText,
+    supportingText,
+    numericValue: row.numericValue,
+    referenceLow: row.referenceLow,
+    referenceHigh: row.referenceHigh,
+    referenceText: row.referenceText,
+    dictionaryReference
+  });
+  const conflict = derived.abnormalConflict ? 1 : 0;
+  if (derived.displayAbnormalFlag === row.displayAbnormalFlag && conflict === row.abnormalConflict) return;
+  db.prepare(`
+    UPDATE observations SET display_abnormal_flag = ?, abnormal_conflict = ? WHERE id = ?
+  `).run(derived.displayAbnormalFlag, conflict, observationId);
+}
+
 function upsertNormalization(result: NormalizationResult) {
   const db = getDatabase();
   const previous = db.prepare(`
@@ -568,8 +1401,9 @@ function upsertNormalization(result: NormalizationResult) {
     INSERT INTO observation_normalizations (
       observation_id, indicator_id, canonical_key, canonical_name, canonical_value, canonical_unit,
       canonical_category, canonical_explanation, confidence, quality, matched_by, match_reason,
-      excluded_reason, version, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      excluded_reason, source_origin, source_name, alias_source, review_status, reviewed_by, reviewed_at,
+      version, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(observation_id) DO UPDATE SET
       indicator_id = excluded.indicator_id,
       canonical_key = excluded.canonical_key,
@@ -583,6 +1417,12 @@ function upsertNormalization(result: NormalizationResult) {
       matched_by = excluded.matched_by,
       match_reason = excluded.match_reason,
       excluded_reason = excluded.excluded_reason,
+      source_origin = excluded.source_origin,
+      source_name = excluded.source_name,
+      alias_source = excluded.alias_source,
+      review_status = excluded.review_status,
+      reviewed_by = excluded.reviewed_by,
+      reviewed_at = excluded.reviewed_at,
       version = excluded.version,
       updated_at = CURRENT_TIMESTAMP
   `).run(
@@ -599,9 +1439,22 @@ function upsertNormalization(result: NormalizationResult) {
     result.matchedBy,
     result.matchReason,
     result.excludedReason,
+    result.sourceOrigin,
+    result.sourceName,
+    result.aliasSource,
+    result.reviewStatus,
+    result.reviewedBy,
+    result.reviewedAt,
     normalizationVersion()
   );
-  updateUnmatchedNameOccurrence(result.observationId, result.canonicalKey);
+  const governedOrPolicyResolved = result.reviewStatus !== "unreviewed"
+    || result.matchedBy === "functional_device_filter"
+    || Boolean(result.canonicalKey && ["high", "medium"].includes(result.quality));
+  updateUnmatchedNameOccurrence(
+    result.observationId,
+    governedOrPolicyResolved ? result.canonicalKey || result.matchedBy || result.reviewStatus : null
+  );
+  refreshDisplayFlagWithDictionaryReference(result.observationId, result.indicatorId);
   return migrateTrendPinsAfterNormalizationChange({
     memberId: previous?.memberId || null,
     oldCanonicalKey: previous?.canonicalKey || null,
@@ -712,7 +1565,13 @@ function synchronizeUnmatchedNamePool() {
       FROM observations o
       JOIN reports r ON r.id = o.report_id
       LEFT JOIN observation_normalizations n ON n.observation_id = o.id
-      WHERE r.status = 'trashed' OR n.canonical_key IS NOT NULL
+      WHERE r.status = 'trashed'
+        OR n.review_status IN ('confirmed', 'excluded')
+        OR n.matched_by = 'functional_device_filter'
+        OR n.excluded_reason LIKE '%OCR 证据%'
+        OR n.excluded_reason = '结构化数值与结果文本不一致，禁止进入默认趋势'
+        OR n.excluded_reason = '参考范围上下界反向，禁止进入默认趋势'
+        OR (n.canonical_key IS NOT NULL AND n.quality IN ('high', 'medium'))
     )
   `).run();
   const unmatched = db.prepare(`
@@ -721,7 +1580,14 @@ function synchronizeUnmatchedNamePool() {
     JOIN reports r ON r.id = o.report_id
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     WHERE r.status <> 'trashed'
-      AND (n.observation_id IS NULL OR n.canonical_key IS NULL)
+      AND (n.observation_id IS NULL OR (
+        n.review_status = 'unreviewed'
+        AND n.matched_by <> 'functional_device_filter'
+        AND COALESCE(n.excluded_reason, '') NOT LIKE '%OCR 证据%'
+        AND COALESCE(n.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
+        AND COALESCE(n.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
+        AND (n.canonical_key IS NULL OR n.quality IN ('low', 'excluded'))
+      ))
   `).all() as Array<{ id: string }>;
   for (const row of unmatched) updateUnmatchedNameOccurrence(row.id, null);
   db.prepare(`
@@ -739,7 +1605,9 @@ function observationRowsForReport(reportId: string) {
   return getDatabase().prepare(`
     SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
-      o.numeric_value AS numericValue, o.unit, o.reference_text AS referenceText,
+      o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
@@ -752,7 +1620,9 @@ function staleBuiltinNormalizationRows() {
   return getDatabase().prepare(`
     SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
-      o.numeric_value AS numericValue, o.unit, o.reference_text AS referenceText,
+      o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment,
       n.canonical_key AS existingCanonicalKey, n.matched_by AS existingMatchedBy
@@ -761,7 +1631,11 @@ function staleBuiltinNormalizationRows() {
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     WHERE r.status <> 'trashed'
       AND r.deleted_at IS NULL
-      AND (n.observation_id IS NULL OR n.canonical_key IS NULL OR n.version <> ?)
+      AND (
+        n.observation_id IS NULL
+        OR (n.canonical_key IS NULL AND n.matched_by <> 'functional_device_filter')
+        OR n.version <> ?
+      )
     ORDER BY o.report_id, o.id
   `).all(normalizationVersion()) as Array<ObservationRow & {
     existingCanonicalKey: string | null;
@@ -773,14 +1647,19 @@ function pendingObservationRowsForReport(reportId: string) {
   return getDatabase().prepare(`
     SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
-      o.numeric_value AS numericValue, o.unit, o.reference_text AS referenceText,
+      o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
     JOIN reports r ON r.id = o.report_id
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     WHERE o.report_id = ?
-      AND (n.observation_id IS NULL OR n.canonical_key IS NULL)
+      AND (
+        n.observation_id IS NULL
+        OR (n.canonical_key IS NULL AND n.matched_by <> 'functional_device_filter')
+      )
   `).all(reportId) as ObservationRow[];
 }
 
@@ -804,7 +1683,7 @@ function collectNormalizationResult(rows: ObservationRow[]): IndicatorNormalizat
     const normalized = normalizeObservationWithReadyCatalog(row);
     upsertNormalization(normalized);
     result[normalized.quality] += 1;
-    if (!normalized.canonicalKey) result.unknown += 1;
+    if (!normalized.canonicalKey && normalized.matchedBy !== "functional_device_filter") result.unknown += 1;
     if (normalized.canonicalKey && ["high", "medium"].includes(normalized.quality)) result.normalized += 1;
   }
   return result;
@@ -1002,27 +1881,880 @@ export async function normalizeAllObservationsFromDictionary(
   return total;
 }
 
+export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNormalizationMetrics {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标质量统计" });
+  const db = getDatabase();
+  const totalsRow = db.prepare(`
+    SELECT
+      COUNT(DISTINCT report.id) AS reports,
+      COUNT(observation.id) AS observations,
+      COUNT(normalization.observation_id) AS normalizationRows,
+      SUM(CASE WHEN normalization.canonical_key IS NOT NULL THEN 1 ELSE 0 END) AS mapped,
+      SUM(CASE
+        WHEN normalization.canonical_key IS NOT NULL
+          AND normalization.quality IN ('high', 'medium')
+          AND normalization.canonical_value IS NOT NULL
+        THEN 1 ELSE 0 END) AS trendEligible,
+      SUM(CASE
+        WHEN normalization.observation_id IS NULL
+          OR (
+            normalization.review_status = 'unreviewed'
+            AND (normalization.canonical_key IS NULL OR normalization.quality IN ('low', 'excluded'))
+            AND normalization.matched_by <> 'functional_device_filter'
+            AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%OCR 证据%'
+            AND COALESCE(normalization.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
+            AND COALESCE(normalization.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
+          )
+        THEN 1 ELSE 0 END) AS needsReview,
+      SUM(CASE WHEN normalization.review_status IN ('confirmed', 'excluded') THEN 1 ELSE 0 END) AS reviewed,
+      SUM(CASE WHEN normalization.quality = 'high' THEN 1 ELSE 0 END) AS high,
+      SUM(CASE WHEN normalization.quality = 'medium' THEN 1 ELSE 0 END) AS medium,
+      SUM(CASE WHEN normalization.quality = 'low' THEN 1 ELSE 0 END) AS low,
+      SUM(CASE WHEN normalization.quality = 'excluded' THEN 1 ELSE 0 END) AS excluded
+    FROM reports report
+    JOIN observations observation ON observation.report_id = report.id
+    LEFT JOIN observation_normalizations normalization ON normalization.observation_id = observation.id
+    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+  `).get() as Record<string, number | null>;
+  const issueGroups = db.prepare(`
+    SELECT COUNT(DISTINCT unmatched.fingerprint) AS count
+    FROM indicator_unmatched_names unmatched
+    JOIN indicator_unmatched_occurrences occurrence ON occurrence.fingerprint = unmatched.fingerprint
+    JOIN reports report ON report.id = occurrence.report_id
+    WHERE unmatched.status = 'open' AND report.status <> 'trashed' AND report.deleted_at IS NULL
+  `).get() as { count: number };
+  const decisions = db.prepare("SELECT COUNT(*) AS count FROM indicator_governance_decisions").get() as { count: number };
+  const userAliases = db.prepare(`
+    SELECT COUNT(*) AS count FROM indicator_aliases WHERE source = 'user' AND enabled = 1
+  `).get() as { count: number };
+  const sourceOrigins = db.prepare(`
+    SELECT normalization.source_origin AS sourceOrigin, COUNT(*) AS count,
+      SUM(CASE
+        WHEN normalization.canonical_key IS NOT NULL
+          AND normalization.quality IN ('high', 'medium')
+          AND normalization.canonical_value IS NOT NULL
+        THEN 1 ELSE 0 END) AS trendEligible
+    FROM observation_normalizations normalization
+    JOIN observations observation ON observation.id = normalization.observation_id
+    JOIN reports report ON report.id = observation.report_id
+    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+    GROUP BY normalization.source_origin
+    ORDER BY count DESC, normalization.source_origin
+  `).all() as Array<{ sourceOrigin: NormalizationSourceOrigin; count: number; trendEligible: number }>;
+  const reportTypes = db.prepare(`
+    SELECT report.report_type AS reportType, COUNT(DISTINCT report.id) AS reports,
+      COUNT(observation.id) AS observations,
+      SUM(CASE WHEN normalization.canonical_key IS NOT NULL THEN 1 ELSE 0 END) AS mapped,
+      SUM(CASE
+        WHEN normalization.canonical_key IS NOT NULL
+          AND normalization.quality IN ('high', 'medium')
+          AND normalization.canonical_value IS NOT NULL
+        THEN 1 ELSE 0 END) AS trendEligible,
+      SUM(CASE
+        WHEN normalization.observation_id IS NULL
+          OR (
+            normalization.review_status = 'unreviewed'
+            AND (normalization.canonical_key IS NULL OR normalization.quality IN ('low', 'excluded'))
+          )
+        THEN 1 ELSE 0 END) AS needsReview
+    FROM reports report
+    JOIN observations observation ON observation.report_id = report.id
+    LEFT JOIN observation_normalizations normalization ON normalization.observation_id = observation.id
+    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+    GROUP BY report.report_type
+    ORDER BY observations DESC, report.report_type
+  `).all() as Array<{
+    reportType: string;
+    reports: number;
+    observations: number;
+    mapped: number;
+    trendEligible: number;
+    needsReview: number;
+  }>;
+  const numeric = (value: number | null | undefined) => Number(value || 0);
+  return {
+    version: activeIndicatorNormalizationVersion(),
+    generatedAt: new Date().toISOString(),
+    totals: {
+      reports: numeric(totalsRow.reports),
+      observations: numeric(totalsRow.observations),
+      normalizationRows: numeric(totalsRow.normalizationRows),
+      mapped: numeric(totalsRow.mapped),
+      trendEligible: numeric(totalsRow.trendEligible),
+      needsReview: numeric(totalsRow.needsReview),
+      reviewed: numeric(totalsRow.reviewed),
+      issueGroups: numeric(issueGroups.count),
+      decisions: numeric(decisions.count),
+      userAliases: numeric(userAliases.count)
+    },
+    quality: {
+      high: numeric(totalsRow.high),
+      medium: numeric(totalsRow.medium),
+      low: numeric(totalsRow.low),
+      excluded: numeric(totalsRow.excluded)
+    },
+    sourceOrigins: sourceOrigins.map((row) => ({
+      sourceOrigin: row.sourceOrigin,
+      count: numeric(row.count),
+      trendEligible: numeric(row.trendEligible)
+    })),
+    reportTypes: reportTypes.map((row) => ({
+      reportType: row.reportType,
+      reports: numeric(row.reports),
+      observations: numeric(row.observations),
+      mapped: numeric(row.mapped),
+      trendEligible: numeric(row.trendEligible),
+      needsReview: numeric(row.needsReview)
+    }))
+  };
+}
+
 export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNormalizationIssue[] {
   if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标理解状态" });
   ensureBuiltinIndicatorCatalog();
   synchronizeUnmatchedNamePool();
-  return getDatabase().prepare(`
-    SELECT
-      pool.raw_name AS rawName,
-      pool.normalized_name AS normalizedName,
-      pool.unit,
-      pool.section_name AS sectionName,
-      NULL AS hospitalName,
-      'unknown' AS status,
-      '未命中当前核心或远程指标字典' AS reason,
-      COUNT(occurrence.observation_id) AS count,
-      MAX(report.report_issued_at) AS latestReportIssuedAt
+  const rows = getDatabase().prepare(`
+    SELECT pool.fingerprint, occurrence.observation_id AS observationId,
+      pool.raw_name AS rawName, pool.normalized_name AS normalizedName,
+      observation.result_text AS resultText, pool.unit, pool.section_name AS sectionName,
+      report.hospital_name_raw AS hospitalName, report.report_issued_at AS reportIssuedAt,
+      normalization.canonical_key AS candidateCanonicalKey,
+      normalization.canonical_name AS candidateCanonicalName,
+      catalog.default_unit AS candidateDefaultUnit,
+      normalization.quality AS candidateQuality,
+      normalization.matched_by AS matchedBy,
+      normalization.match_reason AS matchReason,
+      normalization.excluded_reason AS excludedReason,
+      normalization.source_origin AS sourceOrigin
     FROM indicator_unmatched_names pool
     JOIN indicator_unmatched_occurrences occurrence ON occurrence.fingerprint = pool.fingerprint
     JOIN reports report ON report.id = occurrence.report_id
+    JOIN observations observation ON observation.id = occurrence.observation_id
+    LEFT JOIN observation_normalizations normalization ON normalization.observation_id = occurrence.observation_id
+    LEFT JOIN indicator_catalog catalog ON catalog.id = normalization.indicator_id
     WHERE pool.status = 'open'
-    GROUP BY pool.fingerprint
-    ORDER BY count DESC, pool.last_seen_at DESC
+    ORDER BY pool.last_seen_at DESC, report.report_issued_at DESC, occurrence.observation_id
+  `).all() as Array<{
+    fingerprint: string;
+    observationId: string;
+    rawName: string;
+    normalizedName: string | null;
+    resultText: string;
+    unit: string | null;
+    sectionName: string | null;
+    hospitalName: string | null;
+    reportIssuedAt: string | null;
+    candidateCanonicalKey: string | null;
+    candidateCanonicalName: string | null;
+    candidateDefaultUnit: string | null;
+    candidateQuality: "low" | "excluded" | null;
+    matchedBy: string | null;
+    matchReason: string | null;
+    excludedReason: string | null;
+    sourceOrigin: NormalizationSourceOrigin | null;
+  }>;
+  const grouped = new Map<string, IndicatorNormalizationIssue>();
+  for (const row of rows) {
+    const current = grouped.get(row.fingerprint);
+    const status = row.candidateCanonicalKey
+      ? row.candidateQuality === "excluded" ? "excluded" : "low"
+      : "unknown";
+    if (!current) {
+      grouped.set(row.fingerprint, {
+        fingerprint: row.fingerprint,
+        representativeObservationId: row.observationId,
+        rawName: row.rawName,
+        normalizedName: row.normalizedName,
+        resultText: row.resultText,
+        unit: row.unit,
+        sectionName: row.sectionName,
+        hospitalName: row.hospitalName,
+        status,
+        reason: row.excludedReason || row.matchReason || "未命中当前核心或远程指标字典",
+        count: 1,
+        latestReportIssuedAt: row.reportIssuedAt,
+        candidateCanonicalKey: row.candidateCanonicalKey,
+        candidateCanonicalName: row.candidateCanonicalName,
+        candidateDefaultUnit: row.candidateDefaultUnit,
+        candidateQuality: row.candidateQuality,
+        matchedBy: row.matchedBy,
+        sourceOrigin: row.sourceOrigin || "none"
+      });
+      continue;
+    }
+    current.count += 1;
+    if ((row.reportIssuedAt || "") > (current.latestReportIssuedAt || "")) {
+      current.latestReportIssuedAt = row.reportIssuedAt;
+      current.representativeObservationId = row.observationId;
+      current.resultText = row.resultText;
+      current.unit = row.unit;
+      current.hospitalName = row.hospitalName;
+    }
+    if (!current.candidateCanonicalKey && row.candidateCanonicalKey) {
+      current.candidateCanonicalKey = row.candidateCanonicalKey;
+      current.candidateCanonicalName = row.candidateCanonicalName;
+      current.candidateDefaultUnit = row.candidateDefaultUnit;
+      current.candidateQuality = row.candidateQuality;
+      current.matchedBy = row.matchedBy;
+      current.sourceOrigin = row.sourceOrigin || "none";
+      current.status = status;
+      current.reason = row.excludedReason || row.matchReason || current.reason;
+    }
+  }
+  return [...grouped.values()]
+    .sort((left, right) => right.count - left.count
+      || (right.latestReportIssuedAt || "").localeCompare(left.latestReportIssuedAt || ""))
+    .slice(0, 100);
+}
+
+export function searchIndicatorCatalog(user: RequestUser, query = ""): IndicatorCatalogOption[] {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查询标准指标" });
+  ensureBuiltinIndicatorCatalog();
+  const normalizedQuery = query.normalize("NFKC").trim().slice(0, 80);
+  const like = `%${normalizedQuery.replace(/[\\%_]/g, (value) => `\\${value}`)}%`;
+  const rows = getDatabase().prepare(`
+    SELECT catalog.canonical_key AS canonicalKey, catalog.display_name AS displayName,
+      catalog.category, catalog.default_unit AS defaultUnit,
+      GROUP_CONCAT(DISTINCT alias.alias_name) AS aliases
+    FROM indicator_catalog catalog
+    LEFT JOIN indicator_aliases alias ON alias.indicator_id = catalog.id AND alias.enabled = 1
+    WHERE ? = ''
+      OR catalog.canonical_key LIKE ? ESCAPE '\\'
+      OR catalog.display_name LIKE ? ESCAPE '\\'
+      OR alias.alias_name LIKE ? ESCAPE '\\'
+    GROUP BY catalog.id
+    ORDER BY
+      CASE WHEN catalog.display_name = ? OR catalog.canonical_key = ? THEN 0 ELSE 1 END,
+      COALESCE(catalog.item_order, 999999), catalog.display_name
     LIMIT 100
-  `).all() as IndicatorNormalizationIssue[];
+  `).all(normalizedQuery, like, like, like, normalizedQuery, normalizedQuery) as Array<{
+    canonicalKey: string;
+    displayName: string;
+    category: string;
+    defaultUnit: string | null;
+    aliases: string | null;
+  }>;
+  return rows.map((row) => ({
+    ...row,
+    aliases: row.aliases ? [...new Set(row.aliases.split(",").filter(Boolean))].slice(0, 8) : []
+  }));
+}
+
+function observationRowsForIds(observationIds: string[]) {
+  if (!observationIds.length) return [];
+  const placeholders = observationIds.map(() => "?").join(",");
+  return getDatabase().prepare(`
+    SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
+      o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
+      r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
+    FROM observations o
+    JOIN reports r ON r.id = o.report_id
+    WHERE o.id IN (${placeholders}) AND r.status <> 'trashed' AND r.deleted_at IS NULL
+  `).all(...observationIds) as ObservationRow[];
+}
+
+function allActiveObservationRows() {
+  return getDatabase().prepare(`
+    SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
+      o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
+      o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
+      r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
+    FROM observations o
+    JOIN reports r ON r.id = o.report_id
+    WHERE r.status <> 'trashed' AND r.deleted_at IS NULL
+    ORDER BY o.id
+  `).all() as ObservationRow[];
+}
+
+function observationRowsForFingerprint(fingerprint: string) {
+  return allActiveObservationRows().filter((row) =>
+    unmatchedFingerprint(row.normalizedName || row.itemName, row.unit, row.sectionName) === fingerprint
+  );
+}
+
+function observationRowsForAlias(alias: AliasRow) {
+  return allActiveObservationRows().filter((row) =>
+    aliasAppliesToObservation(alias, row)
+      && candidateNameSet([row.itemName, row.itemCode, row.itemCode ? `${row.itemName}${row.itemCode}` : null,
+        row.normalizedName, `${row.normalizedName || ""}${row.itemCode || ""}`])
+        .has(compactIndicatorKey(alias.normalizedAlias))
+  );
+}
+
+function renormalizeRows(rows: ObservationRow[]) {
+  let normalized = 0;
+  let reopenedIssues = 0;
+  for (const row of rows) {
+    const result = normalizeObservationWithReadyCatalog(row);
+    upsertNormalization(result);
+    if (result.canonicalKey && ["high", "medium"].includes(result.quality)) normalized += 1;
+    if (result.reviewStatus === "unreviewed" && (!result.canonicalKey || ["low", "excluded"].includes(result.quality))) {
+      reopenedIssues += 1;
+    }
+  }
+  return { normalized, reopenedIssues };
+}
+
+export function resolveIndicatorNormalizationIssue(
+  user: RequestUser,
+  input: {
+    fingerprint: string;
+    action: "confirm" | "exclude";
+    canonicalKey?: string | null;
+    saveAlias?: boolean;
+    aliasScope?: "global" | "report_type";
+    reason?: string | null;
+  }
+): IndicatorGovernanceResult {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可治理指标" });
+  ensureBuiltinIndicatorCatalog();
+  const fingerprint = input.fingerprint?.trim();
+  if (!/^[a-f0-9]{64}$/i.test(fingerprint || "")) {
+    throw createError({ statusCode: 400, statusMessage: "指标问题标识无效" });
+  }
+  if (!(["confirm", "exclude"] as const).includes(input.action)) {
+    throw createError({ statusCode: 400, statusMessage: "治理操作无效" });
+  }
+  const db = getDatabase();
+  const pool = db.prepare(`
+    SELECT fingerprint, raw_name AS rawName, normalized_name AS normalizedName,
+      unit, section_name AS sectionName
+    FROM indicator_unmatched_names WHERE fingerprint = ?
+  `).get(fingerprint) as {
+    fingerprint: string;
+    rawName: string;
+    normalizedName: string;
+    unit: string | null;
+    sectionName: string | null;
+  } | undefined;
+  if (!pool) throw createError({ statusCode: 404, statusMessage: "指标问题不存在或已清理" });
+  const occurrenceRows = db.prepare(`
+    SELECT occurrence.observation_id AS observationId, report.report_type AS reportType
+    FROM indicator_unmatched_occurrences occurrence
+    JOIN reports report ON report.id = occurrence.report_id
+    WHERE occurrence.fingerprint = ? AND report.status <> 'trashed' AND report.deleted_at IS NULL
+    ORDER BY occurrence.observation_id
+  `).all(fingerprint) as Array<{ observationId: string; reportType: string }>;
+  if (!occurrenceRows.length) throw createError({ statusCode: 409, statusMessage: "该问题已没有可治理的数据" });
+
+  const indicator = input.action === "confirm"
+    ? db.prepare(`
+        SELECT id AS indicatorId, canonical_key AS canonicalKey, display_name AS displayName
+        FROM indicator_catalog WHERE canonical_key = ?
+      `).get(input.canonicalKey?.trim() || "") as {
+        indicatorId: string;
+        canonicalKey: string;
+        displayName: string;
+      } | undefined
+    : undefined;
+  if (input.action === "confirm" && !indicator) {
+    throw createError({ statusCode: 400, statusMessage: "请选择有效的标准指标" });
+  }
+
+  const aliasScope = input.saveAlias ? input.aliasScope || "report_type" : null;
+  const reportTypes = [...new Set(occurrenceRows.map((row) => row.reportType).filter(Boolean))];
+  if (aliasScope === "report_type" && reportTypes.length !== 1) {
+    throw createError({ statusCode: 409, statusMessage: "该名称跨越多种报告类型，不能直接保存为报告类型别名" });
+  }
+  const normalizedAlias = compactIndicatorKey(pool.rawName);
+  let aliasSaved = false;
+  let aliasId: string | null = null;
+  let aliasReportType: string | null = null;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (input.action === "confirm" && input.saveAlias && indicator) {
+      const reportType = aliasScope === "report_type" ? reportTypes[0] || null : null;
+      aliasReportType = reportType;
+      const conflict = db.prepare(`
+        SELECT catalog.display_name AS displayName
+        FROM indicator_aliases alias
+        JOIN indicator_catalog catalog ON catalog.id = alias.indicator_id
+        WHERE alias.enabled = 1 AND alias.normalized_alias = ? AND alias.scope = ?
+          AND COALESCE(alias.report_type, '') = COALESCE(?, '')
+          AND alias.indicator_id <> ?
+        LIMIT 1
+      `).get(normalizedAlias, aliasScope, reportType, indicator.indicatorId) as { displayName: string } | undefined;
+      if (conflict) {
+        throw createError({
+          statusCode: 409,
+          statusMessage: `该别名已映射到「${conflict.displayName}」，请先检查冲突`
+        });
+      }
+      const existing = db.prepare(`
+        SELECT id FROM indicator_aliases
+        WHERE indicator_id = ? AND normalized_alias = ? AND scope = ?
+          AND COALESCE(report_type, '') = COALESCE(?, '') AND source = 'user'
+        LIMIT 1
+      `).get(indicator.indicatorId, normalizedAlias, aliasScope, reportType) as { id: string } | undefined;
+      if (existing) {
+        aliasId = existing.id;
+        db.prepare(`
+          UPDATE indicator_aliases
+          SET alias_name = ?, confidence = 1, enabled = 1, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(pool.rawName, existing.id);
+      } else {
+        aliasId = createId("alias");
+        db.prepare(`
+          INSERT INTO indicator_aliases (
+            id, indicator_id, alias_name, normalized_alias, scope, report_type,
+            source, confidence, enabled, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, 'user', 1, 1, CURRENT_TIMESTAMP)
+        `).run(aliasId, indicator.indicatorId, pool.rawName, normalizedAlias, aliasScope, reportType);
+      }
+      aliasSaved = true;
+    }
+
+    db.prepare(`
+      INSERT INTO indicator_governance_decisions (
+        fingerprint, action, indicator_id, canonical_key, save_alias, alias_scope, alias_id,
+        reason, created_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(fingerprint) DO UPDATE SET
+        action = excluded.action,
+        indicator_id = excluded.indicator_id,
+        canonical_key = excluded.canonical_key,
+        save_alias = excluded.save_alias,
+        alias_scope = excluded.alias_scope,
+        alias_id = excluded.alias_id,
+        reason = excluded.reason,
+        created_by = excluded.created_by,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(
+      fingerprint,
+      input.action,
+      indicator?.indicatorId || null,
+      indicator?.canonicalKey || null,
+      aliasSaved ? 1 : 0,
+      aliasScope,
+      aliasId,
+      input.reason?.trim().slice(0, 300) || null,
+      user.id
+    );
+
+    const rows = observationRowsForIds(occurrenceRows.map((row) => row.observationId));
+    let normalized = 0;
+    let excluded = 0;
+    for (const row of rows) {
+      const result = normalizeObservationWithReadyCatalog(row);
+      upsertNormalization(result);
+      if (result.canonicalKey && ["high", "medium"].includes(result.quality)) normalized += 1;
+      if (result.quality === "excluded") excluded += 1;
+    }
+    db.prepare(`
+      UPDATE indicator_unmatched_names
+      SET status = ?, resolved_canonical_key = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE fingerprint = ?
+    `).run(input.action === "confirm" ? "resolved" : "ignored", indicator?.canonicalKey || null, fingerprint);
+    db.prepare(`
+      INSERT INTO indicator_governance_history (
+        id, event_type, fingerprint, decision_action, indicator_id, canonical_key,
+        alias_id, alias_name, alias_scope, report_type, reason, affected_observations, created_by
+      ) VALUES (?, 'apply', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      createId("indicator-governance-history"),
+      fingerprint,
+      input.action,
+      indicator?.indicatorId || null,
+      indicator?.canonicalKey || null,
+      aliasId,
+      aliasSaved ? pool.rawName : null,
+      aliasScope,
+      aliasReportType,
+      input.reason?.trim().slice(0, 300) || null,
+      rows.length,
+      user.id
+    );
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'maintenance.govern_indicator', 'indicator_issue', ?, ?)
+    `).run(createId("audit"), user.id, fingerprint, JSON.stringify({
+      action: input.action,
+      canonicalKey: indicator?.canonicalKey || null,
+      affectedObservations: rows.length,
+      aliasSaved,
+      aliasScope,
+      reason: input.reason?.trim().slice(0, 300) || null
+    }));
+    db.exec("COMMIT");
+    return {
+      fingerprint,
+      action: input.action,
+      affectedObservations: rows.length,
+      normalized,
+      excluded,
+      aliasSaved,
+      canonicalKey: indicator?.canonicalKey || null
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function governanceAliasRowById(aliasId: string) {
+  return getDatabase().prepare(`
+    SELECT alias.indicator_id AS indicatorId, catalog.canonical_key AS canonicalKey,
+      catalog.display_name AS displayName, catalog.category, catalog.specimen,
+      catalog.default_unit AS defaultUnit, catalog.value_type AS valueType,
+      catalog.trend_enabled AS trendEnabled, catalog.explanation,
+      alias.alias_name AS aliasName, alias.normalized_alias AS normalizedAlias,
+      alias.scope, alias.source AS aliasSource, alias.hospital_name AS hospitalName,
+      alias.department_name AS departmentName, alias.report_type AS reportType,
+      alias.confidence, catalog.allowed_units_json AS allowedUnitsJson,
+      catalog.section_hints_json AS sectionHintsJson
+    FROM indicator_aliases alias
+    JOIN indicator_catalog catalog ON catalog.id = alias.indicator_id
+    WHERE alias.id = ?
+  `).get(aliasId) as AliasRow | undefined;
+}
+
+function aliasContextKey(alias: Pick<AliasRow, "normalizedAlias" | "scope" | "hospitalName" | "departmentName" | "reportType">) {
+  return [
+    compactIndicatorKey(alias.normalizedAlias),
+    alias.scope,
+    compactIndicatorKey(alias.hospitalName),
+    compactIndicatorKey(alias.departmentName),
+    compactIndicatorKey(alias.reportType)
+  ].join("\u0000");
+}
+
+export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100): IndicatorGovernanceHistoryItem[] {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
+  const safeLimit = Math.max(1, Math.min(300, Math.trunc(limit || 100)));
+  const rows = getDatabase().prepare(`
+    SELECT history.id, history.event_type AS eventType, history.fingerprint,
+      history.decision_action AS decisionAction, pool.raw_name AS rawName,
+      history.canonical_key AS canonicalKey, catalog.display_name AS canonicalName,
+      history.alias_id AS aliasId, history.alias_name AS aliasName,
+      history.alias_scope AS aliasScope, history.report_type AS reportType,
+      history.reason, history.affected_observations AS affectedObservations,
+      users.display_name AS actorName, history.created_at AS createdAt,
+      CASE
+        WHEN history.event_type = 'apply'
+          AND EXISTS (
+            SELECT 1 FROM indicator_governance_decisions decision
+            WHERE decision.fingerprint = history.fingerprint
+              AND decision.action = history.decision_action
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM indicator_governance_history newer
+            WHERE newer.fingerprint = history.fingerprint
+              AND newer.event_type IN ('apply', 'undo')
+              AND newer.rowid > history.rowid
+          )
+        THEN 1 ELSE 0
+      END AS canUndo
+    FROM indicator_governance_history history
+    LEFT JOIN indicator_unmatched_names pool ON pool.fingerprint = history.fingerprint
+    LEFT JOIN indicator_catalog catalog ON catalog.id = history.indicator_id
+    LEFT JOIN users ON users.id = history.created_by
+    ORDER BY history.rowid DESC
+    LIMIT ?
+  `).all(safeLimit) as Array<Omit<IndicatorGovernanceHistoryItem, "canUndo"> & { canUndo: number }>;
+  return rows.map((row) => ({ ...row, canUndo: row.canUndo === 1 }));
+}
+
+export function undoIndicatorGovernanceDecision(
+  user: RequestUser,
+  fingerprintInput: string,
+  reason?: string | null
+): IndicatorGovernanceUndoResult {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可撤销指标治理" });
+  ensureBuiltinIndicatorCatalog();
+  const fingerprint = fingerprintInput.trim();
+  if (!/^[a-f0-9]{64}$/i.test(fingerprint)) {
+    throw createError({ statusCode: 400, statusMessage: "指标问题标识无效" });
+  }
+  const db = getDatabase();
+  const decision = db.prepare(`
+    SELECT action, indicator_id AS indicatorId, canonical_key AS canonicalKey,
+      save_alias AS saveAlias, alias_scope AS aliasScope, alias_id AS aliasId,
+      reason, created_by AS createdBy, updated_at AS reviewedAt
+    FROM indicator_governance_decisions
+    WHERE fingerprint = ?
+  `).get(fingerprint) as GovernanceDecisionRow | undefined;
+  if (!decision) throw createError({ statusCode: 404, statusMessage: "当前没有可撤销的治理决策" });
+
+  const pool = db.prepare(`
+    SELECT raw_name AS rawName FROM indicator_unmatched_names WHERE fingerprint = ?
+  `).get(fingerprint) as { rawName: string } | undefined;
+  const fingerprintRows = observationRowsForFingerprint(fingerprint);
+  let alias = decision.aliasId ? governanceAliasRowById(decision.aliasId) : undefined;
+  let aliasId = decision.aliasId;
+  if (!alias && decision.saveAlias && decision.indicatorId && pool) {
+    const reportTypes = [...new Set(fingerprintRows.map((row) => row.reportType).filter(Boolean))];
+    const reportType = decision.aliasScope === "report_type" && reportTypes.length === 1 ? reportTypes[0] : null;
+    const legacyAlias = db.prepare(`
+      SELECT id FROM indicator_aliases
+      WHERE source = 'user' AND indicator_id = ? AND normalized_alias = ? AND scope = ?
+        AND COALESCE(report_type, '') = COALESCE(?, '')
+      ORDER BY updated_at DESC, id DESC LIMIT 1
+    `).get(
+      decision.indicatorId,
+      compactIndicatorKey(pool.rawName),
+      decision.aliasScope || "global",
+      reportType
+    ) as { id: string } | undefined;
+    if (legacyAlias) {
+      aliasId = legacyAlias.id;
+      alias = governanceAliasRowById(legacyAlias.id);
+    }
+  }
+
+  const rowsById = new Map(fingerprintRows.map((row) => [row.id, row]));
+  if (alias) {
+    for (const row of observationRowsForAlias(alias)) rowsById.set(row.id, row);
+  }
+  const rows = [...rowsById.values()];
+  const undoReason = reason?.trim().slice(0, 300) || null;
+  let aliasDisabled = false;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM indicator_governance_decisions WHERE fingerprint = ?").run(fingerprint);
+    if (aliasId) {
+      const referenced = db.prepare(`
+        SELECT COUNT(*) AS count FROM indicator_governance_decisions WHERE alias_id = ?
+      `).get(aliasId) as { count: number };
+      if (Number(referenced.count) === 0) {
+        const updated = db.prepare(`
+          UPDATE indicator_aliases
+          SET enabled = 0, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND source = 'user' AND enabled = 1
+        `).run(aliasId);
+        aliasDisabled = Number(updated.changes) > 0;
+      }
+    }
+    const rerun = renormalizeRows(rows);
+    db.prepare(`
+      UPDATE indicator_unmatched_names
+      SET status = CASE WHEN EXISTS (
+          SELECT 1 FROM indicator_unmatched_occurrences occurrence
+          WHERE occurrence.fingerprint = indicator_unmatched_names.fingerprint
+        ) THEN 'open' ELSE 'resolved' END,
+        resolved_canonical_key = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE fingerprint = ?
+    `).run(fingerprint);
+    db.prepare(`
+      INSERT INTO indicator_governance_history (
+        id, event_type, fingerprint, decision_action, indicator_id, canonical_key,
+        alias_id, alias_name, alias_scope, report_type, reason, affected_observations, created_by
+      ) VALUES (?, 'undo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      createId("indicator-governance-history"),
+      fingerprint,
+      decision.action,
+      decision.indicatorId,
+      decision.canonicalKey,
+      aliasId,
+      alias?.aliasName || pool?.rawName || null,
+      alias?.scope || decision.aliasScope,
+      alias?.reportType || null,
+      undoReason,
+      rows.length,
+      user.id
+    );
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'maintenance.undo_indicator_governance', 'indicator_issue', ?, ?)
+    `).run(createId("audit"), user.id, fingerprint, JSON.stringify({
+      decisionAction: decision.action,
+      canonicalKey: decision.canonicalKey,
+      affectedObservations: rows.length,
+      aliasId,
+      aliasDisabled,
+      reason: undoReason
+    }));
+    db.exec("COMMIT");
+    return {
+      fingerprint,
+      action: decision.action,
+      affectedObservations: rows.length,
+      aliasDisabled,
+      remainingMapped: rerun.normalized,
+      reopenedIssues: rerun.reopenedIssues
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function listIndicatorAliasGovernance(user: RequestUser): IndicatorAliasGovernanceOverview {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
+  ensureBuiltinIndicatorCatalog();
+  const db = getDatabase();
+  const allRows = db.prepare(`
+    SELECT alias.id, alias.indicator_id AS indicatorId, catalog.canonical_key AS canonicalKey,
+      catalog.display_name AS displayName, catalog.category, catalog.specimen,
+      catalog.default_unit AS defaultUnit, catalog.value_type AS valueType,
+      catalog.trend_enabled AS trendEnabled, catalog.explanation,
+      alias.alias_name AS aliasName, alias.normalized_alias AS normalizedAlias,
+      alias.scope, alias.source AS aliasSource, alias.hospital_name AS hospitalName,
+      alias.department_name AS departmentName, alias.report_type AS reportType,
+      alias.confidence, alias.enabled, alias.created_at AS createdAt, alias.updated_at AS updatedAt,
+      catalog.allowed_units_json AS allowedUnitsJson, catalog.section_hints_json AS sectionHintsJson
+    FROM indicator_aliases alias
+    JOIN indicator_catalog catalog ON catalog.id = alias.indicator_id
+    WHERE alias.source IN ('builtin', 'user', 'ai_suggestion')
+    ORDER BY alias.updated_at DESC, alias.id DESC
+  `).all() as Array<AliasRow & {
+    id: string;
+    enabled: number;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  const enabledGroups = new Map<string, typeof allRows>();
+  for (const row of allRows.filter((item) => item.enabled === 1)) {
+    const key = aliasContextKey(row);
+    enabledGroups.set(key, [...(enabledGroups.get(key) || []), row]);
+  }
+  const conflicts: IndicatorAliasConflict[] = [];
+  for (const group of enabledGroups.values()) {
+    if (!group.some((row) => row.aliasSource === "user")) continue;
+    if (new Set(group.map((row) => row.canonicalKey)).size < 2) continue;
+    const first = group[0]!;
+    conflicts.push({
+      normalizedAlias: first.normalizedAlias,
+      scope: first.scope as IndicatorAliasConflict["scope"],
+      hospitalName: first.hospitalName,
+      departmentName: first.departmentName,
+      reportType: first.reportType,
+      targets: group.map((row) => ({
+        aliasId: row.id,
+        aliasName: row.aliasName,
+        canonicalKey: row.canonicalKey,
+        canonicalName: row.displayName,
+        source: row.aliasSource
+      }))
+    });
+  }
+  const conflictCounts = new Map<string, number>();
+  for (const conflict of conflicts) {
+    for (const target of conflict.targets) conflictCounts.set(target.aliasId, conflict.targets.length - 1);
+  }
+  const aliases = allRows.filter((row) => row.aliasSource === "user").map((row) => ({
+    id: row.id,
+    aliasName: row.aliasName,
+    normalizedAlias: row.normalizedAlias,
+    scope: row.scope as IndicatorAliasGovernanceItem["scope"],
+    hospitalName: row.hospitalName,
+    departmentName: row.departmentName,
+    reportType: row.reportType,
+    canonicalKey: row.canonicalKey,
+    canonicalName: row.displayName,
+    category: row.category,
+    enabled: row.enabled === 1,
+    usageCount: observationRowsForAlias(row).length,
+    conflictCount: conflictCounts.get(row.id) || 0,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  }));
+  return { aliases, conflicts };
+}
+
+export function setIndicatorAliasEnabled(
+  user: RequestUser,
+  aliasIdInput: string,
+  enabled: boolean,
+  reason?: string | null
+): IndicatorAliasUpdateResult {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
+  ensureBuiltinIndicatorCatalog();
+  const aliasId = aliasIdInput.trim();
+  const db = getDatabase();
+  const alias = governanceAliasRowById(aliasId);
+  if (!alias || alias.aliasSource !== "user") {
+    throw createError({ statusCode: 404, statusMessage: "本地指标别名不存在" });
+  }
+  const current = db.prepare("SELECT enabled FROM indicator_aliases WHERE id = ?").get(aliasId) as { enabled: number };
+  if ((current.enabled === 1) === enabled) {
+    return { aliasId, enabled, affectedObservations: 0, normalized: 0, reopenedIssues: 0 };
+  }
+  if (enabled) {
+    const conflict = db.prepare(`
+      SELECT catalog.display_name AS displayName
+      FROM indicator_aliases other
+      JOIN indicator_catalog catalog ON catalog.id = other.indicator_id
+      WHERE other.id <> ? AND other.enabled = 1 AND other.normalized_alias = ? AND other.scope = ?
+        AND COALESCE(other.hospital_name, '') = COALESCE(?, '')
+        AND COALESCE(other.department_name, '') = COALESCE(?, '')
+        AND COALESCE(other.report_type, '') = COALESCE(?, '')
+        AND other.indicator_id <> ?
+      LIMIT 1
+    `).get(
+      aliasId,
+      alias.normalizedAlias,
+      alias.scope,
+      alias.hospitalName,
+      alias.departmentName,
+      alias.reportType,
+      alias.indicatorId
+    ) as { displayName: string } | undefined;
+    if (conflict) {
+      throw createError({ statusCode: 409, statusMessage: `该别名仍与「${conflict.displayName}」冲突，不能启用` });
+    }
+  }
+
+  const rows = observationRowsForAlias(alias);
+  const updateReason = reason?.trim().slice(0, 300) || null;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      UPDATE indicator_aliases SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(enabled ? 1 : 0, aliasId);
+    const rerun = renormalizeRows(rows);
+    db.prepare(`
+      INSERT INTO indicator_governance_history (
+        id, event_type, indicator_id, canonical_key, alias_id, alias_name,
+        alias_scope, report_type, reason, affected_observations, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      createId("indicator-governance-history"),
+      enabled ? "alias_enable" : "alias_disable",
+      alias.indicatorId,
+      alias.canonicalKey,
+      aliasId,
+      alias.aliasName,
+      alias.scope,
+      alias.reportType,
+      updateReason,
+      rows.length,
+      user.id
+    );
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, ?, 'indicator_alias', ?, ?)
+    `).run(
+      createId("audit"),
+      user.id,
+      enabled ? "maintenance.enable_indicator_alias" : "maintenance.disable_indicator_alias",
+      aliasId,
+      JSON.stringify({
+        aliasName: alias.aliasName,
+        canonicalKey: alias.canonicalKey,
+        affectedObservations: rows.length,
+        reason: updateReason
+      })
+    );
+    db.exec("COMMIT");
+    return {
+      aliasId,
+      enabled,
+      affectedObservations: rows.length,
+      normalized: rerun.normalized,
+      reopenedIssues: rerun.reopenedIssues
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "description": "匿名存档报告与离线处理链路的诊断闭环金标，不包含原始 OCR、指标名称或健康数值。",
+  "archivedReport": {
+    "persistedObservations": 162,
+    "trendReadyObservations": 126,
+    "trendSeries": 121
+  },
+  "denseProcessing": {
+    "pages": 24,
+    "plannedUnits": 5,
+    "candidates": 200,
+    "resolvedCandidates": 200,
+    "candidateClosurePercent": 100,
+    "supplementUnits": 0,
+    "unresolvedCandidates": 0
+  },
+  "qualityCalibration": {
+    "emptyPageAlsoCountsAsWeak": false,
+    "historicalWeakResultOverridesLatestGoodResult": false
+  }
+}

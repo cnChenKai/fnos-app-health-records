@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { LoaderCircle, RefreshCw } from "@lucide/vue";
+import BackToTop from "../../components/BackToTop.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import PullIndicator from "../../components/PullIndicator.vue";
 import { request } from "../../utils/api";
@@ -125,5 +126,6 @@ onBeforeUnmount(() => observer?.disconnect());
         <template v-else-if="logs.length"><span>已加载全部日志</span></template>
       </div>
     </section>
+    <BackToTop />
   </section>
 </template>

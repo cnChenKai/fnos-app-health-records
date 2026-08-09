@@ -7,6 +7,10 @@ import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { getAppConfig } from "../utils/runtime-config";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
+import {
+  deriveProcessingJobBatches, parseProcessingJobQueuedDetail,
+  type ProcessingJobBatchSource, type ProcessingJobQueuedDetail
+} from "./processing-job-batches.service";
 
 const maxFileCount = 24;
 const maxFileBytes = 40 * 1024 * 1024;
@@ -183,6 +187,7 @@ export function createUpload(user: RequestUser, memberId: string, files: UploadI
   }
 }
 
+
 export function listProcessingJobs(user: RequestUser, reportId: string) {
   const db = getDatabase();
   const report = db.prepare("SELECT member_id AS memberId FROM reports WHERE id = ?").get(reportId) as
@@ -192,9 +197,10 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
   assertMemberAccess(user, report.memberId);
   const jobs = db.prepare(`
     SELECT j.id, j.page_id AS pageId, p.page_number AS pageNumber, p.original_name AS originalName,
-      j.job_type AS jobType, j.status, j.attempts,
+      j.job_type AS jobType, j.pipeline_version AS pipelineVersion,
+      j.deduplication_key AS deduplicationKey, j.status, j.attempts,
       j.error_code AS errorCode, j.error_message AS errorMessage, j.created_at AS createdAt,
-      j.started_at AS startedAt, j.finished_at AS finishedAt,
+      j.rowid AS jobSequence, j.started_at AS startedAt, j.finished_at AS finishedAt,
       o.engine AS ocrEngine, o.model_version AS ocrModelVersion, o.elapsed_ms AS ocrElapsedMs,
       CASE
         WHEN o.text_length IS NOT NULL THEN o.text_length
@@ -213,8 +219,24 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
   `).all(reportId) as Array<Record<string, unknown> & {
     id: string;
     jobType: string;
+    pipelineVersion: string;
+    deduplicationKey: string;
+    status: string;
+    createdAt: string;
+    jobSequence: number;
     ocrTextLength: number | null;
   }>;
+  const queuedEvents = db.prepare(`
+    SELECT job_id AS jobId, detail_json AS detailJson
+    FROM processing_job_events
+    WHERE report_id = ? AND event_type = 'queued'
+    ORDER BY created_at, rowid
+  `).all(reportId) as Array<{ jobId: string; detailJson: string }>;
+  const queuedEventDetails = new Map<string, ProcessingJobQueuedDetail>();
+  for (const event of queuedEvents) {
+    if (!queuedEventDetails.has(event.jobId)) queuedEventDetails.set(event.jobId, parseProcessingJobQueuedDetail(event.detailJson));
+  }
+  const jobBatches = deriveProcessingJobBatches(jobs as ProcessingJobBatchSource[], queuedEventDetails);
   const units = db.prepare(`
     SELECT job_id AS jobId, unit_type AS unitType, page_numbers_json AS pageNumbersJson,
       status, candidate_count AS candidateCount, matched_count AS matchedCount, unit_index AS unitIndex
@@ -246,7 +268,9 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
     attemptsByJob.set(attempt.jobId, [...(attemptsByJob.get(attempt.jobId) || []), attempt]);
   }
   return jobs.map((job) => {
-    if (job.jobType !== "ai_extract") return job;
+    const batch = jobBatches.get(job.id)!;
+    const { deduplicationKey: _deduplicationKey, jobSequence: _jobSequence, ...visibleJob } = job;
+    if (job.jobType !== "ai_extract") return { ...visibleJob, ...batch };
     const jobUnits = byJob.get(job.id) || [];
     const jobAttempts = attemptsByJob.get(job.id) || [];
     const pageNumbers = (unit: typeof jobUnits[number]) => {
@@ -264,7 +288,8 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
       .filter((unit) => ["completed", "warning"].includes(unit.status))
       .flatMap(pageNumbers));
     return {
-      ...job,
+      ...visibleJob,
+      ...batch,
       aiModel: jobAttempts.at(-1)?.model || job.aiModel || null,
       aiElapsedMs: jobAttempts.length
         ? jobAttempts.reduce((sum, attempt) => sum + (attempt.elapsedMs || 0), 0)

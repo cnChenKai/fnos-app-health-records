@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "description": "匿名未知标量版面治理金标，不包含真实报告文本或健康值",
+  "cases": [
+    {
+      "id": "opaque-device-range-without-result-header",
+      "lines": [
+        "功能检查",
+        "ABC18-70(ABC1) | 0.603"
+      ],
+      "targetPrefix": "ABC18-70",
+      "expectedReason": "ambiguous_layout"
+    },
+    {
+      "id": "opaque-device-range-with-current-result-header",
+      "lines": [
+        "项目 | 本次结果 | 单位 | 参考范围",
+        "ABC18-70(ABC1) | 0.603 | U/L | 0.1-1.0"
+      ],
+      "targetPrefix": "ABC18-70",
+      "expectedReason": "supplement_required"
+    },
+    {
+      "id": "ordinary-cold-functional-metric",
+      "lines": [
+        "功能检查",
+        "FEF25-75 | 1.23"
+      ],
+      "targetPrefix": "FEF25-75",
+      "expectedReason": "supplement_required"
+    },
+    {
+      "id": "joined-multi-value-row",
+      "lines": [
+        "功能检查",
+        "匿名汇总 | 1.1 | 2.2 | 3.3"
+      ],
+      "targetPrefix": "匿名汇总",
+      "expectedReason": "ambiguous_layout"
+    }
+  ]
+}

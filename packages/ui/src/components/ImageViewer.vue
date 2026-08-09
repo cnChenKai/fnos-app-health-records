@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  ChevronLeft, ChevronRight, CircleAlert, Download, LoaderCircle, Maximize2,
-  RectangleHorizontal, RectangleVertical, X, ZoomIn, ZoomOut
+  ChevronLeft, ChevronRight, CircleAlert, Crosshair, Download, LoaderCircle, Maximize2,
+  RectangleHorizontal, RectangleVertical, Sparkles, X, ZoomIn, ZoomOut
 } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
+import OcrTextOverlay from "./OcrTextOverlay.vue";
+import type { OcrPageDetail } from "../types/api";
 
 export type ImageViewerPage = {
   key: string;
@@ -18,6 +20,10 @@ export type ImageViewerPage = {
 const props = defineProps<{
   pages: ImageViewerPage[];
   startIndex?: number;
+  ocrDetail?: OcrPageDetail | null;
+  highlightLineIds?: string[];
+  accentLineIds?: string[];
+  autoLocate?: boolean;
 }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -37,6 +43,8 @@ const viewerNaturalH = ref(0);
 const viewerCanvasEl = ref<HTMLElement | null>(null);
 const viewerCanvasW = ref(0);
 const viewerCanvasH = ref(0);
+const viewerImgEl = ref<HTMLImageElement | null>(null);
+const ocrOn = ref(true);
 
 const viewerPage = computed(() => props.pages[viewerIndex.value] || null);
 const viewerUsingPreview = computed(() => Boolean(viewerPage.value?.previewUrl) && !viewerHighRes.value);
@@ -67,6 +75,7 @@ function prepareViewerPage(index: number) {
   viewerIndex.value = index;
   resetViewerTransform();
   resetViewerCanvasScroll();
+  ocrOn.value = true;
   viewerHighRes.value = false;
   viewerNaturalW.value = 0;
   viewerNaturalH.value = 0;
@@ -195,23 +204,118 @@ function onViewerCanvasClick(event: MouseEvent) {
 }
 
 /* 按图片真实宽高比计算铺满尺寸：竖图按宽度铺满，横图按高度铺满，旋转后同样适配 */
-const viewerFitStyle = computed(() => {
+const viewerFitSize = computed(() => {
   const nw = viewerNaturalW.value;
   const nh = viewerNaturalH.value;
   const cw = viewerCanvasW.value;
   const ch = viewerCanvasH.value;
-  if (!nw || !nh || !cw || !ch) return {};
+  if (!nw || !nh || !cw || !ch) return null;
   const rotated = viewerRotation.value % 180 !== 0;
   const effW = rotated ? nh : nw;
   const effH = rotated ? nw : nh;
   const fit = Math.min(cw / effW, ch / effH);
   return {
-    width: `${Math.max(1, Math.round(nw * fit))}px`,
-    height: `${Math.max(1, Math.round(nh * fit))}px`,
+    width: Math.max(1, Math.round(nw * fit)),
+    height: Math.max(1, Math.round(nh * fit))
+  };
+});
+
+const viewerFitStyle = computed(() => {
+  const size = viewerFitSize.value;
+  if (!size) return {};
+  return {
+    width: `${size.width}px`,
+    height: `${size.height}px`,
     maxWidth: "none",
     maxHeight: "none"
   };
 });
+
+const ocrAvailable = computed(() => Boolean(props.ocrDetail?.lines?.length));
+
+// 高亮行（优先结果单元格，其次整行）的并集包围盒，换算成页面坐标系下的
+// 0-1 比例，供“定位到标记”把该行平移缩放到视口中心。
+const highlightBoxFraction = computed(() => {
+  const detail = props.ocrDetail;
+  if (!detail) return null;
+  const ids = new Set([
+    ...(props.accentLineIds || []),
+    ...(props.highlightLineIds || [])
+  ]);
+  if (!ids.size) return null;
+  const refW = detail.coordWidth || viewerNaturalW.value;
+  const refH = detail.coordHeight || viewerNaturalH.value;
+  if (!refW || !refH) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const line of detail.lines) {
+    if (!ids.has(line.id) || !line.box || line.box.length < 4) continue;
+    left = Math.min(left, line.box[0]);
+    top = Math.min(top, line.box[1]);
+    right = Math.max(right, line.box[2]);
+    bottom = Math.max(bottom, line.box[3]);
+  }
+  if (!Number.isFinite(left) || right <= left || bottom <= top) return null;
+  return {
+    cx: (left + right) / 2 / refW,
+    cy: (top + bottom) / 2 / refH,
+    width: (right - left) / refW,
+    height: (bottom - top) / refH
+  };
+});
+
+const hasHighlights = computed(() => Boolean(highlightBoxFraction.value));
+
+function locateHighlight() {
+  const target = highlightBoxFraction.value;
+  if (!target) return;
+  if (viewerRotation.value % 360 !== 0) viewerRotation.value = 0;
+  const fit = viewerFitSize.value;
+  if (!fit) return;
+  // 目标行高度约占视口一半，密集表格也不会放得过大。
+  const ideal = Math.min(2.5, Math.max(1.25, 0.5 / Math.max(target.height, 0.015)));
+  // 触屏等窄视口下还要保证整行宽度完整可见：
+  // 只按行高放大后行框两端会被裁出视口，所以缩放同时受行宽约束。
+  const canvasW = viewerCanvasW.value;
+  const widthFit = canvasW
+    ? (canvasW * 0.9) / Math.max(target.width * fit.width, 1)
+    : Infinity;
+  const scale = Math.min(ideal, widthFit);
+  setViewerScale(scale);
+  const applied = viewerScale.value;
+  let panX = -((target.cx - 0.5) * fit.width * applied);
+  let panY = -((target.cy - 0.5) * fit.height * applied);
+  /* 触屏窄视口下，把靠页面上方的标记行平移到视口正中心会把整页挂到视口
+     下方、顶部露出大片黑边（图片看起来"偏下"）。按"缩放后的图片始终覆盖
+     视口"的原则钳制平移量：行保持接近居中，页面边缘不被拉进视口。 */
+  const maxPanX = Math.max(
+    0,
+    (fit.width * applied - viewerCanvasW.value) / 2,
+  );
+  const maxPanY = Math.max(
+    0,
+    (fit.height * applied - viewerCanvasH.value) / 2,
+  );
+  viewerPanX.value = Math.min(maxPanX, Math.max(-maxPanX, panX));
+  viewerPanY.value = Math.min(maxPanY, Math.max(-maxPanY, panY));
+}
+
+// 趋势原图等场景打开时自动定位到标记行：等图片与 OCR 数据都就绪后执行一次。
+let autoLocatedKey = "";
+watch(
+  [() => props.ocrDetail, viewerNaturalW, viewerCanvasW, viewerCanvasH],
+  () => {
+    if (!props.autoLocate) return;
+    const key = `${viewerPage.value?.key || ""}:${props.ocrDetail?.pageId || ""}`;
+    if (autoLocatedKey === key) return;
+    if (!highlightBoxFraction.value || !viewerFitSize.value) return;
+    autoLocatedKey = key;
+    locateHighlight();
+  },
+  { flush: "post" }
+);
 
 function onViewerImageLoad(event: Event) {
   viewerLoading.value = false;
@@ -278,6 +382,19 @@ onBeforeUnmount(() => {
       </div>
       <div class="original-viewer-actions">
         <slot name="actions" />
+        <template v-if="ocrAvailable">
+          <button
+            type="button"
+            :title="ocrOn ? '隐藏 OCR 标记' : '显示 OCR 标记'"
+            @click="ocrOn = !ocrOn"
+          ><Sparkles :size="18" /></button>
+          <button
+            v-if="hasHighlights"
+            type="button"
+            title="定位到标记"
+            @click="locateHighlight"
+          ><Crosshair :size="18" /></button>
+        </template>
         <button type="button" title="缩小" :disabled="viewerScale <= 0.5" @click="zoomViewer(-1)"><ZoomOut :size="18" /></button>
         <span>{{ Math.round(viewerScale * 100) }}%</span>
         <button type="button" title="放大" :disabled="viewerScale >= 3" @click="zoomViewer(1)"><ZoomIn :size="18" /></button>
@@ -313,14 +430,29 @@ onBeforeUnmount(() => {
           <button type="button" @click="retryViewerImage">重试</button>
         </div>
         <div v-if="viewerHighResLoading" class="viewer-preview-badge"><LoaderCircle class="spin-icon" :size="13" />正在加载高清图…</div>
-        <img
+        <div
           v-if="viewerPage && !viewerLoadFailed"
-          :src="viewerDisplaySrc"
-          :alt="viewerPage.label"
+          class="viewer-image-frame"
           :style="[viewerFitStyle, { transform: `translate(-50%, -50%) translate3d(${viewerPanX}px, ${viewerPanY}px, 0) scale(${viewerScale}) rotate(${viewerRotation}deg)` }]"
-          @load="onViewerImageLoad"
-          @error="onViewerImageError"
-        />
+        >
+          <img
+            ref="viewerImgEl"
+            :src="viewerDisplaySrc"
+            :alt="viewerPage.label"
+            @load="onViewerImageLoad"
+            @error="onViewerImageError"
+          />
+          <OcrTextOverlay
+            v-if="ocrOn && ocrAvailable"
+            :image="viewerImgEl"
+            :lines="ocrDetail!.lines"
+            :coord-width="ocrDetail!.coordWidth"
+            :coord-height="ocrDetail!.coordHeight"
+            :highlight-line-ids="highlightLineIds || []"
+            :accent-line-ids="accentLineIds || []"
+            :interactive="false"
+          />
+        </div>
         <button
           v-if="!viewerImmersive"
           class="viewer-fullscreen-button"

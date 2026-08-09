@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的 OCR Worker 启动退出、协议损坏、输出噪声、任务中途崩溃和重启恢复金标，不调用真实 OCR 或 AI。",
+  "expected": {
+    "startupProcessCount": 2,
+    "protocolProcessCount": 2,
+    "noiseSuccessfulResponses": 1,
+    "jobRetryAttempts": 2,
+    "jobWorkerRequestCount": 2,
+    "ocrResultCount": 1,
+    "activeJobsAfterRecovery": 0,
+    "reportStatusAfterRecovery": "needs_review"
+  }
+}

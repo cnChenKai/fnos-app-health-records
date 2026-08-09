@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的 OCR、AI 结果持久化事务回滚、同任务重试复用和 SQLite 短时写锁恢复金标，不包含真实报告内容或真实健康数据。",
+  "expected": {
+    "pages": 3,
+    "observationCount": 3,
+    "trendPointCount": 3,
+    "duplicateGroups": 0,
+    "failedExtractionCount": 0,
+    "retryAttempts": 2,
+    "lockHoldMilliseconds": 180
+  }
+}

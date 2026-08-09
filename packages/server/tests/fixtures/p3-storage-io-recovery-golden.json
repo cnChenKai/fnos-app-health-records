@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的上传回滚、存储不可用、原件缺失与损坏恢复、缩略图中断清理和孤儿文件治理金标，不包含真实报告内容或真实健康数据。",
+  "expected": {
+    "uploadDatabaseRowsAfterFailure": 0,
+    "uploadReportDirectoriesAfterFailure": 0,
+    "sourceMissingRetryAttempts": 2,
+    "sourceMismatchRetryAttempts": 2,
+    "partialThumbnailFilesAfterFailure": 0,
+    "orphanFilesQueued": 2,
+    "orphanFilesDeleted": 2,
+    "referencedFilesRetained": 1
+  }
+}

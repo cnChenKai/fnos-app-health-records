@@ -45,11 +45,19 @@ export default defineEventHandler(async (event) => {
 
     const html = await readUiIndexHtml();
     setResponseHeader(event, "content-type", "text/html; charset=utf-8");
+    /* index.html 必须每次回源验证：WebView 缓存旧 HTML 会引用已删除的旧哈希 assets，升级后整页白屏 */
+    setResponseHeader(event, "cache-control", "no-cache");
     return html;
   }
 
   const ext = extname(appPath).toLowerCase();
   const contentType = contentTypes[ext] || "application/octet-stream";
   setResponseHeader(event, "content-type", contentType);
+  /* 带内容哈希的构建产物永久缓存；favicon 等非哈希文件仅短缓存 */
+  setResponseHeader(
+    event,
+    "cache-control",
+    appPath.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "public, max-age=3600"
+  );
   return file;
 });

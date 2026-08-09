@@ -116,6 +116,27 @@ test("uses a minimal output contract for scalar units", () => {
   assert.doesNotMatch(prompt, /morphologyFindings.size/);
 });
 
+test("constrains pulmonary multi-column tables to current results and filters device parameters", () => {
+  const prompt = promptForInput({
+    reportId: "report",
+    text: "[第 1 页]\n肺功能检查\n项目 | 实测 | 预测\nFVC | 2.22 | 3.33",
+    inputCharacters: 54,
+    pageCount: 1,
+    primaryContentType: "functional",
+    contentTypes: ["functional"],
+    documentContentType: "checkup",
+    extractionMode: "scalar",
+    route: "scalar",
+    allowDocumentFields: false
+  });
+  assert.match(prompt, /实测\/本次结果/);
+  assert.match(prompt, /预测值/);
+  assert.match(prompt, /最近表头/);
+  assert.match(prompt, /PEF TIME/);
+  assert.match(prompt, /\/HT/);
+  assert.match(prompt, /单位只在当前行或可明确继承的表头出现时填写/);
+});
+
 test("uses one typed contract for consolidated omission verification", () => {
   const prompt = promptForInput({
     reportId: "report",

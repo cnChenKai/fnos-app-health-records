@@ -1,0 +1,200 @@
+{
+  "member": {
+    "id": "p3-cross-member",
+    "displayName": "匿名成员"
+  },
+  "reports": [
+    {
+      "id": "p3-cross-laboratory",
+      "reportType": "laboratory",
+      "title": "匿名检验回归",
+      "reportIssuedAt": "2026-07-01",
+      "observations": [
+        {
+          "id": "cross-ldh-iu",
+          "sectionName": "生化检验",
+          "itemName": "LDH",
+          "resultText": "180 IU/L",
+          "numericValue": 180,
+          "unit": "IU/L"
+        },
+        {
+          "id": "cross-ck-u",
+          "sectionName": "心肌酶谱",
+          "itemName": "CK",
+          "resultText": "120 U/L",
+          "numericValue": 120,
+          "unit": "U/L"
+        },
+        {
+          "id": "cross-ckmb-activity",
+          "sectionName": "心肌酶谱",
+          "itemName": "CKMB",
+          "resultText": "12 IU/L",
+          "numericValue": 12,
+          "unit": "IU/L"
+        },
+        {
+          "id": "cross-amylase-u",
+          "sectionName": "胰腺功能",
+          "itemName": "AMY",
+          "resultText": "80 U/L",
+          "numericValue": 80,
+          "unit": "U/L"
+        },
+        {
+          "id": "cross-testosterone-ngdl",
+          "sectionName": "性激素",
+          "itemName": "TESTO",
+          "resultText": "420 ng/dL",
+          "numericValue": 420,
+          "unit": "ng/dL"
+        },
+        {
+          "id": "cross-prolactin-ugl",
+          "sectionName": "性激素",
+          "itemName": "PRL",
+          "resultText": "20 μg/L",
+          "numericValue": 20,
+          "unit": "μg/L"
+        },
+        {
+          "id": "cross-pgi-ngml",
+          "sectionName": "胃功能",
+          "itemName": "PGI",
+          "resultText": "60 ng/mL",
+          "numericValue": 60,
+          "unit": "ng/mL"
+        },
+        {
+          "id": "cross-pgii-ngml",
+          "sectionName": "胃功能",
+          "itemName": "PGII",
+          "resultText": "10 ng/mL",
+          "numericValue": 10,
+          "unit": "ng/mL"
+        },
+        {
+          "id": "cross-pg-ratio-explicit",
+          "sectionName": "胃功能",
+          "itemName": "胃蛋白酶原 I/II 比值",
+          "resultText": "8.5",
+          "numericValue": 8.5,
+          "unit": null
+        },
+        {
+          "id": "cross-ckmb-mass",
+          "sectionName": "心肌标志物",
+          "itemName": "CK-MB",
+          "resultText": "3.1 ng/mL",
+          "numericValue": 3.1,
+          "unit": "ng/mL"
+        },
+        {
+          "id": "cross-prolactin-miu",
+          "sectionName": "性激素",
+          "itemName": "PRL",
+          "resultText": "250 mIU/L",
+          "numericValue": 250,
+          "unit": "mIU/L"
+        },
+        {
+          "id": "cross-testosterone-nmol",
+          "sectionName": "性激素",
+          "itemName": "TESTO",
+          "resultText": "14 nmol/L",
+          "numericValue": 14,
+          "unit": "nmol/L"
+        }
+      ]
+    },
+    {
+      "id": "p3-cross-ophthalmology",
+      "reportType": "checkup",
+      "title": "匿名眼科回归",
+      "reportIssuedAt": "2026-07-02",
+      "observations": [
+        {
+          "id": "cross-iop-right-bracket",
+          "sectionName": "眼科",
+          "itemName": "眼压(右)",
+          "resultText": "18 mmHg",
+          "numericValue": 18,
+          "unit": "mmHg"
+        },
+        {
+          "id": "cross-iop-left-bracket",
+          "sectionName": "眼科",
+          "itemName": "IOP(L)",
+          "resultText": "17 mmHg",
+          "numericValue": 17,
+          "unit": "mmHg"
+        },
+        {
+          "id": "cross-iop-unsided",
+          "sectionName": "眼科",
+          "itemName": "IOP",
+          "resultText": "18 mmHg",
+          "numericValue": 18,
+          "unit": "mmHg"
+        }
+      ]
+    },
+    {
+      "id": "p3-cross-pathology",
+      "reportType": "pathology",
+      "title": "匿名病理回归",
+      "reportIssuedAt": "2026-07-03",
+      "observations": [
+        {
+          "id": "cross-pathology-pgr",
+          "sectionName": "免疫组化",
+          "itemName": "PGR",
+          "resultText": "80%",
+          "numericValue": 80,
+          "unit": "%"
+        }
+      ]
+    },
+    {
+      "id": "p3-cross-ultrasound",
+      "reportType": "ultrasound",
+      "title": "匿名超声回归",
+      "reportIssuedAt": "2026-07-04",
+      "observations": [
+        {
+          "id": "cross-cardiac-tte",
+          "sectionName": "超声心动图",
+          "itemName": "TTE",
+          "resultText": "55%",
+          "numericValue": 55,
+          "unit": "%"
+        }
+      ]
+    },
+    {
+      "id": "p3-cross-gastric-no-ratio",
+      "reportType": "laboratory",
+      "title": "匿名胃功能回归",
+      "reportIssuedAt": "2026-07-05",
+      "observations": [
+        {
+          "id": "cross-pgi-only",
+          "sectionName": "胃功能",
+          "itemName": "胃蛋白酶原I",
+          "resultText": "58 μg/L",
+          "numericValue": 58,
+          "unit": "μg/L"
+        },
+        {
+          "id": "cross-pgii-only",
+          "sectionName": "胃功能",
+          "itemName": "胃蛋白酶原II",
+          "resultText": "9 μg/L",
+          "numericValue": 9,
+          "unit": "μg/L"
+        }
+      ]
+    }
+  ]
+}

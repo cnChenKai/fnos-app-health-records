@@ -8,7 +8,7 @@ import { assertMemberManage } from "./member.service";
 
 const backfillSettingKey = "morphology.legacy_observation_backfill_v1";
 const trackingRuleSettingKey = "morphology.tracking_rule_version";
-const trackingRuleVersion = "morphology-tracking-v1";
+const trackingRuleVersion = "morphology-tracking-v2";
 const strongMorphologyPattern =
   /(囊肿|结节|斑块|息肉|结石|钙化灶?|占位|肿块|包块|团块|积液|增生|萎缩|狭窄|扩张|卵泡|脂肪肝|磨玻璃影|病灶|血流信号|淋巴结)/;
 const morphologySectionPattern =
@@ -339,6 +339,14 @@ const regionPatterns = [
   /\d{1,2}\s*点钟(?:方向)?/
 ];
 
+const regionOrganPrefixes = [
+  "锁骨下动脉", "下肢动脉", "甲状腺", "颈动脉", "椎动脉",
+  "乳腺", "肝脏", "胆囊", "胆总管", "胆管", "胰腺", "脾脏",
+  "肾脏", "膀胱", "前列腺", "子宫", "宫颈", "卵巢", "肺部",
+  "肺", "心脏", "食管", "结肠", "直肠", "小肠", "肠道", "胃部",
+  "胃", "肝", "肾", "脾"
+].sort((left, right) => right.length - left.length);
+
 function compactKey(value: string | null | undefined) {
   return String(value || "")
     .normalize("NFKC")
@@ -365,8 +373,30 @@ function normalizeLaterality(value: MorphologyLaterality, text: string): Morphol
   return "unspecified";
 }
 
+function structuredMorphologyRegion(value: string | null) {
+  let region = String(value || "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/[，,。.:：;；、\s_-]+/g, "");
+  if (!region || !regionPatterns.some((pattern) => pattern.test(region))) {
+    return null;
+  }
+  for (const prefix of regionOrganPrefixes) {
+    if (region.startsWith(prefix) && region.length > prefix.length) {
+      region = region.slice(prefix.length);
+      break;
+    }
+  }
+  region = region
+    .replace(/^(?:左侧|右侧|双侧)(?=叶|段|部|区)/, (side) => side.slice(0, 1))
+    .slice(0, 80);
+  return region || null;
+}
+
 function normalizeRegion(value: string | null, text: string) {
-  const source = `${value || ""} ${text}`;
+  const structured = structuredMorphologyRegion(value);
+  if (structured) return structured;
+  const source = text;
   return regionPatterns.find((pattern) => pattern.test(source))?.exec(source)?.[0]
     ?.replace(/\s+/g, "") || null;
 }
@@ -640,19 +670,51 @@ function assertMemberAccess(user: RequestUser, memberId: string) {
   if (!access) throw createError({ statusCode: 403, statusMessage: "没有查看该成员形态变化的权限" });
 }
 
-function parseTrackingEvidence(value: string) {
+type TrackingEvidence = { pageNumber: number; quote: string | null };
+
+function trackingEvidenceScore(
+  row: FindingRow,
+  evidence: TrackingEvidence,
+) {
+  const quote = compactKey(evidence.quote);
+  if (!quote) return 0;
+  const rawText = compactKey(row.rawText);
+  let score = 0;
+  if (rawText && quote === rawText) score += 100_000;
+  else if (rawText && (rawText.includes(quote) || quote.includes(rawText))) {
+    score += 50_000 + Math.min(rawText.length, quote.length);
+  }
+  for (const [value, weight] of [
+    [row.morphology, 4_000],
+    [row.findingName, 2_000],
+    [row.findingType, 1_000],
+    [row.region, 500],
+    [row.organ, 250],
+  ] as const) {
+    const normalized = compactKey(value);
+    if (normalized && quote.includes(normalized)) score += weight;
+  }
+  return score + Math.min(quote.length, 500);
+}
+
+function parseTrackingEvidence(value: string, row: FindingRow) {
   try {
     const parsed = JSON.parse(value) as Array<{ pageNumber?: unknown; quote?: unknown }>;
     if (!Array.isArray(parsed)) return null;
-    for (const item of parsed) {
+    const candidates = parsed.flatMap((item) => {
       const pageNumber = Math.max(0, Math.round(Number(item?.pageNumber || 0)));
-      if (!pageNumber) continue;
-      return {
+      if (!pageNumber) return [];
+      return [{
         pageNumber,
-        quote: typeof item.quote === "string" ? item.quote.trim().slice(0, 500) || null : null
-      };
-    }
-    return null;
+        quote: typeof item.quote === "string" ? item.quote.trim().slice(0, 500) || null : null,
+      } satisfies TrackingEvidence];
+    });
+    return candidates.sort((left, right) =>
+      trackingEvidenceScore(row, right) - trackingEvidenceScore(row, left)
+      || compactKey(right.quote).length - compactKey(left.quote).length
+      || left.pageNumber - right.pageNumber
+      || String(left.quote || "").localeCompare(String(right.quote || ""), "zh-CN")
+    )[0] || null;
   } catch {
     return null;
   }
@@ -823,7 +885,7 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
     );
     const seenDuplicates = new Set<string>();
     const points = selectedRows.flatMap((row) => {
-      const evidence = parseTrackingEvidence(row.evidenceJson);
+      const evidence = parseTrackingEvidence(row.evidenceJson, row);
       const point: MorphologyTrackingPoint = {
         findingId: row.id,
         reportId: row.reportId,

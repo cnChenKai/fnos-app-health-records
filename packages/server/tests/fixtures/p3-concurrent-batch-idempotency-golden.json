@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的重复触发、跨批次竞争和旧任务晚返回幂等金标，不包含真实报告内容或真实健康数据。",
+  "expected": {
+    "pages": 3,
+    "observationCount": 3,
+    "trendPointCount": 3,
+    "duplicateGroups": 0,
+    "maximumActiveAiJobs": 1,
+    "manualRetryEvents": 1,
+    "staleExtractionCount": 0
+  }
+}

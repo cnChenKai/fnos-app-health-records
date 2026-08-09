@@ -1,0 +1,43 @@
+{
+  "description": "以脱敏真实超声摘要/明细金标为基线构造的跨年度确定性变化序列；不调用 OCR/AI Provider，用于验证跨报告分组、单位换算、来源页和生命周期稳定性。",
+  "reports": [
+    {
+      "key": "baseline",
+      "examDate": "2024-07-12",
+      "calcificationLength": 0.4,
+      "calcificationUnit": "cm",
+      "displayMeasurement": "0.4cm"
+    },
+    {
+      "key": "middle",
+      "examDate": "2025-07-12",
+      "calcificationLength": 5,
+      "calcificationUnit": "mm",
+      "displayMeasurement": "5mm"
+    },
+    {
+      "key": "latest",
+      "examDate": "2026-07-12",
+      "calcificationLength": 7,
+      "calcificationUnit": "mm",
+      "displayMeasurement": "7mm",
+      "includeLeftCalcification": true
+    }
+  ],
+  "manualReview": {
+    "reportKey": "middle",
+    "calcificationLength": 5.2,
+    "calcificationUnit": "mm"
+  },
+  "expected": {
+    "groupCount": 3,
+    "rightCalcificationName": "肝右叶局灶性钙化灶",
+    "rightCalcificationPrimaryMmBeforeManualReview": [4, 5, 7],
+    "rightCalcificationPrimaryMmAfterManualReview": [4, 5.2, 7],
+    "rightCalcificationChangeKind": "size_increased",
+    "rightCalcificationChangeSummaryAfterManualReview": "原报告最大径较上次增加 1.8 mm",
+    "fattyLiverName": "脂肪肝（轻度）",
+    "leftCalcificationName": "肝左叶局灶性钙化灶",
+    "sourcePage": 18
+  }
+}

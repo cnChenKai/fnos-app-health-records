@@ -6,11 +6,13 @@ import {
   ChartNoAxesCombined,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   FileText,
   Pin,
   Search,
   X
 } from "@lucide/vue";
+import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
@@ -18,11 +20,12 @@ import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
 import { matchTrendSearch } from "../utils/trends";
+import { describeObservationAbnormal, formatReferenceRange } from "../utils/indicator-display";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
 import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
-import type { TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
+import type { OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
 
 const app = useAppContext();
 const route = useRoute();
@@ -35,14 +38,36 @@ const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" |
 const collapsedGroups = ref(new Set<string>());
 const detailPopoverStyle = ref<Record<string, string>>({});
 const detailPopoverPlacement = ref<"above" | "below">("below");
+const noticePopoverStyle = ref<Record<string, string>>({});
+const noticePopoverPlacement = ref<"above" | "below">("below");
 const previewReportId = ref<string | null>(null);
 const activeDetailKey = ref<string | null>(null);
+const activeNoticeKey = ref<string | null>(null);
 const pinPendingKeys = ref(new Set<string>());
 const sourcePreview = ref<{
   point: TrendPoint | TrendExcludedPoint;
   seriesName: string;
   unit: string | null;
 } | null>(null);
+const sourceOcrDetail = ref<OcrPageDetail | null>(null);
+let sourceOcrSeq = 0;
+
+// 打开原图时并行拉取该页 OCR 行数据，供叠加层把数据点所在的表格行/结果
+// 单元格标记出来；读取失败时静默降级为只看原图。
+watch(sourcePreview, async (value) => {
+  sourceOcrDetail.value = null;
+  const page = value?.point.sourcePage;
+  if (!value || !page) return;
+  const seq = ++sourceOcrSeq;
+  try {
+    const detail = await request<OcrPageDetail>(
+      `reports/${encodeURIComponent(value.point.reportId)}/pages/${encodeURIComponent(page.id)}/ocr`
+    );
+    if (seq === sourceOcrSeq) sourceOcrDetail.value = detail;
+  } catch {
+    if (seq === sourceOcrSeq) sourceOcrDetail.value = null;
+  }
+});
 
 const sourcePreviewUrl = computed(() => {
   const value = sourcePreview.value;
@@ -77,6 +102,12 @@ const attentionOptions = [
   { value: "unflagged", label: "未列入关注" }
 ];
 
+function trendPointProcessingHint(point: TrendPoint) {
+  if (point.reportStatus === "processing") return "来源报告正在重新识别，此处暂时展示上一次成功结果";
+  if (point.reportStatus === "failed") return "来源报告最近一次重新识别失败，此趋势点仍来自上一次成功结果";
+  return "";
+}
+
 function matchingAlias(item: TrendSeries) {
   return matchTrendSearch(item, query.value).alias;
 }
@@ -84,8 +115,8 @@ function matchingAlias(item: TrendSeries) {
 const filteredSeries = computed(() => {
   return series.value.filter((item) => {
     if (groupFilter.value !== "all" && item.groupKey !== groupFilter.value) return false;
-    if (attentionFilter.value === "attention" && !item.attentionLevel) return false;
-    if (attentionFilter.value === "unflagged" && item.attentionLevel) return false;
+    if (attentionFilter.value === "attention" && item.attentionPriority === "normal") return false;
+    if (attentionFilter.value === "unflagged" && item.attentionPriority !== "normal") return false;
     if (
       attentionFilter.value !== "all"
       && attentionFilter.value !== "attention"
@@ -188,7 +219,7 @@ const filterSummary = computed(() => {
 async function load(memberId: string, silent = false) {
   if (!silent) loading.value = true;
   loadError.value = "";
-  activeDetailKey.value = null;
+  closeDetails();
   try { series.value = await request(`trends?memberId=${encodeURIComponent(memberId)}`); }
   catch (cause) {
     if (!silent) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
@@ -289,17 +320,33 @@ function excludedPointText(point: TrendExcludedPoint) {
   return result.toLowerCase().endsWith(unit.toLowerCase()) ? result : `${result} ${unit}`;
 }
 
-function abnormalLabel(value: TrendPoint["abnormalFlag"]) {
-  if (!value) return "未标记";
-  return { high: "偏高", low: "偏低", abnormal: "异常", normal: "正常" }[value] || "未标记";
+function pointAbnormalDisplay(point: TrendPoint) {
+  return describeObservationAbnormal(point);
 }
 
-function flagClass(value: TrendPoint["abnormalFlag"]) {
-  if (value === "high") return "up";
-  if (value === "low") return "down";
-  if (value === "abnormal") return "warn";
-  if (value === "normal") return "ok";
-  return "plain";
+function pointFlagClass(point: TrendPoint) {
+  const display = pointAbnormalDisplay(point);
+  const toneClass = {
+    high: "up",
+    low: "down",
+    abnormal: "warn",
+    normal: "ok",
+    review: "plain",
+    plain: "plain",
+  }[display.tone];
+  return [toneClass, { review: display.isConflict, computed: display.isComputed }];
+}
+
+function pointFlagLabel(point: TrendPoint) {
+  return pointAbnormalDisplay(point).label;
+}
+
+function pointFlagVisible(point: TrendPoint) {
+  return pointAbnormalDisplay(point).visible;
+}
+
+function pointInterpretationLine(point: TrendPoint) {
+  return pointAbnormalDisplay(point).explanation;
 }
 
 function qualityLabel(value: TrendSeries["quality"]) {
@@ -316,21 +363,34 @@ function latestPoint(item: TrendSeries) {
   return item.points[item.points.length - 1] || null;
 }
 
-function referenceSummary(point: TrendPoint | null) {
+function referenceSummary(point: TrendPoint | null, unit: string | null) {
   if (!point) return "参考范围待整理";
-  if (point.referenceText) return `参考 ${point.referenceText}`;
-  if (point.referenceLow !== null && point.referenceHigh !== null) {
-    return `参考 ${formatNumber(point.referenceLow)} - ${formatNumber(point.referenceHigh)}`;
-  }
-  if (point.referenceHigh !== null) return `参考 ≤ ${formatNumber(point.referenceHigh)}`;
-  if (point.referenceLow !== null) return `参考 ≥ ${formatNumber(point.referenceLow)}`;
-  return "参考范围待整理";
+  return formatReferenceRange({
+    referenceLow: point.referenceLow,
+    referenceHigh: point.referenceHigh,
+    referenceText: point.referenceText,
+    unit: point.referenceText ? null : unit,
+    formatNumber
+  });
+}
+
+// 数据点没有整理出任何参考信息时不展示占位文案，减少干扰、不占行高。
+function hasReferenceInfo(point: TrendPoint) {
+  return Boolean(
+    (point.referenceText || "").trim()
+    || point.referenceLow !== null
+    || point.referenceHigh !== null
+  );
 }
 
 function trendValueRange(item: TrendSeries) {
-  if (item.pointCount < 2 || item.minValue === null || item.maxValue === null) return null;
-  if (item.minValue === item.maxValue) return null;
-  return `${formatNumber(item.minValue)} - ${formatNumber(item.maxValue)}${item.unit || ""}`;
+  if (item.pointCount < 2 || item.typicalMinValue === null || item.typicalMaxValue === null) return null;
+  if (item.typicalMinValue === item.typicalMaxValue) return null;
+  return `${formatNumber(item.typicalMinValue)} - ${formatNumber(item.typicalMaxValue)}${item.unit || ""}`;
+}
+
+function trendValueRangeLabel(item: TrendSeries) {
+  return item.outlierCount ? "常见区间" : "变化区间";
 }
 
 function trendDateRange(item: TrendSeries) {
@@ -369,27 +429,127 @@ function toggleGroup(section: TrendSection) {
 }
 
 function deltaText(item: TrendSeries) {
-  if (item.delta === null) return "基线";
-  if (item.delta === 0) return "持平";
-  return `${item.delta > 0 ? "+" : ""}${formatNumber(item.delta)}`;
+  if (item.pointCount <= 1 || item.latestChangeStatus === "baseline") return "基线";
+  if (!item.changeAssessmentAllowed && item.pointCount > 1) return "暂不比较";
+  if (item.latestChangeStatus === "not_comparable") return "暂不比较";
+  if (!item.latestChangeConclusionAllowed || item.latestChangeStatus === "needs_review") return "变化待核验";
+  if (item.latestChangeStatus === "unchanged" || item.delta === 0) return "较上次持平";
+  if (item.delta === null) return "变化待核验";
+  return `较上次 ${item.delta > 0 ? "+" : ""}${formatNumber(item.delta)}`;
 }
 
 function deltaClass(item: TrendSeries) {
-  if (item.delta === null || item.delta === 0) return "neutral";
-  return item.delta > 0 ? "up" : "down";
+  if (!item.latestChangeConclusionAllowed || item.latestChangeStatus === "unchanged") return "neutral";
+  if (item.latestChangeStatus === "increase") return "up";
+  if (item.latestChangeStatus === "decrease") return "down";
+  return "neutral";
+}
+
+function intervalLabel(days: number | null) {
+  if (days === null) return "间隔未知";
+  if (days === 0) return "同日记录";
+  if (days < 30) return `间隔 ${days} 天`;
+  if (days < 365) return `间隔约 ${Math.max(1, Math.round(days / 30))} 个月`;
+  const years = days / 365;
+  return `间隔约 ${Number.isInteger(years) ? years : years.toFixed(1)} 年`;
+}
+
+function magnitudeLabel(item: TrendSeries) {
+  return {
+    unavailable: "幅度暂不判断",
+    unchanged: "数值基本持平",
+    small: "较小幅度变化",
+    moderate: "一般幅度变化",
+    large: "较大幅度变化"
+  }[item.latestChangeMagnitude];
+}
+
+function trendStatusLabel(item: TrendSeries) {
+  return {
+    baseline: "单次基线",
+    stable: "整体稳定",
+    sustained_rise: "数值连续上升",
+    sustained_fall: "数值连续下降",
+    fluctuating: "存在波动",
+    insufficient_evidence: "趋势证据不足"
+  }[item.trendStatus];
+}
+
+function abnormalContinuityLabel(item: TrendSeries) {
+  if (item.abnormalContinuityStatus === "latest_abnormal") return "仅本次异常";
+  if (item.abnormalContinuityStatus === "persistent_abnormal") return `连续 ${item.consecutiveAbnormalCount} 次异常`;
+  if (item.abnormalContinuityStatus === "recovered") return "最新已回到参考范围";
+  if (item.abnormalContinuityStatus === "near_boundary") return "最新接近参考边界";
+  if (item.abnormalContinuityStatus === "conflict") return "异常标记待核验";
+  if (item.abnormalContinuityStatus === "insufficient_evidence") return "异常连续性证据不足";
+  return "未见连续异常";
+}
+
+function latestChangeDetail(item: TrendSeries) {
+  if (item.delta === null) return "目前没有可计算的前次差值";
+  const delta = `${item.delta > 0 ? "+" : ""}${formatNumber(item.delta)}${item.unit || ""}`;
+  return `算术差值 ${delta} · ${intervalLabel(item.latestIntervalDays)} · ${magnitudeLabel(item)}`;
+}
+
+
+function comparabilityLabel(item: TrendSeries) {
+  if (item.comparabilityStatus === "range_drift") return "参考范围发生变化";
+  if (item.comparabilityStatus === "condition_mismatch") return "检测条件可能不同";
+  if (item.comparabilityStatus === "insufficient_evidence") return "参考条件信息不完整";
+  return "可直接比较";
+}
+
+function showTrendChangeSummary(item: TrendSeries) {
+  // “趋势证据不足”不构成结论，收进 ! 图标弹层；其余状态是有效结论，直接展示。
+  return item.pointCount > 1
+    && item.changeAssessmentAllowed
+    && item.trendStatus !== "insufficient_evidence";
+}
+
+// ! 入口只保留真正需要用户核对的罕见问题：异常标记冲突、检测条件不同
+// （标本/方法/年龄阶段变化，数值本身不可比）。参考范围漂移在年度体检间很常见，
+// 已由“暂不比较”差值文案表达；证据不足等默认状态不再提示。
+function collapsedNotices(item: TrendSeries) {
+  const notices: Array<{ cls: string; text: string }> = [];
+  if (item.abnormalContinuityStatus === "conflict") {
+    notices.push({
+      cls: "conflict",
+      text: `${abnormalContinuityLabel(item)}${abnormalContinuityDetail(item) ? ` · ${abnormalContinuityDetail(item)}` : ""}`
+    });
+  }
+  if (item.pointCount > 1 && item.comparabilityStatus === "condition_mismatch") {
+    notices.push({
+      cls: item.comparabilityStatus,
+      text: `${comparabilityLabel(item)} · ${item.comparabilityReason || "数值保留，变化结论需谨慎"}`
+    });
+  }
+  return notices;
+}
+
+function showMultiPointTrendDetail(item: TrendSeries) {
+  return item.pointCount > 1 && (item.changeAssessmentAllowed || item.trendConclusionAllowed);
+}
+
+function abnormalContinuityDetail(item: TrendSeries) {
+  const parts = [item.abnormalContinuityReason];
+  if (item.attentionReason && item.attentionReason !== item.abnormalContinuityReason) parts.push(item.attentionReason);
+  return parts.filter(Boolean).join(" · ");
 }
 
 function trendChartPoints(item: TrendSeries) {
   const values = item.points.map((point) => point.numericValue);
   if (!values.length) return [];
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = item.typicalMinValue ?? Math.min(...values);
+  const max = item.typicalMaxValue ?? Math.max(...values);
   const span = max - min || 1;
-  return item.points.map((point, index) => ({
-    point,
-    x: values.length === 1 ? 50 : 12 + (index / (values.length - 1)) * 76,
-    y: values.length === 1 ? 46 : 62 - ((point.numericValue - min) / span) * 34
-  }));
+  return item.points.map((point, index) => {
+    const ratio = Math.max(0, Math.min(1, (point.numericValue - min) / span));
+    return {
+      point,
+      x: values.length === 1 ? 50 : 12 + (index / (values.length - 1)) * 76,
+      y: values.length === 1 ? 46 : 62 - ratio * 34
+    };
+  });
 }
 
 function trendChartPolyline(item: TrendSeries) {
@@ -403,7 +563,8 @@ function trendChartMinWidth(item: TrendSeries) {
 }
 
 function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
-  return `${item.name} ${pointValue(point, item.unit)}，${formatDate(point.reportIssuedAt)}，点击查看来源`;
+  const review = point.trendOutlier ? "，该点与其余记录差异较大" : "";
+  return `${item.name} ${pointValue(point, item.unit)}，${formatDate(point.reportIssuedAt)}${review}，点击查看来源`;
 }
 
 function recentPoints(item: TrendSeries) {
@@ -418,18 +579,22 @@ function detailsOpen(item: TrendSeries) {
   return activeDetailKey.value === seriesKey(item);
 }
 
+function noticeOpen(item: TrendSeries) {
+  return activeNoticeKey.value === seriesKey(item);
+}
+
+function closeNotice() {
+  activeNoticeKey.value = null;
+  noticePopoverStyle.value = {};
+}
+
 function closeDetails() {
   activeDetailKey.value = null;
   detailPopoverStyle.value = {};
+  closeNotice();
 }
 
-function toggleDetails(item: TrendSeries, event: MouseEvent) {
-  const key = seriesKey(item);
-  if (activeDetailKey.value === key) {
-    closeDetails();
-    return;
-  }
-
+function popoverAnchorFrame(event: MouseEvent) {
   const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
   const mobile = window.matchMedia("(max-width: 760px)").matches;
   const horizontalMargin = mobile ? 12 : 16;
@@ -450,25 +615,54 @@ function toggleDetails(item: TrendSeries, event: MouseEvent) {
     Math.min(anchor.right - width, window.innerWidth - horizontalMargin - width)
   );
 
-  detailPopoverPlacement.value = placement;
-  detailPopoverStyle.value = {
-    left: `${left}px`,
-    width: `${width}px`,
-    maxHeight: `${maxHeight}px`,
-    ...(placement === "below"
-      ? { top: `${anchor.bottom + gap}px`, bottom: "auto" }
-      : { top: "auto", bottom: `${window.innerHeight - anchor.top + gap}px` })
+  return {
+    placement: placement as "above" | "below",
+    style: {
+      left: `${left}px`,
+      width: `${width}px`,
+      maxHeight: `${maxHeight}px`,
+      ...(placement === "below"
+        ? { top: `${anchor.bottom + gap}px`, bottom: "auto" }
+        : { top: "auto", bottom: `${window.innerHeight - anchor.top + gap}px` })
+    }
   };
+}
+
+function toggleDetails(item: TrendSeries, event: MouseEvent) {
+  const key = seriesKey(item);
+  if (activeDetailKey.value === key) {
+    closeDetails();
+    return;
+  }
+
+  const frame = popoverAnchorFrame(event);
+  closeDetails();
+  detailPopoverPlacement.value = frame.placement;
+  detailPopoverStyle.value = frame.style;
   activeDetailKey.value = key;
 }
 
+function toggleNotice(item: TrendSeries, event: MouseEvent) {
+  const key = seriesKey(item);
+  if (activeNoticeKey.value === key) {
+    closeNotice();
+    return;
+  }
+
+  const frame = popoverAnchorFrame(event);
+  closeDetails();
+  noticePopoverPlacement.value = frame.placement;
+  noticePopoverStyle.value = frame.style;
+  activeNoticeKey.value = key;
+}
+
 function openReport(reportId: string) {
-  activeDetailKey.value = null;
+  closeDetails();
   previewReportId.value = reportId;
 }
 
 function openSourcePage(point: TrendPoint | TrendExcludedPoint, item: TrendSeries) {
-  activeDetailKey.value = null;
+  closeDetails();
   if (!point.sourcePage) {
     openReport(point.reportId);
     return;
@@ -526,10 +720,13 @@ function nextRouteUsesTopbarSearch() {
 
 onMounted(() => {
   window.addEventListener("resize", closeDetails, { passive: true });
+  // 弹层是 fixed 定位，窗口滚动后会与锚点卡片脱离，滚动时直接关闭
+  window.addEventListener("scroll", closeDetails, { passive: true });
   activateTopbarSearch();
 });
 onBeforeUnmount(() => {
   window.removeEventListener("resize", closeDetails);
+  window.removeEventListener("scroll", closeDetails);
   app.clearTopbarSubtitle("trends");
   app.clearTopbarSearch("trends");
 });
@@ -544,7 +741,7 @@ onDeactivated(() => {
 
 <template>
   <section ref="root" class="plain-page">
-    <div class="page-intro"><div><h2>指标趋势</h2><p>仅比较相同指标和兼容单位</p></div><span class="page-intro-badge"><ChartNoAxesCombined :size="22" /></span></div>
+    <div class="page-intro"><div><h2>指标趋势</h2><p>{{ trendCountSubtitle || "仅比较相同指标和兼容单位" }}</p></div><span class="page-intro-badge"><ChartNoAxesCombined :size="22" /></span></div>
     <nav class="trend-view-switch" aria-label="趋势视图">
       <RouterLink to="/trends" aria-current="page">指标趋势</RouterLink>
       <RouterLink to="/trends/morphology">形态变化</RouterLink>
@@ -595,7 +792,7 @@ onDeactivated(() => {
                   :id="cardDomId(item)"
                   :key="`${item.indicatorKey}-${item.unit}`"
                   class="trend-card"
-                  :class="item.attentionLevel ? ['attention', item.attentionLevel] : []"
+                  :class="item.attentionLevel ? ['attention', item.attentionLevel] : item.attentionConflict ? ['attention-conflict'] : []"
                 >
           <header class="trend-card-header">
             <span class="item-icon"><Activity :size="19" /></span>
@@ -625,7 +822,21 @@ onDeactivated(() => {
               <span>最新值</span>
               <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
+              <small v-if="showTrendChangeSummary(item)" class="trend-change-summary" :class="item.trendStatus">
+                {{ trendStatusLabel(item) }}<template v-if="item.latestIntervalDays !== null"> · {{ intervalLabel(item.latestIntervalDays) }}</template>
+              </small>
               <div class="trend-detail-popover-wrap">
+                <button
+                  v-if="collapsedNotices(item).length"
+                  class="trend-notice-toggle"
+                  type="button"
+                  :aria-expanded="noticeOpen(item)"
+                  :aria-label="`${item.name}有 ${collapsedNotices(item).length} 条提示，点击查看`"
+                  :title="`${collapsedNotices(item).length} 条提示`"
+                  @click="toggleNotice(item, $event)"
+                >
+                  <CircleAlert :size="14" />
+                </button>
                 <button
                   class="trend-detail-toggle"
                   type="button"
@@ -660,9 +871,24 @@ onDeactivated(() => {
                       <span>本次结果</span>
                       <p>
                         {{ formatNumber(item.latestValue) }}{{ item.unit || "" }}
-                        · {{ referenceSummary(latestPoint(item)) }}
-                        <template v-if="item.attentionReason"> · {{ item.attentionReason }}</template>
+                        · {{ referenceSummary(latestPoint(item), item.unit) }}
                       </p>
+                    </div>
+                    <div v-if="item.abnormalContinuityStatus !== 'none'">
+                      <span>异常连续性</span>
+                      <p>{{ abnormalContinuityLabel(item) }}<template v-if="abnormalContinuityDetail(item)"> · {{ abnormalContinuityDetail(item) }}</template></p>
+                    </div>
+                    <div v-if="item.pointCount > 1">
+                      <span>最近变化</span>
+                      <p>{{ latestChangeDetail(item) }}<template v-if="item.latestChangeReason"> · {{ item.latestChangeReason }}</template></p>
+                    </div>
+                    <div v-if="showMultiPointTrendDetail(item)">
+                      <span>多次趋势</span>
+                      <p>{{ trendStatusLabel(item) }} · {{ item.trendReason }}</p>
+                    </div>
+                    <div v-if="item.pointCount > 1">
+                      <span>跨报告比较</span>
+                      <p>{{ comparabilityLabel(item) }}<template v-if="item.comparabilityReason"> · {{ item.comparabilityReason }}</template></p>
                     </div>
                     <p class="trend-detail-part-title">系统整理信息</p>
                     <div>
@@ -687,6 +913,30 @@ onDeactivated(() => {
                     </div>
                   </section>
                 </Teleport>
+                <Teleport to="body">
+                  <div v-if="noticeOpen(item)" class="trend-detail-popover-backdrop" @click="closeNotice"></div>
+                  <section
+                    v-if="noticeOpen(item)"
+                    class="trend-normalization-popover trend-notice-popover"
+                    :class="`placement-${noticePopoverPlacement}`"
+                    :style="noticePopoverStyle"
+                    role="dialog"
+                    aria-label="指标提示"
+                    @click.stop
+                  >
+                    <header class="trend-normalization-popover-header">
+                      <strong>提示</strong>
+                      <button type="button" title="关闭" aria-label="关闭提示" @click="closeNotice">
+                        <X :size="17" />
+                      </button>
+                    </header>
+                    <div v-for="notice in collapsedNotices(item)" :key="notice.text">
+                      <p>
+                        <small class="trend-notice-item" :class="notice.cls">{{ notice.text }}</small>
+                      </p>
+                    </div>
+                  </section>
+                </Teleport>
               </div>
             </div>
             <div class="trend-chart-scroll">
@@ -699,14 +949,14 @@ onDeactivated(() => {
                   v-for="chartPoint in trendChartPoints(item)"
                   :key="chartPoint.point.observationId"
                   class="trend-chart-node"
-                  :class="{ latest: chartPoint.point === item.points[item.points.length - 1] }"
+                  :class="{ latest: chartPoint.point === item.points[item.points.length - 1], outlier: chartPoint.point.trendOutlier }"
                   type="button"
                   :style="{ left: `${chartPoint.x}%`, '--point-y': `${chartPoint.y}%` }"
                   :aria-label="trendNodeLabel(chartPoint.point, item)"
                   @click="openSourcePage(chartPoint.point, item)"
                 >
                   <span class="trend-chart-value">{{ formatNumber(chartPoint.point.numericValue) }}</span>
-                  <i :class="flagClass(chartPoint.point.abnormalFlag)"></i>
+                  <i :class="pointFlagClass(chartPoint.point)"></i>
                   <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
                 </button>
               </div>
@@ -714,16 +964,19 @@ onDeactivated(() => {
           </div>
           <div v-if="trendValueRange(item) || trendDateRange(item)" class="trend-range">
             <div class="trend-range-copy">
-              <span v-if="trendValueRange(item)">变化区间 {{ trendValueRange(item) }}</span>
+              <span v-if="trendValueRange(item)">{{ trendValueRangeLabel(item) }} {{ trendValueRange(item) }}<template v-if="item.outlierCount"> · {{ item.outlierCount }} 个差异较大点未参与区间计算</template></span>
               <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
             </div>
           </div>
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
-                <strong>{{ pointValue(point, item.unit) }}<em v-if="point.abnormalFlag" class="trend-flag" :class="flagClass(point.abnormalFlag)">{{ abnormalLabel(point.abnormalFlag) }}</em></strong>
+                <strong>{{ pointValue(point, item.unit) }}<em v-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
                 <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
-                <small v-if="point.referenceText">参考 {{ point.referenceText }}</small>
+                <small v-if="hasReferenceInfo(point)">{{ referenceSummary(point, item.unit) }}</small>
+                <small v-if="pointInterpretationLine(point)" class="trend-point-interpretation">{{ pointInterpretationLine(point) }}</small>
+                <small v-if="point.trendOutlier" class="trend-point-outlier">{{ point.trendOutlierReason }}</small>
+                <small v-if="trendPointProcessingHint(point)" class="trend-point-lifecycle">{{ trendPointProcessingHint(point) }}</small>
               </div>
               <button v-if="point.sourcePage" class="trend-source-button" type="button" title="查看指标所在页高清图" @click="openSourcePage(point, item)">原图</button>
               <button type="button" title="打开来源报告" @click="openReport(point.reportId)">
@@ -739,10 +992,19 @@ onDeactivated(() => {
       </div>
     </template>
     <ReportDetailModal :open="Boolean(previewReportId)" :report-id="previewReportId" @close="previewReportId = null" @updated="reloadTrends" />
-    <ImageViewer v-if="sourcePreview" :pages="sourceViewerPages" @close="closeSourcePage">
+    <ImageViewer
+      v-if="sourcePreview"
+      :pages="sourceViewerPages"
+      :ocr-detail="sourceOcrDetail"
+      :highlight-line-ids="sourcePreview.point.sourceLineIds"
+      :accent-line-ids="sourcePreview.point.resultLineIds"
+      auto-locate
+      @close="closeSourcePage"
+    >
       <template #actions>
         <button type="button" title="打开来源报告详情" @click="openSourceReport"><FileText :size="18" /></button>
       </template>
     </ImageViewer>
+    <BackToTop />
   </section>
 </template>

@@ -327,6 +327,1227 @@
         "甲状腺抗体"
       ],
       "explanation": "促甲状腺激素受体相关抗体检测项目，应结合本次报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "gyn_endometrium_thickness",
+      "displayName": "子宫内膜厚度",
+      "categoryKey": "gynecology_ultrasound",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "内膜厚度",
+        "子宫内膜厚度",
+        "宫内膜厚度"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "妇科",
+        "超声",
+        "检查所见",
+        "阴道超声",
+        "子宫附件"
+      ],
+      "explanation": "妇科超声中对子宫内膜厚度的测量，通常需要结合月经周期、症状和医生结论理解。"
+    },
+    {
+      "canonicalKey": "infectious_hbv_dna",
+      "displayName": "乙型肝炎病毒核酸定量",
+      "categoryKey": "infection_immunity",
+      "order": 53,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "IU/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "HBV-DNA",
+        "HBVDNA",
+        "乙肝病毒DNA",
+        "乙型肝炎病毒DNA",
+        "乙型肝炎病毒核酸定量"
+      ],
+      "allowedUnits": [
+        "IU/mL",
+        "copies/mL"
+      ],
+      "sectionHints": [
+        "乙肝",
+        "乙型肝炎",
+        "病毒核酸",
+        "感染"
+      ],
+      "explanation": "用于观察乙肝病毒复制水平变化，需要结合肝功能、乙肝标志物和医生意见理解。"
+    },
+    {
+      "canonicalKey": "infectious_hiv_agab",
+      "displayName": "人类免疫缺陷病毒抗原抗体",
+      "categoryKey": "infection_immunity",
+      "order": 59,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HIV",
+        "HIV抗原抗体",
+        "人类免疫缺陷病毒抗原抗体",
+        "人类免疫缺陷病毒抗体"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "感染",
+        "免疫缺陷",
+        "HIV"
+      ],
+      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_syphilis_antibody",
+      "displayName": "梅毒螺旋体抗体",
+      "categoryKey": "infection_immunity",
+      "order": 60,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "梅毒螺旋体抗体",
+        "TP抗体",
+        "TPPA",
+        "TP-Ab",
+        "梅毒抗体"
+      ],
+      "allowedUnits": [
+        "",
+        "S/CO",
+        "COI"
+      ],
+      "sectionHints": [
+        "感染",
+        "梅毒",
+        "螺旋体"
+      ],
+      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_rubella_igg",
+      "displayName": "风疹病毒抗体IgG",
+      "categoryKey": "infection_immunity",
+      "order": 63,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "RV-IgG",
+        "风疹病毒IgG",
+        "风疹病毒IgG抗体",
+        "风疹病毒抗体IgG",
+        "风疹病毒抗体测定IgG",
+        "风疹病毒抗体(IgG)",
+        "风疹病毒抗体测定(IgG)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "风疹",
+        "感染"
+      ],
+      "explanation": "风疹病毒 IgG 定性结果，阳性多提示既往感染或接种后已有抗体，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_rubella_igm",
+      "displayName": "风疹病毒抗体IgM",
+      "categoryKey": "infection_immunity",
+      "order": 64,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "RV-IgM",
+        "风疹病毒IgM",
+        "风疹病毒IgM抗体",
+        "风疹病毒抗体IgM",
+        "风疹病毒抗体测定IgM",
+        "风疹病毒抗体(IgM)",
+        "风疹病毒抗体测定(IgM)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "风疹",
+        "感染"
+      ],
+      "explanation": "风疹病毒 IgM 定性结果，阳性需结合临床判断近期感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_cmv_igg",
+      "displayName": "巨细胞病毒抗体IgG",
+      "categoryKey": "infection_immunity",
+      "order": 65,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "CMV-IgG",
+        "巨细胞病毒IgG",
+        "巨细胞病毒IgG抗体",
+        "巨细胞病毒抗体IgG",
+        "巨细胞病毒抗体测定IgG",
+        "抗巨细胞病毒抗体IgG",
+        "抗巨细胞病毒抗体测定IgG",
+        "巨细胞病毒抗体(IgG)",
+        "巨细胞病毒抗体测定(IgG)",
+        "抗巨细胞病毒抗体测定(IgG)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "巨细胞病毒",
+        "感染"
+      ],
+      "explanation": "巨细胞病毒 IgG 定性结果，阳性多提示既往感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_cmv_igm",
+      "displayName": "巨细胞病毒抗体IgM",
+      "categoryKey": "infection_immunity",
+      "order": 66,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "CMV-IgM",
+        "巨细胞病毒IgM",
+        "巨细胞病毒IgM抗体",
+        "巨细胞病毒抗体IgM",
+        "巨细胞病毒抗体测定IgM",
+        "抗巨细胞病毒抗体IgM",
+        "抗巨细胞病毒抗体测定IgM",
+        "巨细胞病毒抗体(IgM)",
+        "巨细胞病毒抗体测定(IgM)",
+        "抗巨细胞病毒抗体测定(IgM)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "巨细胞病毒",
+        "感染"
+      ],
+      "explanation": "巨细胞病毒 IgM 定性结果，阳性需结合临床判断近期感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_toxoplasma_igg",
+      "displayName": "弓形虫抗体IgG",
+      "categoryKey": "infection_immunity",
+      "order": 67,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "TOX-IgG",
+        "弓形虫IgG",
+        "弓形虫IgG抗体",
+        "弓形虫抗体IgG",
+        "弓形虫抗体测定IgG",
+        "弓形虫抗体(IgG)",
+        "弓形虫抗体测定(IgG)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "弓形虫",
+        "感染"
+      ],
+      "explanation": "弓形虫 IgG 定性结果，阳性多提示既往感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_toxoplasma_igm",
+      "displayName": "弓形虫抗体IgM",
+      "categoryKey": "infection_immunity",
+      "order": 68,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "TOX-IgM",
+        "弓形虫IgM",
+        "弓形虫IgM抗体",
+        "弓形虫抗体IgM",
+        "弓形虫抗体测定IgM",
+        "弓形虫抗体(IgM)",
+        "弓形虫抗体测定(IgM)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "弓形虫",
+        "感染"
+      ],
+      "explanation": "弓形虫 IgM 定性结果，阳性需结合临床判断近期感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hsv1_igg",
+      "displayName": "单纯疱疹病毒I型抗体IgG",
+      "categoryKey": "infection_immunity",
+      "order": 69,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HSV1-IgG",
+        "HSV-I-IgG",
+        "单纯疱疹病毒I型IgG",
+        "单纯疱疹病毒I型IgG抗体",
+        "单纯疱疹病毒I型抗体IgG",
+        "单纯疱疹病毒I型抗体测定IgG",
+        "单纯疱疹病毒I型抗体(IgG)",
+        "单纯疱疹病毒I型抗体测定(IgG)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "单纯疱疹",
+        "感染"
+      ],
+      "explanation": "单纯疱疹病毒 I 型 IgG 定性结果，阳性多提示既往感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hsv1_igm",
+      "displayName": "单纯疱疹病毒I型抗体IgM",
+      "categoryKey": "infection_immunity",
+      "order": 70,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HSV1-IgM",
+        "HSV-I-IgM",
+        "单纯疱疹病毒I型IgM",
+        "单纯疱疹病毒I型IgM抗体",
+        "单纯疱疹病毒I型抗体IgM",
+        "单纯疱疹病毒I型抗体测定IgM",
+        "单纯疱疹病毒I型抗体(IgM)",
+        "单纯疱疹病毒I型抗体测定(IgM)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "单纯疱疹",
+        "感染"
+      ],
+      "explanation": "单纯疱疹病毒 I 型 IgM 定性结果，阳性需结合临床判断近期感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hsv2_igg",
+      "displayName": "单纯疱疹病毒II型抗体IgG",
+      "categoryKey": "infection_immunity",
+      "order": 71,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HSV2-IgG",
+        "HSV-II-IgG",
+        "单纯疱疹病毒II型IgG",
+        "单纯疱疹病毒II型IgG抗体",
+        "单纯疱疹病毒II型抗体IgG",
+        "单纯疱疹病毒II型抗体测定IgG",
+        "单纯疱疹病毒II型抗体(IgG)",
+        "单纯疱疹病毒II型抗体测定(IgG)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "单纯疱疹",
+        "感染"
+      ],
+      "explanation": "单纯疱疹病毒 II 型 IgG 定性结果，阳性多提示既往感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "infectious_hsv2_igm",
+      "displayName": "单纯疱疹病毒II型抗体IgM",
+      "categoryKey": "infection_immunity",
+      "order": 72,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HSV2-IgM",
+        "HSV-II-IgM",
+        "单纯疱疹病毒II型IgM",
+        "单纯疱疹病毒II型IgM抗体",
+        "单纯疱疹病毒II型抗体IgM",
+        "单纯疱疹病毒II型抗体测定IgM",
+        "单纯疱疹病毒II型抗体(IgM)",
+        "单纯疱疹病毒II型抗体测定(IgM)"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "TORCH",
+        "优生",
+        "单纯疱疹",
+        "感染"
+      ],
+      "explanation": "单纯疱疹病毒 II 型 IgM 定性结果，阳性需结合临床判断近期感染，不默认进入折线趋势。"
+    },
+    {
+      "canonicalKey": "tumor_psa_total",
+      "displayName": "总前列腺特异性抗原",
+      "categoryKey": "laboratory_other",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "T-PSA",
+        "TPSA",
+        "前列腺特异性抗原",
+        "总前列腺特异性抗原",
+        "总PSA"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告中的总前列腺特异性抗原测量值。"
+    },
+    {
+      "canonicalKey": "tumor_psa_free",
+      "displayName": "游离前列腺特异性抗原",
+      "categoryKey": "laboratory_other",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "F-PSA",
+        "FPSA",
+        "游离前列腺特异性抗原",
+        "游离PSA"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告中的游离前列腺特异性抗原测量值。"
+    },
+    {
+      "canonicalKey": "tumor_psa_free_total_ratio",
+      "displayName": "游离/总前列腺特异性抗原比值",
+      "categoryKey": "laboratory_other",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "F-PSA/T-PSA",
+        "fPSA/tPSA",
+        "游离总PSA比值",
+        "游离前列腺特异性抗原比值"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "肿瘤标志物",
+        "前列腺"
+      ],
+      "explanation": "报告明确给出的游离 PSA 与总 PSA 比值，不由系统自行计算。"
+    },
+    {
+      "canonicalKey": "tcd_right_middle_cerebral_artery_mean_flow_velocity",
+      "displayName": "右侧大脑中动脉平均血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 40,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "右侧大脑中动脉Vm",
+        "右侧大脑中动脉平均流速",
+        "右侧大脑中动脉平均血流速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "右侧大脑中动脉经颅多普勒平均血流速度，用于观察该血管的脑血流动力学变化；应结合检查结论、年龄和同次搏动指数解读。"
+    },
+    {
+      "canonicalKey": "tcd_right_middle_cerebral_artery_pulsatility_index",
+      "displayName": "右侧大脑中动脉搏动指数",
+      "categoryKey": "functional_measurement",
+      "order": 41,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "右侧大脑中动脉PI",
+        "右侧大脑中动脉搏动指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "右侧大脑中动脉经颅多普勒搏动指数，反映该血管血流频谱的搏动特征；应结合平均血流速度和原报告结论解读。"
+    },
+    {
+      "canonicalKey": "tcd_left_middle_cerebral_artery_mean_flow_velocity",
+      "displayName": "左侧大脑中动脉平均血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 42,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "左侧大脑中动脉Vm",
+        "左侧大脑中动脉平均流速",
+        "左侧大脑中动脉平均血流速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "左侧大脑中动脉经颅多普勒平均血流速度，用于观察该血管的脑血流动力学变化；应结合检查结论、年龄和同次搏动指数解读。"
+    },
+    {
+      "canonicalKey": "tcd_left_middle_cerebral_artery_pulsatility_index",
+      "displayName": "左侧大脑中动脉搏动指数",
+      "categoryKey": "functional_measurement",
+      "order": 43,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "左侧大脑中动脉PI",
+        "左侧大脑中动脉搏动指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "左侧大脑中动脉经颅多普勒搏动指数，反映该血管血流频谱的搏动特征；应结合平均血流速度和原报告结论解读。"
+    },
+    {
+      "canonicalKey": "tcd_right_vertebral_artery_mean_flow_velocity",
+      "displayName": "右侧椎动脉平均血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 44,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "右侧椎动脉Vm",
+        "右侧椎动脉平均流速",
+        "右侧椎动脉平均血流速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "右侧椎动脉经颅多普勒平均血流速度，用于观察该血管的脑血流动力学变化；应结合检查结论、年龄和同次搏动指数解读。"
+    },
+    {
+      "canonicalKey": "tcd_right_vertebral_artery_pulsatility_index",
+      "displayName": "右侧椎动脉搏动指数",
+      "categoryKey": "functional_measurement",
+      "order": 45,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "右侧椎动脉PI",
+        "右侧椎动脉搏动指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "右侧椎动脉经颅多普勒搏动指数，反映该血管血流频谱的搏动特征；应结合平均血流速度和原报告结论解读。"
+    },
+    {
+      "canonicalKey": "tcd_left_vertebral_artery_mean_flow_velocity",
+      "displayName": "左侧椎动脉平均血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 46,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "左侧椎动脉Vm",
+        "左侧椎动脉平均流速",
+        "左侧椎动脉平均血流速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "左侧椎动脉经颅多普勒平均血流速度，用于观察该血管的脑血流动力学变化；应结合检查结论、年龄和同次搏动指数解读。"
+    },
+    {
+      "canonicalKey": "tcd_left_vertebral_artery_pulsatility_index",
+      "displayName": "左侧椎动脉搏动指数",
+      "categoryKey": "functional_measurement",
+      "order": 47,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "左侧椎动脉PI",
+        "左侧椎动脉搏动指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "左侧椎动脉经颅多普勒搏动指数，反映该血管血流频谱的搏动特征；应结合平均血流速度和原报告结论解读。"
+    },
+    {
+      "canonicalKey": "tcd_basilar_artery_mean_flow_velocity",
+      "displayName": "基底动脉平均血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 48,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "基底动脉Vm",
+        "基底动脉平均流速",
+        "基底动脉平均血流速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "基底动脉经颅多普勒平均血流速度，用于观察该血管的脑血流动力学变化；应结合检查结论、年龄和同次搏动指数解读。"
+    },
+    {
+      "canonicalKey": "tcd_basilar_artery_pulsatility_index",
+      "displayName": "基底动脉搏动指数",
+      "categoryKey": "functional_measurement",
+      "order": 49,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "基底动脉PI",
+        "基底动脉搏动指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "经颅多普勒",
+        "TCD",
+        "脑血流"
+      ],
+      "explanation": "基底动脉经颅多普勒搏动指数，反映该血管血流频谱的搏动特征；应结合平均血流速度和原报告结论解读。"
+    },
+    {
+      "canonicalKey": "laboratory_testosterone",
+      "displayName": "睾酮",
+      "categoryKey": "laboratory_other",
+      "order": 15,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "睾酮",
+        "睾酮测定",
+        "血清睾酮",
+        "TESTO"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "ng/dL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "睾酮",
+        "性激素",
+        "内分泌"
+      ],
+      "explanation": "血清睾酮测量值，参考范围受性别、生理状态和检测方法影响，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "laboratory_prolactin",
+      "displayName": "泌乳素",
+      "categoryKey": "laboratory_other",
+      "order": 16,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "泌乳素",
+        "泌乳素测定",
+        "血清泌乳素",
+        "血清泌乳素测定",
+        "PRL"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "泌乳素",
+        "性激素",
+        "内分泌"
+      ],
+      "explanation": "血清泌乳素测量值，参考范围受性别、生理状态和检测条件影响，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "laboratory_pepsinogen_i",
+      "displayName": "胃蛋白酶原 I",
+      "categoryKey": "laboratory_other",
+      "order": 17,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "胃蛋白酶原I",
+        "PGI"
+      ],
+      "allowedUnits": [
+        "μg/L",
+        "ng/mL"
+      ],
+      "sectionHints": [
+        "胃蛋白酶原",
+        "胃功能"
+      ],
+      "explanation": "血清胃蛋白酶原 I 测量值，需结合原报告参考范围及相关胃功能项目观察。"
+    },
+    {
+      "canonicalKey": "laboratory_pepsinogen_ii",
+      "displayName": "胃蛋白酶原 II",
+      "categoryKey": "laboratory_other",
+      "order": 18,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "胃蛋白酶原II",
+        "PGII"
+      ],
+      "allowedUnits": [
+        "μg/L",
+        "ng/mL"
+      ],
+      "sectionHints": [
+        "胃蛋白酶原",
+        "胃功能"
+      ],
+      "explanation": "血清胃蛋白酶原 II 测量值，需结合原报告参考范围及相关胃功能项目观察。"
+    },
+    {
+      "canonicalKey": "laboratory_pepsinogen_ratio",
+      "displayName": "胃蛋白酶原 I/II 比值",
+      "categoryKey": "laboratory_other",
+      "order": 19,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "胃蛋白酶原比值",
+        "胃蛋白酶原I/II比值",
+        "胃蛋白酶原 I/II 比值",
+        "PGI/PGII"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "胃蛋白酶原",
+        "胃功能"
+      ],
+      "explanation": "仅记录原报告明确给出的胃蛋白酶原 I/II 比值，不由系统根据其他结果自行计算。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_viscosity_high_shear",
+      "displayName": "全血高切黏度",
+      "categoryKey": "laboratory_other",
+      "order": 40,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血高切黏度",
+        "全血高切粘度",
+        "全血黏度（高切）",
+        "全血粘度（高切）"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中高剪切条件下的全血黏度；剪切条件是指标本体，不能与中切、低切或无量纲相对指数合并。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_viscosity_middle_shear_50",
+      "displayName": "全血中切黏度（50）",
+      "categoryKey": "laboratory_other",
+      "order": 41,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血中切黏度50",
+        "全血中切粘度50",
+        "全血黏度（50中切）",
+        "全血粘度（50中切）",
+        "全血黏度（中切50）",
+        "全血粘度（中切50）"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中报告明确标注为 50 中切条件的全血黏度；保留剪切条件，不与高切或其他低切档位合并。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_viscosity_low_shear_5",
+      "displayName": "全血低切黏度（5）",
+      "categoryKey": "laboratory_other",
+      "order": 42,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血低切黏度5",
+        "全血低切粘度5",
+        "全血黏度（5低切）",
+        "全血粘度（5低切）",
+        "全血黏度（低切5）",
+        "全血粘度（低切5）"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中报告明确标注为 5 低切条件的全血黏度；该档位与未注明档位的低切结果分别形成趋势。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_viscosity_low_shear",
+      "displayName": "全血低切黏度",
+      "categoryKey": "laboratory_other",
+      "order": 43,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血低切黏度",
+        "全血低切粘度",
+        "全血黏度（低切）",
+        "全血粘度（低切）"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中未附带更具体剪切档位编号的全血低切黏度；不与明确标注 5 低切的结果自动合并。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_high_shear_reduced_viscosity",
+      "displayName": "全血高切还原黏度",
+      "categoryKey": "laboratory_other",
+      "order": 44,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血高切还原黏度",
+        "全血高切还原粘度"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "按高切条件报告的全血还原黏度，是有量纲测量值；不能与红细胞刚性指数或无量纲相对指数合并。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_low_shear_reduced_viscosity",
+      "displayName": "全血低切还原黏度",
+      "categoryKey": "laboratory_other",
+      "order": 45,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血低切还原黏度",
+        "全血低切还原粘度"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "按低切条件报告的全血还原黏度，是有量纲测量值；不能与高切还原黏度或无量纲相对指数合并。"
+    },
+    {
+      "canonicalKey": "hemorheology_plasma_viscosity",
+      "displayName": "血浆黏度",
+      "categoryKey": "laboratory_other",
+      "order": 46,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "血浆黏度",
+        "血浆粘度"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血浆样本的黏度测量值，与全血黏度的标本和生理含义不同，必须形成独立趋势。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_high_shear_relative_index",
+      "displayName": "全血高切相对指数",
+      "categoryKey": "laboratory_other",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "全血高切相对指数",
+        "全血高切相对黏度",
+        "全血高切相对粘度"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中的无量纲相对指数，结果受检测方法和仪器影响，应结合原报告参考范围，并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_low_shear_relative_index",
+      "displayName": "全血低切相对指数",
+      "categoryKey": "laboratory_other",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "全血低切相对指数",
+        "全血低切相对黏度",
+        "全血低切相对粘度"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中的无量纲相对指数，结果受检测方法和仪器影响，应结合原报告参考范围，并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_esr_equation_k_value",
+      "displayName": "血沉方程 K 值",
+      "categoryKey": "laboratory_other",
+      "order": 32,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "血沉方程K值",
+        "血沉方程K",
+        "红细胞沉降率方程K值",
+        "红细胞沉降率方程K"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变",
+        "血沉"
+      ],
+      "explanation": "由血沉相关参数形成的无量纲方程指标，算法和参考范围可能随检测系统变化，应以原报告及同方法结果为准。"
+    },
+    {
+      "canonicalKey": "hemorheology_erythrocyte_aggregation_index",
+      "displayName": "红细胞聚集指数",
+      "categoryKey": "laboratory_other",
+      "order": 33,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "红细胞聚集指数",
+        "红细胞聚集性指数",
+        "RBC聚集指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "反映红细胞聚集特征的无量纲血液流变指标，受检测方法影响，应结合原报告参考范围并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_erythrocyte_deformability_index_tk",
+      "displayName": "红细胞变形指数（TK）",
+      "categoryKey": "laboratory_other",
+      "order": 34,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "红细胞变形指数TK",
+        "TK红细胞变形指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "采用 TK 表达的红细胞变形性无量纲指标，受检测方法和仪器影响，应结合原报告参考范围并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_erythrocyte_rigidity_index",
+      "displayName": "红细胞刚性指数",
+      "categoryKey": "laboratory_other",
+      "order": 35,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "红细胞刚性指数",
+        "红细胞硬化指数",
+        "RBC刚性指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "反映红细胞刚性特征的无量纲血液流变指标，受检测方法影响，应结合原报告参考范围并优先比较同方法结果。"
     }
   ],
   "extensions": [],

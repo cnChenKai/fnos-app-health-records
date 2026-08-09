@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "description": "匿名合成报告的 OCR+AI、AI-only 与完整重跑一致性金标，不包含真实报告原文或真实健康数据。",
+  "cycles": {
+    "manualAi": 2,
+    "ocrAndAi": 2
+  },
+  "expected": {
+    "reportType": "laboratory",
+    "title": "匿名金标检验报告",
+    "observationCount": 2,
+    "trendPointCount": 2,
+    "ocrResultCount": 1,
+    "reviewItemCount": 0,
+    "forbiddenItemNameFragments": ["设备序列号", "打印时间", "页码", "审核者"]
+  }
+}

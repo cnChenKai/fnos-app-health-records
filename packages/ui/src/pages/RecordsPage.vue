@@ -2,6 +2,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { CalendarDays, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Search } from "@lucide/vue";
+import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import PullIndicator from "../components/PullIndicator.vue";
@@ -418,5 +419,6 @@ useRefreshOnActivate(() => { void reloadList(); });
         </section>
       </div>
     </Teleport>
+    <BackToTop />
   </div>
 </template>

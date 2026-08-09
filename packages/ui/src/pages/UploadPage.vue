@@ -7,6 +7,10 @@ import {
 import { useAppContext } from "../composables/useAppContext";
 import { request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
+import type { ProcessingJob } from "../types/api";
+import {
+  calculateProcessingJobProgress, groupProcessingJobBatches, isProcessingJobBatchSettled
+} from "../utils/processing-job-batches";
 
 type QueueItem = {
   id: string;
@@ -23,14 +27,6 @@ type UploadResult = {
   jobCount: number;
 };
 
-type ProcessingJob = {
-  id: string;
-  jobType: "pdf_extract" | "thumbnail" | "ocr" | "ai_extract";
-  status: "queued" | "processing" | "completed" | "failed" | "cancelled";
-  attempts: number;
-  errorMessage: string | null;
-  ocrTextLength?: number | null;
-};
 
 const app = useAppContext();
 const items = ref<QueueItem[]>([]);
@@ -42,17 +38,19 @@ const jobs = ref<ProcessingJob[]>([]);
 const runtimeAvailable = ref(true);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const totalBytes = computed(() => items.value.reduce((total, item) => total + item.file.size, 0));
-const completedJobs = computed(() => jobs.value.filter((job) => job.status === "completed").length);
-const failedJobs = computed(() => jobs.value.filter((job) => job.status === "failed"));
-const cancelledJobs = computed(() => jobs.value.filter((job) => job.status === "cancelled").length);
+const batchGroups = computed(() => groupProcessingJobBatches(jobs.value));
+const currentJobs = computed(() => batchGroups.value.currentJobs);
+const completedJobs = computed(() => currentJobs.value.filter((job) => job.status === "completed").length);
+const failedJobs = computed(() => currentJobs.value.filter((job) => job.status === "failed"));
+const cancelledJobs = computed(() => currentJobs.value.filter((job) => job.status === "cancelled").length);
 const finishedJobs = computed(() => completedJobs.value + failedJobs.value.length + cancelledJobs.value);
-const progressPercent = computed(() => jobs.value.length ? Math.round(finishedJobs.value / jobs.value.length * 100) : 0);
-const jobsSettled = computed(() => jobs.value.length > 0 && jobs.value.every((job) => ["completed", "failed", "cancelled"].includes(job.status)));
-const uploadFinishedSuccessfully = computed(() => jobs.value.length > 0 && jobs.value.every((job) => job.status === "completed"));
+const progressPercent = computed(() => calculateProcessingJobProgress(currentJobs.value));
+const jobsSettled = computed(() => isProcessingJobBatchSettled(currentJobs.value));
+const uploadFinishedSuccessfully = computed(() => currentJobs.value.length > 0 && currentJobs.value.every((job) => job.status === "completed"));
 /* 全部任务结束且 OCR 全为空：原件大概率不是有效报告，需要明确告知用户而不是只发一条通知 */
 const ocrEmptyWarning = computed(() => {
   if (!jobsSettled.value || failedJobs.value.length) return false;
-  const ocrJobs = jobs.value.filter((job) => job.jobType === "ocr" && job.status === "completed");
+  const ocrJobs = currentJobs.value.filter((job) => job.jobType === "ocr" && job.status === "completed");
   return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
 });
 const accept = ".heic,.heif,.jpg,.jpeg,.png,.webp,.pdf,image/heic,image/heif,image/jpeg,image/png,image/webp,application/pdf";
@@ -124,7 +122,13 @@ function addFiles(files: File[]) {
 
 function pick(event: Event) {
   const input = event.target as HTMLInputElement;
-  addFiles(Array.from(input.files || []));
+  const files = Array.from(input.files || []);
+  if (!files.length) {
+    /* 部分 WebView（如卓易通/纯血鸿蒙容器）授权后仍可能无法直接唤起相机，返回空文件列表 */
+    error.value = "未获取到照片。请检查相机权限，或尝试使用“选择文件”从相册上传。";
+    return;
+  }
+  addFiles(files);
   input.value = "";
 }
 
@@ -182,12 +186,13 @@ async function refreshJobs(includeRuntime = false) {
     if (result.value?.reportId !== reportId) return;
     jobs.value = nextJobs;
     if (ocr) runtimeAvailable.value = ocr.available;
-    if (nextJobs.some((job) => job.status === "cancelled")) {
+    const nextCurrentJobs = groupProcessingJobBatches(nextJobs).currentJobs;
+    if (nextCurrentJobs.some((job) => job.status === "cancelled")) {
       app.notifyDataChanged();
       clearFinishedUpload();
       return;
     }
-    if (nextJobs.length && nextJobs.every((job) => ["completed", "failed", "cancelled"].includes(job.status))) {
+    if (isProcessingJobBatchSettled(nextCurrentJobs)) {
       stopPolling();
       app.notifyDataChanged();
     }
@@ -288,7 +293,7 @@ onActivated(() => {
         </label>
         <label class="camera-button upload-picker">
           <Camera :size="18" /><span>拍照</span>
-          <input type="file" accept="image/*" capture="environment" multiple aria-label="拍摄报告照片" @change="pick" />
+          <input type="file" accept="image/*" capture="environment" aria-label="拍摄报告照片" @change="pick" />
         </label>
       </div>
     </div>
@@ -304,10 +309,10 @@ onActivated(() => {
       <div class="job-progress-summary">
         <div>
           <strong>后台处理</strong>
-          <span v-if="jobs.length">已完成 {{ finishedJobs }} / {{ jobs.length }}</span>
+          <span v-if="currentJobs.length">已完成 {{ finishedJobs }} / {{ currentJobs.length }}</span>
           <span v-else>正在读取任务状态</span>
         </div>
-        <span v-if="jobs.length">{{ progressPercent }}%</span>
+        <span v-if="currentJobs.length">{{ progressPercent }}%</span>
       </div>
       <div class="job-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
         <span :style="{ width: `${progressPercent}%` }"></span>

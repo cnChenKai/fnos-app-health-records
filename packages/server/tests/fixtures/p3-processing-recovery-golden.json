@@ -1,0 +1,10 @@
+{
+  "pollFailureLimit": 3,
+  "queuedDelayMs": 900000,
+  "processingDelayMs": 2700000,
+  "recoveryTitle": "处理进度暂时无法读取",
+  "recoveryAction": "重新连接",
+  "queuedTitle": "任务排队时间较长",
+  "processingTitle": "任务处理时间较长",
+  "delayMessage": "系统仍会继续读取进度，不会自动重复提交任务。可先刷新进度并查看日志；只有任务明确失败后再使用重试。"
+}

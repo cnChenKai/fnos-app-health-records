@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "匿名合成多页报告的异常中断、租约恢复与最终原子切换金标，不包含真实报告内容或真实健康数据。",
+  "expected": {
+    "pages": 9,
+    "minimumAiUnits": 2,
+    "observationCount": 9,
+    "trendPointCount": 9,
+    "duplicateGroups": 0,
+    "reviewItemCountAfterRecovery": 0
+  }
+}

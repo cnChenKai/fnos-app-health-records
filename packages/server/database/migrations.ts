@@ -389,8 +389,8 @@ export const databaseMigrations: DatabaseMigration[] = [
   },
   {
     version: 16,
-    name: "finalize_indicator_dictionary_morphology_and_ai_units",
-    checksum: "manual:016-finalize-indicator-dictionary-morphology-ai-units",
+    name: "finalize_indicator_dictionary_morphology_ai_units_and_data_governance",
+    checksum: "manual:016-finalize-indicator-dictionary-morphology-ai-units-data-governance",
     up: (db) => {
       ensureIndicatorDictionaryColumns(db);
       db.exec(indicatorDictionarySchemaSql);
@@ -399,14 +399,10 @@ export const databaseMigrations: DatabaseMigration[] = [
       db.exec(reportStructuredSectionSchemaSql);
       ensureClinicalFactColumns(db);
       db.exec(aiExtractionUnitSchemaSql);
-    }
-  },
-  {
-    version: 17,
-    name: "add_ai_extraction_candidate_tracking",
-    checksum: "manual:017-add-ai-extraction-candidate-tracking",
-    up: (db) => {
       db.exec(aiExtractionCandidateSchemaSql);
+      ensureIndicatorGovernanceSchema(db);
+      ensureReportDuplicateGovernanceSchema(db);
+      ensureOcrCoordSpaceColumns(db);
     }
   }
 ];
@@ -418,7 +414,69 @@ export function tableColumnNames(db: DatabaseSync, tableName: string) {
   return new Set(columns.map((column) => column.name));
 }
 
-function ensureIndicatorDictionaryColumns(db: DatabaseSync) {
+// OCR 行坐标系参考尺寸（页面点坐标/校正后图片像素），供叠加层按统一坐标系定位。
+// 版本冻结期不新增 schema 版本，随每次启动幂等补齐。
+export function ensureOcrCoordSpaceColumns(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "ocr_results");
+  if (!columns.has("coord_width")) db.exec("ALTER TABLE ocr_results ADD COLUMN coord_width REAL");
+  if (!columns.has("coord_height")) db.exec("ALTER TABLE ocr_results ADD COLUMN coord_height REAL");
+}
+
+export function ensureIndicatorGovernanceSchema(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "observation_normalizations");
+  if (!columns.has("source_origin")) {
+    db.exec("ALTER TABLE observation_normalizations ADD COLUMN source_origin TEXT NOT NULL DEFAULT 'none'");
+  }
+  if (!columns.has("source_name")) db.exec("ALTER TABLE observation_normalizations ADD COLUMN source_name TEXT");
+  if (!columns.has("alias_source")) db.exec("ALTER TABLE observation_normalizations ADD COLUMN alias_source TEXT");
+  if (!columns.has("review_status")) {
+    db.exec("ALTER TABLE observation_normalizations ADD COLUMN review_status TEXT NOT NULL DEFAULT 'unreviewed'");
+  }
+  if (!columns.has("reviewed_by")) db.exec("ALTER TABLE observation_normalizations ADD COLUMN reviewed_by TEXT");
+  if (!columns.has("reviewed_at")) db.exec("ALTER TABLE observation_normalizations ADD COLUMN reviewed_at TEXT");
+  db.exec(`
+    UPDATE observation_normalizations
+    SET source_origin = CASE
+      WHEN matched_by = 'normalized_name_fallback' THEN 'ai_normalized_name'
+      WHEN matched_by = 'manual_confirmation' THEN 'manual_confirmation'
+      WHEN matched_by = 'manual_exclusion' THEN 'manual_exclusion'
+      WHEN matched_by = 'none' THEN 'none'
+      ELSE 'legacy'
+    END,
+    alias_source = CASE
+      WHEN matched_by = 'ai_suggestion' THEN 'ai_suggestion'
+      WHEN matched_by IN ('builtin_alias', 'global_alias', 'hospital_alias', 'department_alias', 'report_type_alias') THEN 'builtin'
+      ELSE alias_source
+    END
+  `);
+  db.exec(indicatorGovernanceSchemaSql);
+  const decisionColumns = tableColumnNames(db, "indicator_governance_decisions");
+  if (!decisionColumns.has("alias_id")) {
+    db.exec("ALTER TABLE indicator_governance_decisions ADD COLUMN alias_id TEXT");
+  }
+  db.exec(indicatorGovernanceHistorySchemaSql);
+}
+
+
+export function ensureReportDuplicateGovernanceSchema(db: DatabaseSync) {
+  db.exec(reportDuplicateGovernanceSchemaSql);
+  const decisionColumns = tableColumnNames(db, "report_duplicate_decisions");
+  if (!decisionColumns.has("rule_version")) {
+    db.exec("ALTER TABLE report_duplicate_decisions ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'legacy'");
+  }
+  if (!decisionColumns.has("rule_snapshot_json")) {
+    db.exec("ALTER TABLE report_duplicate_decisions ADD COLUMN rule_snapshot_json TEXT NOT NULL DEFAULT '{}'");
+  }
+  const historyColumns = tableColumnNames(db, "report_duplicate_history");
+  if (!historyColumns.has("rule_version")) {
+    db.exec("ALTER TABLE report_duplicate_history ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'legacy'");
+  }
+  if (!historyColumns.has("rule_snapshot_json")) {
+    db.exec("ALTER TABLE report_duplicate_history ADD COLUMN rule_snapshot_json TEXT NOT NULL DEFAULT '{}'");
+  }
+}
+
+export function ensureIndicatorDictionaryColumns(db: DatabaseSync) {
   const catalogColumns = tableColumnNames(db, "indicator_catalog");
   for (const [name, definition] of [
     ["category_key", "TEXT"],
@@ -427,6 +485,8 @@ function ensureIndicatorDictionaryColumns(db: DatabaseSync) {
     ["unit_dimension", "TEXT"],
     ["allowed_units_json", "TEXT NOT NULL DEFAULT '[]'"],
     ["section_hints_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["trend_source_preference_json", "TEXT NOT NULL DEFAULT '{}'"],
+    ["reference_range_json", "TEXT NOT NULL DEFAULT '{}'"],
     ["dictionary_layer", "TEXT"],
     ["dictionary_revision", "INTEGER"],
     ["dictionary_snapshot_id", "TEXT"]
@@ -440,6 +500,18 @@ function ensureIndicatorDictionaryColumns(db: DatabaseSync) {
     ["dictionary_snapshot_id", "TEXT"]
   ] as const) {
     if (!aliasColumns.has(name)) db.exec(`ALTER TABLE indicator_aliases ADD COLUMN ${name} ${definition}`);
+  }
+}
+
+export function ensureObservationDisplayFlagColumns(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "observations");
+  if (!columns.has("display_abnormal_flag")) {
+    db.exec(`ALTER TABLE observations ADD COLUMN display_abnormal_flag TEXT CHECK (
+      display_abnormal_flag IS NULL OR display_abnormal_flag IN ('high', 'low', 'abnormal', 'normal')
+    )`);
+  }
+  if (!columns.has("abnormal_conflict")) {
+    db.exec("ALTER TABLE observations ADD COLUMN abnormal_conflict INTEGER NOT NULL DEFAULT 0");
   }
 }
 
@@ -593,6 +665,120 @@ export function repairIncompatibleAiReportSections(db: DatabaseSync) {
   }
   return repaired;
 }
+
+export const reportDuplicateGovernanceSchemaSql = `
+CREATE TABLE IF NOT EXISTS report_duplicate_decisions (
+  pair_key TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  left_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  right_report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+  decision TEXT NOT NULL CHECK (decision IN ('duplicate', 'distinct')),
+  reason TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  rule_version TEXT NOT NULL DEFAULT 'legacy',
+  rule_snapshot_json TEXT NOT NULL DEFAULT '{}',
+  decided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK (left_report_id < right_report_id),
+  UNIQUE(member_id, left_report_id, right_report_id)
+);
+
+CREATE INDEX IF NOT EXISTS report_duplicate_decisions_member_idx
+  ON report_duplicate_decisions(member_id, updated_at DESC, pair_key);
+CREATE INDEX IF NOT EXISTS report_duplicate_decisions_reports_idx
+  ON report_duplicate_decisions(left_report_id, right_report_id, decision);
+
+CREATE TABLE IF NOT EXISTS report_duplicate_history (
+  id TEXT PRIMARY KEY,
+  pair_key TEXT NOT NULL,
+  member_id TEXT NOT NULL,
+  left_report_id TEXT NOT NULL,
+  right_report_id TEXT NOT NULL,
+  event_type TEXT NOT NULL CHECK (event_type IN ('apply', 'undo')),
+  decision TEXT CHECK (decision IS NULL OR decision IN ('duplicate', 'distinct')),
+  reason TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  rule_version TEXT NOT NULL DEFAULT 'legacy',
+  rule_snapshot_json TEXT NOT NULL DEFAULT '{}',
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS report_duplicate_history_member_idx
+  ON report_duplicate_history(member_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS report_duplicate_history_pair_idx
+  ON report_duplicate_history(pair_key, created_at DESC, id DESC);
+
+-- 家庭场景报告量级下两两比较为实时计算，pair cache 已在未发版阶段移除。
+DROP TABLE IF EXISTS report_duplicate_pair_cache;
+
+CREATE TABLE IF NOT EXISTS report_duplicate_operations (
+  id TEXT PRIMARY KEY,
+  operation TEXT NOT NULL CHECK (operation IN ('scan', 'recompute', 'rollback_drill')),
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  rule_version TEXT,
+  status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+  purpose TEXT NOT NULL DEFAULT 'manual',
+  requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  stats_json TEXT NOT NULL DEFAULT '{}',
+  error_message TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS report_duplicate_operations_member_idx
+  ON report_duplicate_operations(member_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS report_duplicate_operations_rule_idx
+  ON report_duplicate_operations(rule_version, operation, status, created_at DESC);
+`;
+
+export const indicatorGovernanceSchemaSql = `
+CREATE TABLE IF NOT EXISTS indicator_governance_decisions (
+  fingerprint TEXT PRIMARY KEY REFERENCES indicator_unmatched_names(fingerprint) ON DELETE CASCADE,
+  action TEXT NOT NULL CHECK (action IN ('confirm', 'exclude')),
+  indicator_id TEXT REFERENCES indicator_catalog(id) ON DELETE SET NULL,
+  canonical_key TEXT,
+  save_alias INTEGER NOT NULL DEFAULT 0 CHECK (save_alias IN (0, 1)),
+  alias_scope TEXT CHECK (alias_scope IS NULL OR alias_scope IN ('global', 'report_type')),
+  alias_id TEXT REFERENCES indicator_aliases(id) ON DELETE SET NULL,
+  reason TEXT,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS indicator_governance_decisions_key_idx
+  ON indicator_governance_decisions(canonical_key, action);
+`;
+
+
+export const indicatorGovernanceHistorySchemaSql = `
+CREATE TABLE IF NOT EXISTS indicator_governance_history (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL CHECK (event_type IN ('apply', 'undo', 'alias_enable', 'alias_disable')),
+  fingerprint TEXT,
+  decision_action TEXT CHECK (decision_action IS NULL OR decision_action IN ('confirm', 'exclude')),
+  indicator_id TEXT REFERENCES indicator_catalog(id) ON DELETE SET NULL,
+  canonical_key TEXT,
+  alias_id TEXT REFERENCES indicator_aliases(id) ON DELETE SET NULL,
+  alias_name TEXT,
+  alias_scope TEXT CHECK (alias_scope IS NULL OR alias_scope IN ('global', 'hospital', 'department', 'report_type')),
+  report_type TEXT,
+  reason TEXT,
+  affected_observations INTEGER NOT NULL DEFAULT 0 CHECK (affected_observations >= 0),
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS indicator_governance_history_created_idx
+  ON indicator_governance_history(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS indicator_governance_history_fingerprint_idx
+  ON indicator_governance_history(fingerprint, created_at DESC);
+CREATE INDEX IF NOT EXISTS indicator_governance_history_alias_idx
+  ON indicator_governance_history(alias_id, created_at DESC);
+`;
 
 export const indicatorDictionarySchemaSql = `
 CREATE TABLE IF NOT EXISTS indicator_dictionary_snapshots (

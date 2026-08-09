@@ -1,0 +1,256 @@
+{
+  "source": {
+    "description": "脱敏真实第4页异常汇总与第18页超声描述/提示的确定性结构化结果；用于纯函数标准化合并回归",
+    "findings": [
+      {
+        "sectionName": "异常结果汇总及建议",
+        "organ": "肝脏",
+        "region": null,
+        "laterality": "unspecified",
+        "findingType": "脂肪肝",
+        "findingName": "脂肪肝（轻度）",
+        "presence": "present",
+        "findingCount": 1,
+        "size": {
+          "length": null,
+          "width": null,
+          "height": null,
+          "unit": null
+        },
+        "measurements": [],
+        "morphology": null,
+        "attributes": {
+          "程度": "轻度"
+        },
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "脂肪肝（轻度）；建议消化内科随诊。",
+        "evidence": [
+          {
+            "pageNumber": 4,
+            "quote": "脂肪肝（轻度）；建议消化内科随诊。"
+          }
+        ],
+        "confidence": 0.96
+      },
+      {
+        "sectionName": "异常结果汇总及建议",
+        "organ": "肝脏",
+        "region": "右叶",
+        "laterality": "right",
+        "findingType": "钙化灶",
+        "findingName": "肝右叶局灶性钙化灶",
+        "presence": "present",
+        "findingCount": 1,
+        "size": {
+          "length": null,
+          "width": null,
+          "height": null,
+          "unit": null
+        },
+        "measurements": [],
+        "morphology": null,
+        "attributes": {},
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "肝右叶局灶性钙化灶；建议肝胆外科随诊。",
+        "evidence": [
+          {
+            "pageNumber": 4,
+            "quote": "肝右叶局灶性钙化灶；建议肝胆外科随诊。"
+          }
+        ],
+        "confidence": 0.96
+      },
+      {
+        "sectionName": "超声描述",
+        "organ": "肝脏",
+        "region": "肝实质",
+        "laterality": "unspecified",
+        "findingType": "回声改变",
+        "findingName": "肝实质回声稍增强",
+        "presence": "present",
+        "findingCount": null,
+        "size": {
+          "length": null,
+          "width": null,
+          "height": null,
+          "unit": null
+        },
+        "measurements": [],
+        "morphology": "实质回声细腻，稍增强，血管纹理清晰",
+        "attributes": {
+          "回声": "稍增强"
+        },
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。",
+        "evidence": [
+          {
+            "pageNumber": 18,
+            "quote": "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。"
+          }
+        ],
+        "confidence": 0.82
+      },
+      {
+        "sectionName": "超声描述",
+        "organ": "肝脏",
+        "region": "肝右叶",
+        "laterality": "right",
+        "findingType": "强回声区",
+        "findingName": "肝右叶强回声区",
+        "presence": "present",
+        "findingCount": 1,
+        "size": {
+          "length": 5,
+          "width": null,
+          "height": null,
+          "unit": "mm"
+        },
+        "measurements": [
+          {
+            "key": "直径",
+            "value": 5,
+            "unit": "mm"
+          }
+        ],
+        "morphology": "强回声区，后方无声影，未见胆管扩张",
+        "attributes": {
+          "后方声影": "无"
+        },
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。",
+        "evidence": [
+          {
+            "pageNumber": 18,
+            "quote": "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。"
+          }
+        ],
+        "confidence": 0.9
+      },
+      {
+        "sectionName": "超声提示",
+        "organ": "肝脏",
+        "region": null,
+        "laterality": "unspecified",
+        "findingType": "脂肪肝",
+        "findingName": "脂肪肝（轻度）",
+        "presence": "present",
+        "findingCount": 1,
+        "size": {
+          "length": null,
+          "width": null,
+          "height": null,
+          "unit": null
+        },
+        "measurements": [],
+        "morphology": null,
+        "attributes": {
+          "程度": "轻度"
+        },
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "脂肪肝（轻度）",
+        "evidence": [
+          {
+            "pageNumber": 18,
+            "quote": "脂肪肝（轻度）"
+          }
+        ],
+        "confidence": 0.98
+      },
+      {
+        "sectionName": "超声提示",
+        "organ": "肝脏",
+        "region": "右叶",
+        "laterality": "right",
+        "findingType": "钙化灶",
+        "findingName": "肝右叶局灶性钙化灶",
+        "presence": "present",
+        "findingCount": 1,
+        "size": {
+          "length": null,
+          "width": null,
+          "height": null,
+          "unit": null
+        },
+        "measurements": [],
+        "morphology": null,
+        "attributes": {},
+        "classification": null,
+        "comparisonText": null,
+        "rawText": "肝右叶局灶性钙化灶",
+        "evidence": [
+          {
+            "pageNumber": 18,
+            "quote": "肝右叶局灶性钙化灶"
+          }
+        ],
+        "confidence": 0.98
+      }
+    ]
+  },
+  "expected": {
+    "findingCount": 2,
+    "findings": [
+      {
+        "findingType": "脂肪肝",
+        "findingName": "脂肪肝（轻度）",
+        "organ": "肝脏",
+        "laterality": "unspecified",
+        "attributeEntries": {
+          "程度": "轻度",
+          "回声": "稍增强"
+        },
+        "evidencePages": [
+          4,
+          18
+        ],
+        "evidenceQuotes": [
+          "脂肪肝（轻度）；建议消化内科随诊。",
+          "脂肪肝（轻度）",
+          "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。"
+        ]
+      },
+      {
+        "findingType": "钙化灶",
+        "findingName": "肝右叶局灶性钙化灶",
+        "organ": "肝脏",
+        "region": "右叶",
+        "laterality": "right",
+        "size": {
+          "length": 5,
+          "unit": "mm"
+        },
+        "measurement": {
+          "key": "直径",
+          "value": 5,
+          "unit": "mm"
+        },
+        "morphologyIncludes": [
+          "强回声区",
+          "后方无声影",
+          "未见胆管扩张"
+        ],
+        "attributeEntries": {
+          "后方声影": "无"
+        },
+        "evidencePages": [
+          4,
+          18
+        ],
+        "evidenceQuotes": [
+          "肝右叶局灶性钙化灶；建议肝胆外科随诊。",
+          "肝右叶局灶性钙化灶",
+          "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。"
+        ]
+      }
+    ],
+    "prohibitedFindingNames": [
+      "肝实质回声稍增强",
+      "肝右叶强回声区"
+    ]
+  }
+}

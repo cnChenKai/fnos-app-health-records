@@ -1,0 +1,38 @@
+{
+  "policy": "report-round-robin-v1",
+  "initialQueue": {
+    "largePages": 6,
+    "peerPages": 3,
+    "expectedOrder": [
+      "large:1",
+      "peer:1",
+      "large:2",
+      "peer:2",
+      "large:3",
+      "peer:3",
+      "large:4",
+      "large:5",
+      "large:6"
+    ]
+  },
+  "lateArrival": {
+    "largePages": 5,
+    "largePagesProcessedBeforeArrival": 2,
+    "expectedOrderAfterArrival": ["single:1", "large:3"]
+  },
+  "timeoutRecovery": {
+    "firstReportPages": 3,
+    "secondReportPages": 2,
+    "expectedAttemptOrder": [
+      "first:1#1:timeout",
+      "second:1#1:ok",
+      "first:1#2:ok",
+      "second:2#1:ok",
+      "first:2#1:ok",
+      "first:3#1:ok"
+    ],
+    "timeoutCode": "WORKER_TIMEOUT",
+    "retriedPageAttempts": 2,
+    "retriedPageResultCount": 1
+  }
+}

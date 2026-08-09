@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 7,
+  "revision": 16,
   "indicators": [
     {
       "canonicalKey": "cbc_wbc",
@@ -531,7 +531,8 @@
       "aliases": [
         "TBIL",
         "T-BIL",
-        "总胆红素"
+        "总胆红素",
+        "血清总胆红素"
       ],
       "allowedUnits": [
         "μmol/L",
@@ -1003,6 +1004,11 @@
         "体检",
         "人体成分"
       ],
+      "trendSourcePreference": {
+        "preferredSections": ["一般检查", "基础测量", "体格检查"],
+        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "discouragedPenalty": 30
+      },
       "explanation": "记录报告中明确测量的体重，用于观察不同日期的体重变化。"
     },
     {
@@ -1036,6 +1042,11 @@
         "体检",
         "生长发育"
       ],
+      "trendSourcePreference": {
+        "preferredSections": ["一般检查", "基础测量", "体格检查"],
+        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "discouragedPenalty": 30
+      },
       "explanation": "记录报告中明确测量的身高；儿童和青少年可用于观察生长变化。"
     },
     {
@@ -1099,66 +1110,209 @@
         "一般检查",
         "基础测量",
         "体格检查",
-        "体检"
+        "体检",
+        "人体成分"
       ],
+      "trendSourcePreference": {
+        "preferredSections": ["一般检查", "基础测量", "体格检查"],
+        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "discouragedPenalty": 30
+      },
+      "referenceRange": {
+        "low": 18.5,
+        "high": 23.9,
+        "note": "中国成人标准（WS/T 428-2013）：18.5~23.9 正常；24.0~27.9 超重；≥28 肥胖"
+      },
       "explanation": "由身高和体重计算得到，用于观察体重状态变化。"
     },
     {
-      "canonicalKey": "gyn_endometrium_thickness",
-      "displayName": "子宫内膜厚度",
-      "categoryKey": "gynecology_ultrasound",
-      "order": 37,
+      "canonicalKey": "body_fat_mass",
+      "displayName": "体脂肪量",
+      "categoryKey": "general_measurement",
+      "order": 42,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
-      "defaultUnit": "mm",
-      "unitDimension": "length",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
       "aliases": [
-        "内膜厚度",
-        "子宫内膜厚度",
-        "宫内膜厚度"
+        "体脂肪量",
+        "体脂含量",
+        "脂肪量",
+        "Body Fat Mass",
+        "BFM"
       ],
       "allowedUnits": [
-        "mm",
-        "cm"
+        "kg",
+        "千克",
+        "公斤",
+        "g",
+        "克"
       ],
       "sectionHints": [
-        "妇科",
-        "超声",
-        "检查所见",
-        "阴道超声",
-        "子宫附件"
+        "人体成分",
+        "身体组成分析",
+        "肥胖分析",
+        "体格检查",
+        "体检"
       ],
-      "explanation": "妇科超声中对子宫内膜厚度的测量，通常需要结合月经周期、症状和医生结论理解。"
+      "explanation": "记录人体成分设备明确测得的全身体脂肪总量；身体部位分段脂肪值不归入该指标。"
     },
     {
-      "canonicalKey": "infectious_hbv_dna",
-      "displayName": "乙型肝炎病毒核酸定量",
-      "categoryKey": "infection_immunity",
-      "order": 53,
+      "canonicalKey": "body_fat_percentage",
+      "displayName": "体脂肪率",
+      "categoryKey": "general_measurement",
+      "order": 43,
       "kind": "quantitative",
       "valueType": "numeric",
-      "specimen": "serum",
-      "defaultUnit": "IU/mL",
-      "unitDimension": "other",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
       "aliases": [
-        "HBV-DNA",
-        "HBVDNA",
-        "乙肝病毒DNA",
-        "乙型肝炎病毒DNA",
-        "乙型肝炎病毒核酸定量"
+        "体脂肪率",
+        "体脂率",
+        "体脂百分比",
+        "Body Fat Percentage",
+        "PBF"
       ],
       "allowedUnits": [
-        "IU/mL",
-        "copies/mL"
+        "%",
+        "％"
       ],
       "sectionHints": [
-        "乙肝",
-        "乙型肝炎",
-        "病毒核酸",
-        "感染"
+        "人体成分",
+        "身体组成分析",
+        "肥胖分析",
+        "体格检查",
+        "体检"
       ],
-      "explanation": "用于观察乙肝病毒复制水平变化，需要结合肝功能、乙肝标志物和医生意见理解。"
+      "explanation": "记录全身体脂肪占体重的比例，用于观察整体体脂变化，不包含年龄标准表或身体部位分段值。"
+    },
+    {
+      "canonicalKey": "body_muscle_mass",
+      "displayName": "肌肉量",
+      "categoryKey": "general_measurement",
+      "order": 44,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
+      "aliases": [
+        "肌肉量",
+        "肌内量",
+        "总肌肉量",
+        "Muscle Mass"
+      ],
+      "allowedUnits": [
+        "kg",
+        "千克",
+        "公斤",
+        "g",
+        "克"
+      ],
+      "sectionHints": [
+        "人体成分",
+        "身体组成分析",
+        "身体肌肉脂肪检查",
+        "体格检查",
+        "体检"
+      ],
+      "explanation": "记录人体成分报告中的全身肌肉总量；左臂、右臂、躯干和腿部等分段值不合并为该指标。"
+    },
+    {
+      "canonicalKey": "body_fat_free_mass",
+      "displayName": "除脂肪量",
+      "categoryKey": "general_measurement",
+      "order": 45,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
+      "aliases": [
+        "除脂肪量",
+        "去脂体重",
+        "无脂肪体重",
+        "Fat Free Mass",
+        "FFM"
+      ],
+      "allowedUnits": [
+        "kg",
+        "千克",
+        "公斤",
+        "g",
+        "克"
+      ],
+      "sectionHints": [
+        "人体成分",
+        "身体组成分析",
+        "体格检查",
+        "体检"
+      ],
+      "explanation": "记录人体成分设备给出的除脂肪总重量，用于与体重和体脂肪量结合观察身体组成变化。"
+    },
+    {
+      "canonicalKey": "body_total_water",
+      "displayName": "体水分量",
+      "categoryKey": "general_measurement",
+      "order": 46,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
+      "aliases": [
+        "体水分量",
+        "身体总水分",
+        "总水分量",
+        "Total Body Water",
+        "TBW"
+      ],
+      "allowedUnits": [
+        "kg",
+        "千克",
+        "公斤"
+      ],
+      "sectionHints": [
+        "人体成分",
+        "身体组成分析",
+        "体格检查",
+        "体检"
+      ],
+      "explanation": "记录人体成分设备测得的身体总水分重量；细胞内液、细胞外液等分项不并入该指标。"
+    },
+    {
+      "canonicalKey": "body_basal_metabolic_rate",
+      "displayName": "基础代谢",
+      "categoryKey": "general_measurement",
+      "order": 47,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kcal",
+      "unitDimension": "other",
+      "aliases": [
+        "基础代谢",
+        "基础代谢率",
+        "基础代谢量",
+        "Basal Metabolic Rate",
+        "BMR"
+      ],
+      "allowedUnits": [
+        "kcal",
+        "千卡",
+        "kcal/d",
+        "kcal/day",
+        "千卡/日"
+      ],
+      "sectionHints": [
+        "人体成分",
+        "身体组成分析",
+        "体格检查",
+        "体检"
+      ],
+      "explanation": "记录人体成分设备估算的基础代谢能量；建议摄取热量和活动耗热参考不归入该指标。"
     },
     {
       "canonicalKey": "infectious_hbsag",
@@ -1305,61 +1459,60 @@
       "explanation": "乙肝标志物定性/半定量项目，不默认进入折线趋势。"
     },
     {
-      "canonicalKey": "infectious_hiv_agab",
-      "displayName": "人类免疫缺陷病毒抗原抗体",
+      "canonicalKey": "infectious_h_pylori_13c_urea_breath_test_dob",
+      "displayName": "13C 尿素呼气试验 DOB 值",
       "categoryKey": "infection_immunity",
-      "order": 59,
-      "kind": "categorical",
-      "valueType": "positive_negative",
-      "specimen": "serum",
-      "defaultUnit": null,
-      "unitDimension": "categorical",
+      "order": 61,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "‰",
+      "unitDimension": "ratio",
       "aliases": [
-        "HIV",
-        "HIV抗原抗体",
-        "人类免疫缺陷病毒抗原抗体",
-        "人类免疫缺陷病毒抗体"
+        "DOB值",
+        "13C呼气试验DOB值",
+        "13C尿素呼气试验DOB值",
+        "Delta Over Baseline"
       ],
       "allowedUnits": [
-        "",
-        "S/CO",
-        "COI"
+        "‰"
       ],
       "sectionHints": [
-        "感染",
-        "免疫缺陷",
-        "HIV"
+        "13C呼气试验",
+        "13C尿素呼气试验",
+        "幽门螺杆菌",
+        "Hp检验"
       ],
-      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+      "explanation": "13C 尿素呼气试验的基线差值定量结果；阴阳性判断应以当前报告明确给出的阈值和医生结论为准。"
     },
     {
-      "canonicalKey": "infectious_syphilis_antibody",
-      "displayName": "梅毒螺旋体抗体",
+      "canonicalKey": "infectious_h_pylori_13c_urea_breath_test_result",
+      "displayName": "13C 尿素呼气试验幽门螺杆菌结果",
       "categoryKey": "infection_immunity",
-      "order": 60,
+      "order": 62,
       "kind": "categorical",
       "valueType": "positive_negative",
-      "specimen": "serum",
+      "specimen": "other",
       "defaultUnit": null,
       "unitDimension": "categorical",
       "aliases": [
-        "梅毒螺旋体抗体",
-        "TP抗体",
-        "TPPA",
-        "TP-Ab",
-        "梅毒抗体"
+        "13C呼气试验Hp检验报告",
+        "13C呼气试验Hp检验",
+        "13C尿素呼气试验Hp",
+        "13C尿素呼气试验幽门螺杆菌",
+        "13C呼气试验",
+        "C13呼气试验"
       ],
       "allowedUnits": [
-        "",
-        "S/CO",
-        "COI"
+        ""
       ],
       "sectionHints": [
-        "感染",
-        "梅毒",
-        "螺旋体"
+        "13C呼气试验",
+        "13C尿素呼气试验",
+        "幽门螺杆菌",
+        "Hp检验"
       ],
-      "explanation": "感染筛查定性项目，不默认进入折线趋势。"
+      "explanation": "13C 尿素呼气试验的幽门螺杆菌定性结论，不默认进入数值折线趋势。"
     },
     {
       "canonicalKey": "urine_protein",
@@ -1444,6 +1597,11 @@
         "血压",
         "内科"
       ],
+      "referenceRange": {
+        "low": 90,
+        "high": 140,
+        "note": "诊室血压通用标准：90~140 mmHg；≥140 提示高血压可能，<90 提示低血压可能"
+      },
       "explanation": "血压测量中的较高值，应结合舒张压和原报告参考范围观察。"
     },
     {
@@ -1471,6 +1629,11 @@
         "血压",
         "内科"
       ],
+      "referenceRange": {
+        "low": 60,
+        "high": 90,
+        "note": "诊室血压通用标准：60~90 mmHg；≥90 提示高血压可能，<60 提示低血压可能"
+      },
       "explanation": "血压测量中的较低值，应结合收缩压和原报告参考范围观察。"
     },
     {
@@ -1502,6 +1665,11 @@
         "脉搏",
         "内科"
       ],
+      "referenceRange": {
+        "low": 60,
+        "high": 100,
+        "note": "成人静息脉搏通用范围 60~100 次/分"
+      },
       "explanation": "表示每分钟脉搏次数，通常结合测量状态和心率相关检查观察。"
     },
     {
@@ -1528,6 +1696,11 @@
         "血常规",
         "全血细胞"
       ],
+      "trendSourcePreference": {
+        "preferredSections": ["血常规", "血液常规"],
+        "discouragedSections": ["血粘", "血液流变", "黏度", "粘度"],
+        "discouragedPenalty": 60
+      },
       "explanation": "表示红细胞在全血中所占比例，是血常规常见指标。"
     },
     {
@@ -1923,7 +2096,8 @@
       "aliases": [
         "ALP",
         "AKP",
-        "碱性磷酸酶"
+        "碱性磷酸酶",
+        "血清碱性磷酸酶"
       ],
       "allowedUnits": [
         "U/L",
@@ -1959,6 +2133,31 @@
         "生化"
       ],
       "explanation": "反映血清总胆汁酸水平，通常结合其他肝功能指标观察。"
+    },
+    {
+      "canonicalKey": "liver_ast_alt_ratio",
+      "displayName": "谷草/谷丙比值",
+      "categoryKey": "liver_function",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "AST/ALT",
+        "AST/ALT比值",
+        "谷草/谷丙",
+        "谷草/谷丙比值",
+        "谷草谷丙比值",
+        "谷草转氨酶/谷丙转氨酶"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "谷草转氨酶与谷丙转氨酶的比值，需结合 ALT、AST 绝对值一起理解。"
     },
     {
       "canonicalKey": "renal_bun",
@@ -2024,7 +2223,8 @@
         "CysC",
         "CYS-C",
         "胱抑素C",
-        "血清胱抑素C"
+        "血清胱抑素C",
+        "血清胱抑素C测定"
       ],
       "allowedUnits": [
         "mg/L"
@@ -2623,6 +2823,11 @@
         "心电图",
         "心电检查"
       ],
+      "referenceRange": {
+        "low": 60,
+        "high": 100,
+        "note": "窦性心律成人通用范围 60~100 次/分"
+      },
       "explanation": "心电图记录中的心率，与一般检查的脉搏按检查场景分别展示。"
     },
     {
@@ -2647,6 +2852,11 @@
         "心电图",
         "心电检查"
       ],
+      "referenceRange": {
+        "low": 120,
+        "high": 200,
+        "note": "PR 间期通用范围 120~200 ms"
+      },
       "explanation": "心电图中的 PR 间期测量值。"
     },
     {
@@ -2671,6 +2881,11 @@
         "心电图",
         "心电检查"
       ],
+      "referenceRange": {
+        "low": 60,
+        "high": 120,
+        "note": "QRS 时限通用范围 60~120 ms（取保守上限减少边界噪音）"
+      },
       "explanation": "心电图中的 QRS 波群时限。"
     },
     {
@@ -2698,10 +2913,170 @@
       "explanation": "心电图中的校正 QT 间期。"
     },
     {
+      "canonicalKey": "ecg_qt_interval",
+      "displayName": "QT 间期",
+      "categoryKey": "functional_measurement",
+      "order": 5,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "ms",
+      "unitDimension": "time",
+      "aliases": [
+        "QT",
+        "QT间期",
+        "Q-T间期"
+      ],
+      "allowedUnits": [
+        "ms"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图中的原始 QT 间期测量值，与经过心率校正的 QTc 间期分别形成趋势。"
+    },
+    {
+      "canonicalKey": "ecg_p_axis",
+      "displayName": "P 电轴",
+      "categoryKey": "functional_measurement",
+      "order": 6,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "°",
+      "unitDimension": "other",
+      "aliases": [
+        "P电轴",
+        "P波电轴",
+        "P axis",
+        "P-axis"
+      ],
+      "allowedUnits": [
+        "°",
+        "Angle",
+        "deg",
+        "degree"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图自动测量的 P 波电轴角度；趋势比较应结合导联质量、心律和原报告结论。"
+    },
+    {
+      "canonicalKey": "ecg_qrs_axis",
+      "displayName": "QRS 电轴",
+      "categoryKey": "functional_measurement",
+      "order": 7,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "°",
+      "unitDimension": "other",
+      "aliases": [
+        "QRS电轴",
+        "QRS波电轴",
+        "QRS axis",
+        "QRS-axis"
+      ],
+      "allowedUnits": [
+        "°",
+        "Angle",
+        "deg",
+        "degree"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图自动测量的 QRS 波群电轴角度，不与 QRS 时限合并。"
+    },
+    {
+      "canonicalKey": "ecg_t_axis",
+      "displayName": "T 电轴",
+      "categoryKey": "functional_measurement",
+      "order": 8,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "°",
+      "unitDimension": "other",
+      "aliases": [
+        "T电轴",
+        "T波电轴",
+        "T axis",
+        "T-axis"
+      ],
+      "allowedUnits": [
+        "°",
+        "Angle",
+        "deg",
+        "degree"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图自动测量的 T 波电轴角度；趋势解释应结合原始心电图和报告结论。"
+    },
+    {
+      "canonicalKey": "ecg_rv5_amplitude",
+      "displayName": "RV5 振幅",
+      "categoryKey": "functional_measurement",
+      "order": 9,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mV",
+      "unitDimension": "other",
+      "aliases": [
+        "RV5",
+        "RV5振幅",
+        "V5导联R波振幅",
+        "R(V5)"
+      ],
+      "allowedUnits": [
+        "mV",
+        "mv"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图 V5 导联 R 波振幅；不同设备增益设置下应以标准化电压单位比较。"
+    },
+    {
+      "canonicalKey": "ecg_sv1_amplitude",
+      "displayName": "SV1 振幅",
+      "categoryKey": "functional_measurement",
+      "order": 10,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mV",
+      "unitDimension": "other",
+      "aliases": [
+        "SV1",
+        "SV1振幅",
+        "V1导联S波振幅",
+        "S(V1)"
+      ],
+      "allowedUnits": [
+        "mV",
+        "mv"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查"
+      ],
+      "explanation": "心电图 V1 导联 S 波振幅；不同设备增益设置下应以标准化电压单位比较。"
+    },
+    {
       "canonicalKey": "vascular_abi_right",
       "displayName": "右侧踝肱指数",
       "categoryKey": "functional_measurement",
-      "order": 10,
+      "order": 11,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2726,7 +3101,7 @@
       "canonicalKey": "vascular_abi_left",
       "displayName": "左侧踝肱指数",
       "categoryKey": "functional_measurement",
-      "order": 11,
+      "order": 12,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2751,7 +3126,7 @@
       "canonicalKey": "vascular_abi",
       "displayName": "踝肱指数",
       "categoryKey": "functional_measurement",
-      "order": 12,
+      "order": 13,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2774,7 +3149,7 @@
       "canonicalKey": "vascular_bapwv_right",
       "displayName": "右侧肱踝脉搏波传导速度",
       "categoryKey": "functional_measurement",
-      "order": 13,
+      "order": 14,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2802,7 +3177,7 @@
       "canonicalKey": "vascular_bapwv_left",
       "displayName": "左侧肱踝脉搏波传导速度",
       "categoryKey": "functional_measurement",
-      "order": 14,
+      "order": 15,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2830,7 +3205,7 @@
       "canonicalKey": "vascular_bapwv",
       "displayName": "肱踝脉搏波传导速度",
       "categoryKey": "functional_measurement",
-      "order": 15,
+      "order": 16,
       "kind": "quantitative",
       "valueType": "numeric",
       "specimen": "other",
@@ -2850,84 +3225,6 @@
         "baPWV"
       ],
       "explanation": "动脉功能检查中的肱踝脉搏波传导速度，左右侧数据分别保留。"
-    },
-    {
-      "canonicalKey": "tumor_psa_total",
-      "displayName": "总前列腺特异性抗原",
-      "categoryKey": "laboratory_other",
-      "order": 1,
-      "kind": "quantitative",
-      "valueType": "numeric",
-      "specimen": "serum",
-      "defaultUnit": "ng/mL",
-      "unitDimension": "mass_concentration",
-      "aliases": [
-        "T-PSA",
-        "TPSA",
-        "前列腺特异性抗原",
-        "总前列腺特异性抗原",
-        "总PSA"
-      ],
-      "allowedUnits": [
-        "ng/mL",
-        "μg/L"
-      ],
-      "sectionHints": [
-        "肿瘤标志物",
-        "前列腺"
-      ],
-      "explanation": "报告中的总前列腺特异性抗原测量值。"
-    },
-    {
-      "canonicalKey": "tumor_psa_free",
-      "displayName": "游离前列腺特异性抗原",
-      "categoryKey": "laboratory_other",
-      "order": 2,
-      "kind": "quantitative",
-      "valueType": "numeric",
-      "specimen": "serum",
-      "defaultUnit": "ng/mL",
-      "unitDimension": "mass_concentration",
-      "aliases": [
-        "F-PSA",
-        "FPSA",
-        "游离前列腺特异性抗原",
-        "游离PSA"
-      ],
-      "allowedUnits": [
-        "ng/mL",
-        "μg/L"
-      ],
-      "sectionHints": [
-        "肿瘤标志物",
-        "前列腺"
-      ],
-      "explanation": "报告中的游离前列腺特异性抗原测量值。"
-    },
-    {
-      "canonicalKey": "tumor_psa_free_total_ratio",
-      "displayName": "游离/总前列腺特异性抗原比值",
-      "categoryKey": "laboratory_other",
-      "order": 3,
-      "kind": "quantitative",
-      "valueType": "numeric",
-      "specimen": "serum",
-      "defaultUnit": "%",
-      "unitDimension": "ratio",
-      "aliases": [
-        "F-PSA/T-PSA",
-        "fPSA/tPSA",
-        "游离总PSA比值",
-        "游离前列腺特异性抗原比值"
-      ],
-      "allowedUnits": [
-        "%"
-      ],
-      "sectionHints": [
-        "肿瘤标志物",
-        "前列腺"
-      ],
-      "explanation": "报告明确给出的游离 PSA 与总 PSA 比值，不由系统自行计算。"
     },
     {
       "canonicalKey": "body_waist_hip_ratio",
@@ -3091,6 +3388,677 @@
         "铁代谢"
       ],
       "explanation": "血清铁蛋白测量值，通常结合原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "qus_bone_t_score",
+      "displayName": "超声骨密度 T 值",
+      "categoryKey": "functional_measurement",
+      "order": 17,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "QUS T值",
+        "QUS T-score",
+        "T值",
+        "T-score",
+        "超声骨密度T值",
+        "超声骨密度 T 值",
+        "定量超声骨T值",
+        "定量超声骨 T 值"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "超声骨密度",
+        "超声骨质",
+        "定量超声骨",
+        "QUS"
+      ],
+      "referenceRange": {
+        "low": -1,
+        "high": null,
+        "note": "WHO 标准：T ≥ -1 正常；-2.5 < T < -1 骨量减少；T ≤ -2.5 骨质疏松"
+      },
+      "explanation": "定量超声骨检测设备报告中的 T 值；仅与同类 QUS 检查形成独立趋势，不与 DXA 骨密度 T 值直接合并。"
+    },
+    {
+      "canonicalKey": "qus_bone_z_score",
+      "displayName": "超声骨密度 Z 值",
+      "categoryKey": "functional_measurement",
+      "order": 18,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "QUS Z值",
+        "QUS Z-score",
+        "Z值",
+        "Z-score",
+        "超声骨密度Z值",
+        "超声骨密度 Z 值",
+        "定量超声骨Z值",
+        "定量超声骨 Z 值"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "超声骨密度",
+        "超声骨质",
+        "定量超声骨",
+        "QUS"
+      ],
+      "referenceRange": {
+        "low": -2,
+        "high": null,
+        "note": "Z 值低于 -2 提示骨密度低于同龄人预期范围"
+      },
+      "explanation": "定量超声骨检测设备报告中的 Z 值；仅与同类 QUS 检查形成独立趋势，不与 DXA 骨密度 Z 值直接合并。"
+    },
+    {
+      "canonicalKey": "pulmonary_vc",
+      "displayName": "肺活量（VC）",
+      "categoryKey": "functional_measurement",
+      "order": 20,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "VC",
+        "SVC",
+        "肺活量（VC）",
+        "慢肺活量",
+        "缓慢肺活量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映平静呼吸方式下可呼出的最大气量，应与用力肺活量区分观察。"
+    },
+    {
+      "canonicalKey": "pulmonary_ic",
+      "displayName": "深吸气量（IC）",
+      "categoryKey": "functional_measurement",
+      "order": 21,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "IC",
+        "深吸气量",
+        "吸气容量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映平静呼气末能够吸入的最大气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_tv",
+      "displayName": "潮气量（TV）",
+      "categoryKey": "functional_measurement",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "TV",
+        "VT",
+        "潮气量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映一次平静呼吸吸入或呼出的气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_irv",
+      "displayName": "补吸气量（IRV）",
+      "categoryKey": "functional_measurement",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "IRV",
+        "补吸气量",
+        "吸气储备量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映平静吸气后还能继续吸入的气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_erv",
+      "displayName": "补呼气量（ERV）",
+      "categoryKey": "functional_measurement",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "ERV",
+        "补呼气量",
+        "呼气储备量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映平静呼气后还能继续呼出的气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fvc",
+      "displayName": "用力肺活量（FVC）",
+      "categoryKey": "functional_measurement",
+      "order": 25,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "FVC",
+        "用力肺活量",
+        "用力呼气肺活量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映最大吸气后以最快速度呼出的总气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fev1",
+      "displayName": "第一秒用力呼气容积（FEV1）",
+      "categoryKey": "functional_measurement",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L",
+      "unitDimension": "volume",
+      "aliases": [
+        "FEV1",
+        "FEV1.0",
+        "第一秒用力呼气容积",
+        "第一秒用力呼气量",
+        "一秒量"
+      ],
+      "allowedUnits": [
+        "L"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼气第一秒呼出的气量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fev1_fvc_ratio",
+      "displayName": "FEV1/FVC",
+      "categoryKey": "functional_measurement",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "FEV1/FVC",
+        "FEV1.0/FVC",
+        "FEV1.0%(G)",
+        "FEV1%(G)",
+        "Gaensler指数",
+        "盖斯勒指数",
+        "一秒率"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "第一秒用力呼气容积占用力肺活量的比例。"
+    },
+    {
+      "canonicalKey": "pulmonary_fev1_vc_ratio",
+      "displayName": "FEV1/VC",
+      "categoryKey": "functional_measurement",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "FEV1/VC",
+        "FEV1.0/VC",
+        "FEV1.0%(T)",
+        "FEV1%(T)",
+        "Tiffeneau指数",
+        "蒂芬诺指数"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "第一秒用力呼气容积占肺活量的比例，不与 FEV1/FVC 合并。"
+    },
+    {
+      "canonicalKey": "pulmonary_pef",
+      "displayName": "呼气峰值流量（PEF）",
+      "categoryKey": "functional_measurement",
+      "order": 29,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L/s",
+      "unitDimension": "other",
+      "aliases": [
+        "PEF",
+        "呼气峰值流量",
+        "最大呼气流量"
+      ],
+      "allowedUnits": [
+        "L/s"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼气过程中达到的最高流量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fef25",
+      "displayName": "呼出25%肺活量时流量（FEF25）",
+      "categoryKey": "functional_measurement",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L/s",
+      "unitDimension": "other",
+      "aliases": [
+        "FEF25",
+        "FEF25%",
+        "MEF25",
+        "呼出25%肺活量时流量"
+      ],
+      "allowedUnits": [
+        "L/s"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼气早期的瞬时流量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fef50",
+      "displayName": "呼出50%肺活量时流量（FEF50）",
+      "categoryKey": "functional_measurement",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L/s",
+      "unitDimension": "other",
+      "aliases": [
+        "FEF50",
+        "FEF50%",
+        "MEF50",
+        "呼出50%肺活量时流量"
+      ],
+      "allowedUnits": [
+        "L/s"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼气中段的瞬时流量。"
+    },
+    {
+      "canonicalKey": "pulmonary_fef75",
+      "displayName": "呼出75%肺活量时流量（FEF75）",
+      "categoryKey": "functional_measurement",
+      "order": 32,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L/s",
+      "unitDimension": "other",
+      "aliases": [
+        "FEF75",
+        "FEF75%",
+        "MEF75",
+        "呼出75%肺活量时流量"
+      ],
+      "allowedUnits": [
+        "L/s"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼气后段的瞬时流量。"
+    },
+    {
+      "canonicalKey": "pulmonary_mmef",
+      "displayName": "最大呼气中期流量（MMEF）",
+      "categoryKey": "functional_measurement",
+      "order": 33,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "L/s",
+      "unitDimension": "other",
+      "aliases": [
+        "MMEF",
+        "MMF",
+        "FEF25-75",
+        "FEF25~75",
+        "FEF25-75%",
+        "MEF25-75"
+      ],
+      "allowedUnits": [
+        "L/s"
+      ],
+      "sectionHints": [
+        "肺功能",
+        "肺功能报告",
+        "肺通气功能",
+        "呼吸功能",
+        "肺量计"
+      ],
+      "explanation": "反映用力呼出肺活量中间一段的平均流量。"
+    },
+    {
+      "canonicalKey": "laboratory_ldh",
+      "displayName": "乳酸脱氢酶",
+      "categoryKey": "laboratory_other",
+      "order": 11,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "LDH",
+        "乳酸脱氢酶",
+        "血清乳酸脱氢酶",
+        "乳酸脱氢酶测定"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "心肌酶谱",
+        "心肌酶",
+        "生化检验",
+        "肝功能"
+      ],
+      "explanation": "血清乳酸脱氢酶测量值，需结合原报告参考范围及其他相关项目观察。"
+    },
+    {
+      "canonicalKey": "laboratory_ck",
+      "displayName": "肌酸激酶",
+      "categoryKey": "laboratory_other",
+      "order": 12,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "CK",
+        "CPK",
+        "肌酸激酶",
+        "磷酸肌酸激酶",
+        "血清磷酸肌酸激酶",
+        "肌酸磷酸激酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "心肌酶谱",
+        "心肌酶",
+        "生化检验"
+      ],
+      "explanation": "血清肌酸激酶测量值，需结合原报告参考范围及相关同工酶项目观察。"
+    },
+    {
+      "canonicalKey": "laboratory_ck_mb",
+      "displayName": "肌酸激酶同工酶（CK-MB）",
+      "categoryKey": "laboratory_other",
+      "order": 13,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "CK-MB",
+        "CKMB",
+        "肌酸激酶同工酶",
+        "肌酸激酶同工酶(CK-MB)",
+        "肌酸激酶-MB同工酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "心肌酶谱",
+        "心肌酶",
+        "生化检验"
+      ],
+      "explanation": "报告中的肌酸激酶 MB 同工酶活性测量值，需结合原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "laboratory_amylase",
+      "displayName": "淀粉酶",
+      "categoryKey": "laboratory_other",
+      "order": 14,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "AMY",
+        "淀粉酶",
+        "淀粉酶(AMY)",
+        "血清淀粉酶"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "淀粉酶",
+        "生化检验",
+        "胰腺功能"
+      ],
+      "explanation": "血清淀粉酶测量值，需结合原报告参考范围及采样类型观察。"
+    },
+    {
+      "canonicalKey": "ophthalmology_intraocular_pressure_right",
+      "displayName": "右眼眼压",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "右眼眼压",
+        "右眼压",
+        "眼压右",
+        "右侧眼压",
+        "IOP-R",
+        "IOP R",
+        "R-IOP"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "眼科",
+        "眼压"
+      ],
+      "referenceRange": {
+        "low": 10,
+        "high": 21,
+        "note": "眼压通用范围 10~21 mmHg"
+      },
+      "explanation": "原报告记录的右眼眼压测量值，需结合原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "ophthalmology_intraocular_pressure_left",
+      "displayName": "左眼眼压",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 4,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "左眼眼压",
+        "左眼压",
+        "眼压左",
+        "左侧眼压",
+        "IOP-L",
+        "IOP L",
+        "L-IOP"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "眼科",
+        "眼压"
+      ],
+      "referenceRange": {
+        "low": 10,
+        "high": 21,
+        "note": "眼压通用范围 10~21 mmHg"
+      },
+      "explanation": "原报告记录的左眼眼压测量值，需结合原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "laboratory_esr",
+      "displayName": "红细胞沉降率",
+      "categoryKey": "laboratory_other",
+      "order": 47,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mm/h",
+      "unitDimension": "other",
+      "aliases": [
+        "ESR",
+        "血沉",
+        "红细胞沉降率",
+        "红细胞沉降速度"
+      ],
+      "allowedUnits": [
+        "mm/h",
+        "mm/hr",
+        "毫米/小时"
+      ],
+      "sectionHints": [
+        "血沉",
+        "血液流变",
+        "血液流变学",
+        "血粘度",
+        "血黏度"
+      ],
+      "explanation": "红细胞沉降率（ESR）是有时间量纲的独立检验项目；不得与无量纲的血沉方程 K 值合并。"
     }
   ],
   "extensions": [],

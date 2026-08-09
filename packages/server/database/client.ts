@@ -6,6 +6,11 @@ import { getAppConfig } from "../utils/runtime-config";
 import {
   databaseMigrations,
   ensureClinicalFactColumns,
+  ensureIndicatorDictionaryColumns,
+  ensureIndicatorGovernanceSchema,
+  ensureObservationDisplayFlagColumns,
+  ensureOcrCoordSpaceColumns,
+  ensureReportDuplicateGovernanceSchema,
   repairIncompatibleAiReportSections,
   repairReportDisplayMetadata,
   tableColumnNames
@@ -78,6 +83,16 @@ function appliedSchemaVersion(db: DatabaseSync) {
     | { version: number | null }
     | undefined;
   return current?.version ?? 0;
+}
+
+function assertNoUnreleasedSchemaVersions(currentVersion: number) {
+  // v17-v19 only existed during pre-release development and were folded back into v16.
+  // 不再静默删除迁移记录：检测到未来版本时必须显式修复，避免掩盖数据库曾经进入过未发版 schema 的事实。
+  if (schemaVersion !== 16 || currentVersion <= schemaVersion || currentVersion > 19) return;
+  throw new Error(
+    `数据库记录了未正式发布阶段的 schema v${currentVersion}（v17-v19 已折叠回 v16）。` +
+    "请先停止服务并执行 npm run db:repair-unreleased 显式修复（会自动备份数据库），完成后再启动。",
+  );
 }
 
 function recordMigration(db: DatabaseSync, version: number, elapsedMs: number) {
@@ -187,6 +202,11 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   if (isFreshDatabase(db)) {
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
+    ensureIndicatorDictionaryColumns(db);
+    ensureObservationDisplayFlagColumns(db);
+    ensureIndicatorGovernanceSchema(db);
+    ensureOcrCoordSpaceColumns(db);
+    ensureReportDuplicateGovernanceSchema(db);
     repairReportDisplayMetadata(db);
     repairIncompatibleAiReportSections(db);
     ensureMigrationMetadataColumns(db);
@@ -199,6 +219,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const hasMigrationTable = tableExists(db, "schema_migrations");
   let currentVersion = hasMigrationTable ? appliedSchemaVersion(db) : 0;
+  if (hasMigrationTable) assertNoUnreleasedSchemaVersions(currentVersion);
   if (currentVersion === 0 && tableExists(db, "reports")) {
     currentVersion = 1;
   }
@@ -233,6 +254,11 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     }
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
+    ensureIndicatorDictionaryColumns(db);
+    ensureObservationDisplayFlagColumns(db);
+    ensureIndicatorGovernanceSchema(db);
+    ensureOcrCoordSpaceColumns(db);
+    ensureReportDuplicateGovernanceSchema(db);
     repairReportDisplayMetadata(db);
     repairIncompatibleAiReportSections(db);
     ensureMigrationMetadataColumns(db);

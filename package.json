@@ -1,6 +1,6 @@
 {
   "name": "fnos-app-health-records",
-  "version": "0.1.18",
+  "version": "0.2.0",
   "description": "Family health report archive and AI-assisted record management for fnOS",
   "type": "module",
   "author": {
@@ -33,6 +33,8 @@
     "build": "npm run build:web && nitro build",
     "generate:icons": "node scripts/generate-icons.mjs",
     "dictionary:validate": "node scripts/dictionary/validate.mjs",
+    "dictionary:reset-core": "node scripts/dictionary/reset-core.mjs",
+    "db:repair-unreleased": "node scripts/db-repair-unreleased.mjs",
     "dictionary:compare": "node scripts/dictionary/compare.mjs",
     "dictionary:manifest": "node scripts/dictionary/build-manifest.mjs",
     "dictionary:build": "node scripts/dictionary/build-pages.mjs",

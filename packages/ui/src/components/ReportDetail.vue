@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
   FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText,
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
+import OcrTextOverlay from "./OcrTextOverlay.vue";
 import ReportStructuredSectionEditor from "./ReportStructuredSectionEditor.vue";
 import FormSelect from "./FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
-import { formatDatabaseTime } from "../utils/time";
+import { describeObservationAbnormal, formatObservationNormalization, formatReferenceRange } from "../utils/indicator-display";
+import { formatDatabaseTime, formatDatabaseTimeWithYear } from "../utils/time";
+import { hasEmptyCompletedOcr, resolveAiTriggerState } from "../utils/ai-trigger-state";
+import { resolveClinicalEvidenceNavigation } from "../utils/clinical-evidence-navigation";
+import { resolveReportReprocessNotice } from "../utils/report-reprocess-state";
+import { resolveProcessingDelayNotice, resolveProcessingRecoveryState } from "../utils/processing-recovery-state";
+import { processingCodeLabel } from "../utils/processing-code-labels";
+import {
+  calculateProcessingJobProgress, groupProcessingJobBatches, isProcessingJobBatchSettled,
+  processingJobBatchLabel, type ProcessingJobBatch
+} from "../utils/processing-job-batches";
 import type {
-  AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageText, ProcessingJob, ProcessingJobEvent,
-  ProcessingJobEventDetail,
+  AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageDetail, OcrPageText, ProcessingJob, ProcessingJobEvent,
+  ProcessingDiagnosticReviewItem, ProcessingJobEventDetail,
   ReportDetail, ReportPage, ReportSummary
 } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
@@ -45,6 +56,7 @@ const detailError = ref("");
 const selectedJobs = ref<ProcessingJob[]>([]);
 const jobsLoading = ref(false);
 const jobsError = ref("");
+const jobsPollingStopped = ref(false);
 const processingExpanded = ref(false);
 const runtimeAvailable = ref(true);
 const eventSheetOpen = ref(false);
@@ -63,6 +75,18 @@ const ocrLoading = ref(false);
 const ocrError = ref("");
 const ocrPages = ref<OcrPageText[]>([]);
 const ocrReportId = ref<string | null>(null);
+const ocrDetailPage = ref<OcrPageDetail | null>(null);
+const ocrDetailLoading = ref(false);
+const ocrDetailError = ref("");
+const showOcrOverlay = ref(false);
+const editOriginalImage = ref<HTMLImageElement | null>(null);
+// 记录已完成加载的图片页 id：翻页后图片未就绪前不渲染 OCR 标记，避免标记先出现、
+// 图片后撑开造成的抖动。
+const loadedOriginalImagePageId = ref("");
+const loadedOcrCompareImagePageId = ref("");
+const diagnosticReviewItem = ref<ProcessingDiagnosticReviewItem | null>(null);
+const ocrComparePageNumber = ref<number | null>(null);
+const ocrCompareImage = ref<HTMLImageElement | null>(null);
 const confirming = ref(false);
 const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
@@ -78,6 +102,7 @@ const allObservationsOpen = ref(false);
 const editOriginalIndex = ref(0);
 const savingReport = ref(false);
 const savingPages = ref(false);
+const pageRefreshAwaitingJobs = ref(false);
 const editForm = ref({
   title: "", reportType: "other", hospitalName: "", hospitalBranch: "", city: "",
   departmentName: "", orderingDepartment: "", performingDepartment: "", reportingDepartment: "",
@@ -93,7 +118,7 @@ let ocrSeq = 0;
 let jobsPollFailures = 0;
 let eventSeq = 0;
 let eventRequestPending = false;
-const OBSERVATION_PREVIEW_LIMIT = 24;
+const OBSERVATION_PREVIEW_LIMIT = 10;
 
 /* 处理进度区默认折叠：任何写入 jobsError 的失败都要同时展开该区并 toast，否则按钮停了用户却看不到原因 */
 function failJobsAction(cause: unknown, fallback: string) {
@@ -135,41 +160,72 @@ const aiUnitProgressPercent = computed(() => orderedAiUnits.value.length
   ? Math.round(completedAiUnits.value / orderedAiUnits.value.length * 100)
   : 0
 );
+const processingDiagnostics = computed(() => jobEventDetail.value?.diagnostics || null);
+const diagnosticSourceLineIds = computed(() => diagnosticReviewItem.value?.sourceLineIds || []);
+const diagnosticRepairMode = (item: ProcessingDiagnosticReviewItem) =>
+  item.issueType === "ocr_content" ? "ocr_ai" : "ai";
+const diagnosticRepairLabel = (item: ProcessingDiagnosticReviewItem) =>
+  diagnosticRepairMode(item) === "ocr_ai" ? "重新 OCR + AI" : "重新 AI 整理";
+const diagnosticRepairDescription = (item: ProcessingDiagnosticReviewItem) =>
+  diagnosticRepairMode(item) === "ocr_ai"
+    ? "将基于原件重新识别全部页面，再自动进行 AI 整理。"
+    : "将复用当前 OCR 文本重新进行 AI 整理。";
+const diagnosticMetrics = computed(() => {
+  const diagnostics = processingDiagnostics.value;
+  if (!diagnostics) return [];
+  const metrics = diagnostics.metrics;
+  if (jobEventDetail.value?.job.jobType === "ai_extract") {
+    return [
+      { label: "OCR 有效页", value: `${Math.max(0, metrics.ocrCompletedPages - metrics.ocrEmptyPages)}/${metrics.pageCount}` },
+      { label: "解析单元", value: `${metrics.completedUnits + metrics.warningUnits}/${metrics.plannedUnits}` },
+      { label: "补提取", value: String(metrics.supplementUnits) },
+      { label: "AI 请求", value: metrics.aiFailureCount ? `${metrics.aiRequestCount}（失败 ${metrics.aiFailureCount}）` : String(metrics.aiRequestCount) },
+      { label: "测量候选", value: String(metrics.candidateCount) },
+      { label: "候选闭环", value: `${metrics.resolvedCandidateCount}/${metrics.candidateCount}（${metrics.candidateClosurePercent}%）` },
+      { label: "有效提取", value: String(metrics.localExtractedCount + metrics.aiExtractedCount) },
+      { label: "重复合并", value: String(metrics.redundantCount) },
+      { label: "待核对", value: String(metrics.unresolvedCount) },
+      { label: "证据拒绝", value: String(metrics.postprocessRejectedCount) },
+      { label: "落库指标", value: String(metrics.persistedObservationCount) },
+      { label: "趋势可用", value: `${metrics.trendReadyObservationCount} 项 / ${metrics.trendSeriesCount} 类` }
+    ];
+  }
+  if (jobEventDetail.value?.job.jobType === "ocr") {
+    return [
+      { label: "报告页数", value: String(metrics.pageCount) },
+      { label: "OCR 完成", value: String(metrics.ocrCompletedPages) },
+      { label: "空内容页", value: String(metrics.ocrEmptyPages) },
+      { label: "低质量页", value: String(metrics.ocrWeakPages) },
+      { label: "失败页", value: String(metrics.ocrFailedPages) }
+    ];
+  }
+  return [{ label: "报告页数", value: String(metrics.pageCount) }];
+});
 const eventLogHasContent = computed(() => isAiEventLog.value
   ? Boolean(jobEventDetail.value)
   : jobEvents.value.length > 0
 );
-/* OCR 全部完成但没有任何文字：原件大概率不是有效报告，在详情顶部明确提示而非仅发通知 */
-const ocrEmptyNotice = computed(() => {
-  const localJobs = selectedJobs.value.filter((job) => job.jobType !== "ai_extract");
-  if (!localJobs.length || localJobs.some((job) => job.status === "queued" || job.status === "processing")) return false;
-  const ocrJobs = selectedJobs.value.filter((job) => job.jobType === "ocr" && job.status === "completed");
-  return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
-});
-const completedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "completed").length);
-const failedJobs = computed(() => selectedJobs.value.filter((job) => job.status === "failed"));
-const finishedJobs = computed(() => selectedJobs.value.filter((job) => ["completed", "failed", "cancelled"].includes(job.status)).length);
-const progressPercent = computed(() => {
-  if (!selectedJobs.value.length) return 0;
-  const progress = selectedJobs.value.reduce((sum, job) => {
-    if (["completed", "failed", "cancelled"].includes(job.status)) return sum + 1;
-    if (job.jobType === "ai_extract" && job.plannedUnits) {
-      return sum + Math.min(1, (job.completedUnits || 0) / job.plannedUnits);
-    }
-    return sum;
-  }, 0);
-  const percent = Math.round(progress / selectedJobs.value.length * 100);
-  const hasUnfinishedJob = selectedJobs.value.some((job) =>
-    !["completed", "failed", "cancelled"].includes(job.status)
-  );
-  // AI units may all be complete while the parent job is still merging and
-  // persisting results. Reserve 100% for a genuinely settled job set.
-  return hasUnfinishedJob ? Math.min(percent, 99) : percent;
-});
-const hasRunningJobs = computed(() => selectedJobs.value.some((job) => ["queued", "processing"].includes(job.status)));
-const hasProcessingJobs = computed(() => selectedJobs.value.some((job) => job.status === "processing"));
+const processingJobGroups = computed(() => groupProcessingJobBatches(selectedJobs.value));
+const currentBatch = computed(() => processingJobGroups.value.currentBatch);
+const currentJobs = computed(() => processingJobGroups.value.currentJobs);
+const historicalBatches = computed(() => processingJobGroups.value.historicalBatches);
+/* OCR 全部完成但没有任何文字：只判断当前批次，避免历史空 OCR 覆盖后续成功结果。 */
+const ocrEmptyNotice = computed(() => hasEmptyCompletedOcr(currentJobs.value));
+const completedJobs = computed(() => currentJobs.value.filter((job) => job.status === "completed").length);
+const failedJobs = computed(() => currentJobs.value.filter((job) => job.status === "failed"));
+const progressPercent = computed(() => calculateProcessingJobProgress(currentJobs.value));
+const hasRunningJobs = computed(() => currentJobs.value.some((job) => ["queued", "processing"].includes(job.status)));
+const processingRecoveryState = computed(() => resolveProcessingRecoveryState({
+  reprocessingReport: reprocessingReport.value,
+  jobsLoading: jobsLoading.value,
+  jobsPollingStopped: jobsPollingStopped.value,
+  pageRefreshAwaitingJobs: pageRefreshAwaitingJobs.value,
+  hasRunningJobs: hasRunningJobs.value,
+  reportStatus: source.value?.status
+}));
+const processingDelayNotice = computed(() => resolveProcessingDelayNotice(currentJobs.value));
 const needsOcrRuntime = computed(() =>
-  !runtimeAvailable.value && selectedJobs.value.some((job) => job.jobType === "ocr" && job.status !== "completed")
+  !runtimeAvailable.value && currentJobs.value.some((job) => job.jobType === "ocr" && job.status !== "completed")
 );
 const viewerImagePages = computed<ImageViewerPage[]>(() =>
   (detail.value?.pages || []).map((page) => ({
@@ -198,20 +254,47 @@ const hasAiContent = computed(() => Boolean(
     || detail.value.structuredSections.length
   )
 ));
-const abnormalObservations = computed(() => detail.value?.observations.filter((item) => ["high", "low", "abnormal"].includes(String(item.abnormalFlag))) || []);
-const visibleObservations = computed(() => detail.value?.observations.slice(0, OBSERVATION_PREVIEW_LIMIT) || []);
+const primaryObservations = computed(() => detail.value?.observations.filter((item) => item.displayTier === "primary") || []);
+const secondaryObservations = computed(() => detail.value?.observations.filter((item) => item.displayTier === "secondary") || []);
+const medicalCandidateObservations = computed(() => secondaryObservations.value.filter((item) => item.displayCategory === "medical_candidate"));
+const qualitativeObservations = computed(() => secondaryObservations.value.filter((item) => item.displayCategory === "qualitative_finding"));
+const technicalObservations = computed(() => secondaryObservations.value.filter((item) => item.displayCategory === "technical_measurement"));
+const governanceObservations = computed(() => detail.value?.observations.filter((item) => item.displayTier === "governance_only") || []);
+const prioritizedSecondaryObservations = computed(() => [
+  ...medicalCandidateObservations.value,
+  ...qualitativeObservations.value,
+  ...technicalObservations.value
+]);
+const readableObservations = computed(() => [...primaryObservations.value, ...prioritizedSecondaryObservations.value]);
+const abnormalObservations = computed(() => readableObservations.value.filter((item) =>
+  !item.abnormalConflict && ["high", "low", "abnormal"].includes(String(item.displayAbnormalFlag))
+));
+const conflictingObservations = computed(() => readableObservations.value.filter((item) => item.abnormalConflict));
+const previewSourceObservations = computed(() => primaryObservations.value.length ? primaryObservations.value : prioritizedSecondaryObservations.value);
+const visibleObservations = computed(() => previewSourceObservations.value.slice(0, OBSERVATION_PREVIEW_LIMIT));
 /* 重复匹配是双向的，但确认提示只属于尚未归档的新报告，避免打开已有报告时反向显示同一警告。 */
 const duplicateCandidates = computed(() =>
   source.value?.status === "needs_review"
     ? currentDetail.value?.duplicateCandidates || []
     : []
 );
-const aiJobs = computed(() => selectedJobs.value.filter((job) => job.jobType === "ai_extract"));
+const aiJobs = computed(() => currentJobs.value.filter((job) => job.jobType === "ai_extract"));
 const runningAiJobs = computed(() => aiJobs.value.filter((job) => ["queued", "processing"].includes(job.status)));
 const failedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "failed"));
 const completedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "completed"));
-const canTriggerAi = computed(() => !hasAiContent.value && !runningAiJobs.value.length);
-const aiTriggerLabel = computed(() => failedAiJobs.value.length || completedAiJobs.value.length ? "重新整理" : "开始 AI 整理");
+const aiTriggerState = computed(() => resolveAiTriggerState({
+  triggeringAi: triggeringAi.value,
+  pageMutationPending: savingPages.value || pageRefreshAwaitingJobs.value,
+  jobsLoading: jobsLoading.value,
+  reportStatus: source.value?.status,
+  jobs: currentJobs.value
+}));
+const reprocessNotice = computed(() => resolveReportReprocessNotice(
+  currentJobs.value,
+  hasAiContent.value,
+  pageRefreshAwaitingJobs.value
+));
+const canTriggerAi = computed(() => !hasAiContent.value);
 const aiEmptyHint = computed(() => {
   if (runningAiJobs.value.length) return "AI 整理任务已在队列中，请稍候；处理进度里可以查看当前状态和详细日志。";
   if (failedAiJobs.value.length) return "AI 整理失败，可在处理进度里查看日志，也可以点击“重新整理”再次尝试。";
@@ -270,6 +353,18 @@ function toDateTimeLocalValue(value: string | null | undefined) {
 
 function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
+}
+
+function batchSummary(batch: ProcessingJobBatch) {
+  const completed = batch.jobs.filter((job) => job.status === "completed").length;
+  const failed = batch.jobs.filter((job) => job.status === "failed").length;
+  const cancelled = batch.jobs.filter((job) => job.status === "cancelled").length;
+  return [
+    `${batch.jobs.length} 个任务`,
+    completed ? `完成 ${completed}` : "",
+    failed ? `失败 ${failed}` : "",
+    cancelled ? `取消 ${cancelled}` : ""
+  ].filter(Boolean).join(" · ");
 }
 
 function formatMs(value: number | null) {
@@ -384,9 +479,22 @@ function aiJobStatusLabel(status: string) {
   }[status] || status;
 }
 
+function diagnosticStageLabel(stage: ProcessingJobEventDetail["diagnostics"]["stage"]) {
+  return {
+    local_processing: "文件处理",
+    ocr: "OCR 识别",
+    ai_planning: "AI 规划",
+    ai_call: "AI 解析",
+    supplement: "遗漏补提取",
+    post_processing: "结果校验",
+    completed: "处理完成"
+  }[stage];
+}
+
 function aiUnitTypeLabel(type: AiExtractionUnitProgress["unitType"]) {
   return type === "page_chunk" ? "页内分块" : type === "supplement" ? "遗漏补提取" : "完整页面";
 }
+
 
 function formatPageNumbers(pages: number[]) {
   if (!pages.length) return "页码待规划";
@@ -411,8 +519,13 @@ function aiUnitMeta(unit: AiExtractionUnitProgress) {
   const tokens = unit.promptTokens != null || unit.completionTokens != null
     ? `${unit.promptTokens || 0}/${unit.completionTokens || 0} tokens`
     : "";
+  const candidateProgress = unit.candidateCount > 0
+    ? `候选 ${unit.candidateCount} · 匹配 ${unit.matchedCount}`
+    : "";
   return [
     aiUnitTypeLabel(unit.unitType),
+    unit.characterCount > 0 ? `${unit.characterCount} 字符` : "",
+    candidateProgress,
     unit.attempts > 1 ? `${unit.attempts} 次调用` : unit.attempts === 1 ? "1 次调用" : "",
     formatMs(unit.elapsedMs),
     tokens,
@@ -434,6 +547,12 @@ function previewUrl(page: ReportPage) {
 
 function viewerFullUrl(page: ReportPage) {
   return page.mimeType === "application/pdf" ? previewUrl(page) : originalUrl(page);
+}
+
+function handleOriginalClick(index: number) {
+  const selection = window.getSelection()?.toString() || "";
+  if (selection.trim()) return;
+  openOriginalViewer(index);
 }
 
 function openOriginalViewer(index: number) {
@@ -459,8 +578,29 @@ useScrollLock(computed(() =>
   || Boolean(structuredSectionEditor.value) || allObservationsOpen.value
 ));
 
-function abnormalLabel(value: string | null) {
-  return { high: "偏高", low: "偏低", abnormal: "异常", normal: "正常" }[value || ""] || "";
+function observationAbnormalDisplay(item: ReportDetail["observations"][number]) {
+  return describeObservationAbnormal(item);
+}
+
+function observationFlagVisible(item: ReportDetail["observations"][number]) {
+  return observationAbnormalDisplay(item).visible;
+}
+
+function observationFlagLabel(item: ReportDetail["observations"][number]) {
+  return observationAbnormalDisplay(item).label;
+}
+
+function observationFlagClass(item: ReportDetail["observations"][number]) {
+  const display = observationAbnormalDisplay(item);
+  return {
+    abnormal: display.isAbnormal,
+    review: display.isConflict,
+    computed: display.isComputed,
+  };
+}
+
+function observationInterpretationLine(item: ReportDetail["observations"][number]) {
+  return observationAbnormalDisplay(item).explanation;
 }
 
 function observationValueLine(item: ReportDetail["observations"][number]) {
@@ -473,20 +613,17 @@ function observationValueLine(item: ReportDetail["observations"][number]) {
   return `${result} ${unit}`;
 }
 
+function observationReferenceLine(item: ReportDetail["observations"][number]) {
+  return formatReferenceRange({
+    referenceLow: item.referenceLow,
+    referenceHigh: item.referenceHigh,
+    referenceText: item.referenceText,
+    unit: item.referenceText ? null : item.unit,
+  }, "");
+}
+
 function observationNormalizationLine(item: ReportDetail["observations"][number]) {
-  if (item.canonicalName) {
-    const quality = {
-      high: "高可信",
-      medium: "中可信",
-      low: "低可信",
-      excluded: "已识别"
-    }[String(item.normalizationQuality)] || "已识别";
-    const value = item.canonicalValue !== null && item.canonicalValue !== undefined
-      ? ` · 趋势值 ${item.canonicalValue}${item.canonicalUnit ? ` ${item.canonicalUnit}` : ""}`
-      : "";
-    return `已整理为：${item.canonicalName} · ${quality}${value}`;
-  }
-  return "";
+  return formatObservationNormalization(item);
 }
 
 function medicationDetail(item: ReportDetail["medications"][number]) {
@@ -556,17 +693,24 @@ async function clinicalFactSaved() {
 }
 
 function openClinicalEvidence(evidence: ClinicalEvidence) {
-  const pageNumber = evidence[0]?.pageNumber;
-  if (!pageNumber || !detail.value) {
+  const navigation = resolveClinicalEvidenceNavigation(
+    evidence,
+    detail.value?.pages || [],
+    savingPages.value
+  );
+  if (navigation.status === "pending") {
+    toast.show("报告页面正在更新，请稍候再查看原页");
+    return;
+  }
+  if (navigation.status === "missing_evidence") {
     toast.show("这条记录没有可定位的原页证据");
     return;
   }
-  const index = detail.value.pages.findIndex((page) => page.pageNumber === pageNumber);
-  if (index < 0) {
-    toast.show(`未找到第 ${pageNumber} 页原件`);
+  if (navigation.status === "page_not_found") {
+    toast.show(`未找到第 ${navigation.pageNumber} 页原件，请刷新报告后重试`);
     return;
   }
-  openOriginalViewer(index);
+  openOriginalViewer(navigation.pageIndex);
 }
 
 function removeClinicalFact(type: ClinicalFactType, fact: { id: string }) {
@@ -647,12 +791,36 @@ function morphologyClassificationLine(item: ReportDetail["morphologyFindings"][n
     || [item.classification.system, item.classification.value].filter(Boolean).join(" ");
 }
 
+function morphologyEvidenceItems(item: ReportDetail["morphologyFindings"][number]) {
+  const seen = new Set<string>();
+  return item.evidence.filter((evidence) => {
+    const key = `${evidence.pageNumber}:${evidence.quote.normalize("NFKC").replace(/\s+/g, "")}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function morphologyEvidencePagesLine(item: ReportDetail["morphologyFindings"][number]) {
+  const pages = [...new Set(
+    morphologyEvidenceItems(item)
+      .map((evidence) => evidence.pageNumber)
+      .filter((pageNumber) => pageNumber > 0),
+  )].sort((left, right) => left - right);
+  return pages.length ? `第 ${pages.join("、")} 页` : "";
+}
+
+function openMorphologyEvidencePage(pageNumber: number) {
+  const index = detail.value?.pages.findIndex((page) => page.pageNumber === pageNumber) ?? -1;
+  if (index >= 0) openOriginalViewer(index);
+}
+
 async function morphologySaved() {
   await loadDetail(props.reportId, true);
   emit("updated");
 }
 
-function openEditReport() {
+async function openEditReport() {
   const current = source.value;
   if (!current) return;
   const reportId = props.reportId;
@@ -684,6 +852,7 @@ function openEditReport() {
   ) {
     void loadOcrPages(reportId);
   }
+  if (currentOriginalPage.value) await loadOcrDetail(currentOriginalPage.value.id);
 }
 
 async function saveReportFields() {
@@ -712,7 +881,9 @@ async function savePageLayout(pages: ReportPage[]) {
       method: "PUT",
       body: JSON.stringify({ pages: pages.map((page) => ({ id: page.id, rotation: page.rotation })) })
     });
+    pageRefreshAwaitingJobs.value = true;
     await refreshJobs(true);
+    emit("updated");
     toast.show("页面调整已保存，正在重新生成缩略图/OCR");
   } catch (cause) {
     detailError.value = cause instanceof Error ? cause.message : "页面调整失败";
@@ -746,8 +917,10 @@ async function deleteSavedPage(page: ReportPage) {
       savingPages.value = true;
       try {
         detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" });
+        pageRefreshAwaitingJobs.value = true;
+        await refreshJobs(true);
         emit("updated");
-        toast.show("页面已删除");
+        toast.show("页面已删除，正在重新生成缩略图/OCR");
       } catch (cause) {
         detailError.value = cause instanceof Error ? cause.message : "页面删除失败";
       } finally {
@@ -779,6 +952,7 @@ watch(editOriginalIndex, (index) => {
   const page = detail.value?.pages[index];
   if (!page) return;
   document.getElementById(`edit-ocr-page-${page.pageNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (editOpen.value) void loadOcrDetail(page.id);
 });
 
 async function loadOcrPages(reportId = props.reportId) {
@@ -801,9 +975,107 @@ async function loadOcrPages(reportId = props.reportId) {
   }
 }
 
+async function loadOcrDetail(pageId: string) {
+  if (!pageId || ocrDetailPage.value?.pageId === pageId) return;
+  ocrDetailLoading.value = true;
+  ocrDetailError.value = "";
+  ocrDetailPage.value = null;
+  try {
+    ocrDetailPage.value = await request<OcrPageDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(pageId)}/ocr`);
+  } catch (cause) {
+    ocrDetailError.value = cause instanceof Error ? cause.message : "无法读取 OCR 详情";
+  } finally {
+    ocrDetailLoading.value = false;
+  }
+}
+
+function reviewIssueLabel(issueType: ProcessingDiagnosticReviewItem["issueType"]) {
+  return {
+    ocr_content: "OCR 内容问题",
+    ai_missing: "AI 未提取",
+    layout_ambiguity: "版面歧义",
+    evidence_rejected: "证据校验拒绝"
+  }[issueType];
+}
+
+function reportPageByNumber(pageNumber: number) {
+  return detail.value?.pages.find((page) => page.pageNumber === pageNumber) || null;
+}
+
+function reviewOriginalUrl(pageNumber: number) {
+  const page = reportPageByNumber(pageNumber);
+  return page ? viewerFullUrl(page) : "";
+}
+
+function isDiagnosticSourceLine(lineId: string) {
+  return diagnosticSourceLineIds.value.includes(lineId);
+}
+
+function setOcrCompareImage(element: unknown) {
+  ocrCompareImage.value = element instanceof HTMLImageElement ? element : null;
+}
+
+function onOriginalImageLoad(pageId: string) {
+  loadedOriginalImagePageId.value = pageId;
+}
+
+function onOcrCompareImageLoad(pageId: string) {
+  loadedOcrCompareImagePageId.value = pageId;
+}
+
+// 用已知的页面宽高比给图片占位，翻页时先撑出高度，避免图片加载完成后布局跳动。
+// auto 关键字让加载完成的图片回退到真实比例，占位比例只在加载前生效。
+function originalImageAspectStyle(page: { width: number | null; height: number | null }) {
+  if (!page.width || !page.height) return undefined;
+  return { aspectRatio: `auto ${page.width} / ${page.height}` };
+}
+
+async function toggleOcrPageCompare(pageNumber: number) {
+  if (ocrComparePageNumber.value === pageNumber) {
+    ocrComparePageNumber.value = null;
+    ocrCompareImage.value = null;
+    ocrDetailPage.value = null;
+    ocrDetailError.value = "";
+    return;
+  }
+  ocrComparePageNumber.value = pageNumber;
+  ocrCompareImage.value = null;
+  const page = ocrPages.value.find((item) => item.pageNumber === pageNumber);
+  if (page) await loadOcrDetail(page.pageId);
+}
+
+function closeOcrText() {
+  ocrSheetOpen.value = false;
+  diagnosticReviewItem.value = null;
+  ocrComparePageNumber.value = null;
+  ocrCompareImage.value = null;
+  ocrDetailPage.value = null;
+  ocrDetailError.value = "";
+}
+
 async function openOcrText() {
+  diagnosticReviewItem.value = null;
+  ocrComparePageNumber.value = null;
+  ocrCompareImage.value = null;
+  ocrDetailPage.value = null;
   ocrSheetOpen.value = true;
   await loadOcrPages(props.reportId);
+}
+
+async function openDiagnosticReview(item: ProcessingDiagnosticReviewItem) {
+  diagnosticReviewItem.value = item;
+  const pageNumber = item.pages[0] ?? null;
+  ocrComparePageNumber.value = null;
+  ocrCompareImage.value = null;
+  ocrDetailPage.value = null;
+  closeJobEvents();
+  ocrSheetOpen.value = true;
+  await loadOcrPages(props.reportId);
+  if (pageNumber != null) {
+    await toggleOcrPageCompare(pageNumber);
+    await nextTick();
+    document.getElementById(`ocr-review-page-${pageNumber}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 }
 
 async function confirmReady() {
@@ -850,12 +1122,21 @@ async function trashCurrentReport() {
   }
 }
 
-async function triggerAiExtraction() {
+async function focusQueuedProcessing(closeDiagnosticReview: boolean) {
+  if (closeDiagnosticReview) closeOcrText();
+  processingExpanded.value = true;
+  await nextTick();
+  document.getElementById("report-processing-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+async function queueAiExtraction(closeDiagnosticReview: boolean) {
+  if (triggeringAi.value || aiTriggerState.value.disabled) return;
   triggeringAi.value = true;
   jobsError.value = "";
   try {
     await request(`reports/${encodeURIComponent(props.reportId)}/ai`, { method: "POST" });
     await refreshJobs();
+    await focusQueuedProcessing(closeDiagnosticReview);
     toast.show("AI 整理任务已加入队列");
   } catch (cause) {
     failJobsAction(cause, "AI 整理触发失败");
@@ -864,12 +1145,36 @@ async function triggerAiExtraction() {
   }
 }
 
-async function reprocessCurrentReport() {
-  if (reprocessingReport.value) return;
+function requestAiExtraction(closeDiagnosticReview = false) {
+  if (triggeringAi.value || aiTriggerState.value.disabled) return;
+  const title = source.value?.title || "当前报告";
+  const isRetry = closeDiagnosticReview || aiJobs.value.length > 0 || hasAiContent.value;
+  confirmDialog.ask({
+    title: isRetry ? "重新 AI 整理" : "开始 AI 整理",
+    message: `确认${isRetry ? "重新" : "开始"}整理「${title}」？\n\n系统会复用当前 OCR 文本生成 AI 整理结果和指标。在新结果完整成功前，当前已保存的报告数据和趋势会继续显示；本次失败也不会覆盖旧结果。已人工校对的字段会保留且不会被 AI 自动覆盖。`,
+    confirmText: isRetry ? "重新整理" : "开始整理",
+    run: () => queueAiExtraction(closeDiagnosticReview)
+  });
+}
+
+function triggerAiExtraction() {
+  requestAiExtraction(false);
+}
+
+function runReprocessNoticeAction() {
+  if (reprocessNotice.value?.action === "retry_ai") {
+    triggerAiExtraction();
+    return;
+  }
+  if (reprocessNotice.value?.action === "retry_ocr_ai") reprocessCurrentReport();
+}
+
+function requestReportReprocess(closeDiagnosticReview = false) {
+  if (processingRecoveryState.value.reprocessDisabled) return;
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "重新识别",
-    message: `确认重新识别「${title}」？\n\n会清空这份报告当前的 OCR 文本、AI 整理结果和指标，然后重新 OCR；原件不会删除，已人工校对的字段会保留且不会被 AI 自动覆盖。`,
+    message: `确认重新识别「${title}」？\n\n系统会基于原件重新生成 OCR、AI 整理结果和指标。在新结果完整成功前，当前已保存的报告数据和趋势会继续显示；本次失败也不会覆盖旧结果。已人工校对的字段会保留且不会被 AI 自动覆盖。`,
     confirmText: "重新识别",
     run: async () => {
       reprocessingReport.value = true;
@@ -879,9 +1184,9 @@ async function reprocessCurrentReport() {
           `reports/${encodeURIComponent(props.reportId)}/reprocess`,
           { method: "POST" }
         );
-        processingExpanded.value = true;
         await refreshJobs();
         await loadDetail(props.reportId, true);
+        await focusQueuedProcessing(closeDiagnosticReview);
         emit("updated");
         toast.show(result.aiWillRun
           ? `已重新排队 OCR ${result.queuedOcr} 页，完成后会自动 AI 整理`
@@ -893,6 +1198,18 @@ async function reprocessCurrentReport() {
       }
     }
   });
+}
+
+function reprocessCurrentReport() {
+  requestReportReprocess(false);
+}
+
+function repairDiagnosticIssue(item: ProcessingDiagnosticReviewItem) {
+  if (diagnosticRepairMode(item) === "ocr_ai") {
+    requestReportReprocess(true);
+    return;
+  }
+  requestAiExtraction(true);
 }
 
 function handleViewerKeydown(event: KeyboardEvent) {
@@ -955,15 +1272,26 @@ async function refreshJobs(silent = false) {
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
     selectedJobs.value = nextJobs;
+    jobsPollingStopped.value = false;
     if (eventJob.value) {
       eventJob.value = nextJobs.find((job) => job.id === eventJob.value?.id) || eventJob.value;
     }
     jobsPollFailures = 0;
     if (ocr) runtimeAvailable.value = ocr.available;
-    const settled = nextJobs.length > 0 && nextJobs.every((job) => ["completed", "failed"].includes(job.status));
-    const newlyFailed = nextJobs.some((job) => job.status === "failed" && previousStatuses.get(job.id) !== "failed");
+    const nextCurrentJobs = groupProcessingJobBatches(nextJobs).currentJobs;
+    if (
+      pageRefreshAwaitingJobs.value
+      && nextCurrentJobs.some((job) => job.pipelineVersion === "manual-page-v1")
+    ) {
+      pageRefreshAwaitingJobs.value = false;
+    }
+    const settled = isProcessingJobBatchSettled(nextCurrentJobs);
+    const newlyFailed = nextCurrentJobs.some((job) => job.status === "failed" && previousStatuses.get(job.id) !== "failed");
     /* 级联刷新（详情+提醒+列表）节流 10 秒；任务全部结束或出现新失败时立即同步 */
-    const shouldSync = jobStatusChanged && (settled || newlyFailed || Date.now() - lastDetailSyncAt > 10000);
+    const syncIntervalElapsed = Date.now() - lastDetailSyncAt > 10000;
+    const finalDetailMayBeStale = settled && ["queued", "processing"].includes(source.value?.status || "");
+    const shouldSync = (jobStatusChanged && (settled || newlyFailed || syncIntervalElapsed))
+      || (finalDetailMayBeStale && syncIntervalElapsed);
     if (shouldSync && props.reportId === reportId) {
       lastDetailSyncAt = Date.now();
       await loadDetail(reportId, true);
@@ -976,8 +1304,12 @@ async function refreshJobs(silent = false) {
     jobsPollFailures += 1;
     /* 轮询允许偶发失败（网络抖动），连续 3 次失败才停止并提示，避免进度条假死 */
     if (!silent || jobsPollFailures >= 3) {
+      jobsPollingStopped.value = true;
       failJobsAction(cause, "无法读取处理进度");
       stopJobsPolling();
+    } else {
+      /* 页面保存已经成功时，即使第一次任务读取遇到网络抖动，也继续按报告 processing 状态自动恢复轮询。 */
+      maybeStartJobsPolling();
     }
   } finally {
     if (!silent && jobsLoadingSeq === seq && props.reportId === reportId) jobsLoading.value = false;
@@ -1062,11 +1394,13 @@ watch(() => props.reportId, (reportId) => {
   jobsLoadingSeq = 0;
   ocrSeq += 1;
   selectedJobs.value = [];
+  pageRefreshAwaitingJobs.value = false;
   jobsLoading.value = false;
   jobsPollFailures = 0;
+  jobsPollingStopped.value = false;
   jobsError.value = "";
   processingExpanded.value = false;
-  ocrSheetOpen.value = false;
+  closeOcrText();
   ocrPages.value = [];
   ocrReportId.value = null;
   ocrLoading.value = false;
@@ -1140,6 +1474,7 @@ onActivated(() => {
         <div><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}<span v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>页数</dt><dd>{{ source.pageCount || 0 }} 页</dd></div>
         <div><dt>状态</dt><dd>{{ statusMeta[source.status]?.label || source.status }}</dd></div>
+        <div v-if="currentDetail?.createdAt"><dt>上传时间</dt><dd>{{ formatDatabaseTimeWithYear(currentDetail.createdAt) }}</dd></div>
       </dl>
       <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取报告详情</div>
       <div class="report-action-row">
@@ -1152,6 +1487,24 @@ onActivated(() => {
         <button class="soft-action-button" type="button" @click="openOcrText"><ScrollText :size="17" />查看 OCR</button>
         <button v-if="firstPdfPage" class="soft-action-button" type="button" @click="openPdfOriginalViewer(firstPdfPage)"><FileText :size="17" />查看 PDF</button>
       </div>
+      <section v-if="reprocessNotice" class="reprocess-notice" :class="`is-${reprocessNotice.tone}`">
+        <LoaderCircle v-if="reprocessNotice.tone === 'info'" class="spin-icon" :size="19" />
+        <CircleAlert v-else :size="19" />
+        <div>
+          <strong>{{ reprocessNotice.title }}</strong>
+          <p>{{ reprocessNotice.message }}</p>
+        </div>
+        <button
+          v-if="reprocessNotice.action"
+          type="button"
+          :disabled="reprocessingReport || triggeringAi || hasRunningJobs"
+          @click="runReprocessNoticeAction"
+        >
+          <LoaderCircle v-if="reprocessingReport || triggeringAi" class="spin-icon" :size="15" />
+          <RefreshCw v-else :size="15" />
+          {{ reprocessingReport || triggeringAi ? "提交中" : reprocessNotice.actionLabel }}
+        </button>
+      </section>
       <section v-if="duplicateCandidates.length" class="duplicate-warning">
         <CircleAlert :size="18" />
         <div>
@@ -1180,10 +1533,10 @@ onActivated(() => {
       <div class="section-title-row">
         <div><h4>AI 整理结果</h4><p>{{ hasAiContent ? "以下内容来自 OCR 后的结构化整理，确认前请核对原件。" : "AI 尚未整理出结构化内容。" }}</p></div>
         <div class="section-title-actions">
-          <button v-if="canTriggerAi" class="soft-action-button ai-trigger-button" type="button" :disabled="triggeringAi" @click="triggerAiExtraction">
-            <LoaderCircle v-if="triggeringAi" class="spin-icon" :size="16" />
+          <button v-if="canTriggerAi" class="soft-action-button ai-trigger-button" type="button" :disabled="aiTriggerState.disabled" @click="triggerAiExtraction">
+            <LoaderCircle v-if="aiTriggerState.loading" class="spin-icon" :size="16" />
             <Sparkles v-else :size="16" />
-            {{ triggeringAi ? "提交中" : aiTriggerLabel }}
+            {{ aiTriggerState.label }}
           </button>
           <Sparkles :size="19" />
         </div>
@@ -1229,7 +1582,7 @@ onActivated(() => {
                   <em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em>
                 </strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对专属内容" @click="structuredSectionEditor = item"><Pencil :size="15" /></button>
                   <button type="button" title="删除专属内容" @click="removeStructuredSection(item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1245,7 +1598,7 @@ onActivated(() => {
               <div class="clinical-fact-heading">
                 <strong>{{ item.diagnosisText }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对诊断" @click="editClinicalFact('diagnosis', item)"><Pencil :size="15" /></button>
                   <button type="button" title="删除诊断" @click="removeClinicalFact('diagnosis', item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1261,7 +1614,7 @@ onActivated(() => {
               <div class="clinical-fact-heading">
                 <strong>{{ item.medicationName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对用药" @click="editClinicalFact('medication', item)"><Pencil :size="15" /></button>
                   <button type="button" title="删除用药" @click="removeClinicalFact('medication', item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1278,7 +1631,7 @@ onActivated(() => {
               <div class="clinical-fact-heading">
                 <strong>{{ item.procedureName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对操作" @click="editClinicalFact('procedure', item)"><Pencil :size="15" /></button>
                   <button type="button" title="删除操作" @click="removeClinicalFact('procedure', item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1294,7 +1647,7 @@ onActivated(() => {
               <div class="clinical-fact-heading">
                 <strong>{{ item.vaccineName }}<template v-if="item.doseNumber"> · {{ item.doseNumber }}</template><em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
                   <button type="button" title="删除疫苗" @click="removeClinicalFact('vaccination', item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1313,7 +1666,7 @@ onActivated(() => {
               <em v-if="detail.billingSummary.manualFields.length" class="manual-field-chip">人工校对</em>
             </div>
             <div class="clinical-fact-actions">
-              <button v-if="detail.billingSummary.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(detail.billingSummary.evidence)"><FileImage :size="15" /></button>
+              <button v-if="detail.billingSummary.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(detail.billingSummary.evidence)"><FileImage :size="15" /></button>
               <button type="button" title="校对费用汇总" @click="editClinicalFact('billingSummary', detail.billingSummary)"><Pencil :size="15" /></button>
               <button type="button" title="删除费用汇总" @click="removeClinicalFact('billingSummary', detail.billingSummary)"><Trash2 :size="15" /></button>
             </div>
@@ -1323,7 +1676,7 @@ onActivated(() => {
               <div class="clinical-fact-heading">
                 <strong>{{ item.itemName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
-                  <button v-if="item.evidence.length" type="button" title="查看原页" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
+                  <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
                   <button type="button" title="校对费用明细" @click="editClinicalFact('billingItem', item)"><Pencil :size="15" /></button>
                   <button type="button" title="删除费用明细" @click="removeClinicalFact('billingItem', item)"><Trash2 :size="15" /></button>
                 </div>
@@ -1361,31 +1714,56 @@ onActivated(() => {
                   {{ measurement.key }} {{ measurement.value }}{{ measurement.unit ? ` ${measurement.unit}` : "" }}
                 </span>
               </div>
-              <details v-if="item.rawText" class="morphology-raw">
-                <summary>查看原文<template v-if="item.evidence[0]?.pageNumber"> · 第 {{ item.evidence[0].pageNumber }} 页</template></summary>
-                <p>{{ item.rawText }}</p>
+              <details v-if="item.evidence.length || item.rawText" class="morphology-raw">
+                <summary>查看证据<template v-if="morphologyEvidencePagesLine(item)"> · {{ morphologyEvidencePagesLine(item) }}</template></summary>
+                <div v-if="morphologyEvidenceItems(item).length" class="morphology-evidence-list">
+                  <article
+                    v-for="evidence in morphologyEvidenceItems(item)"
+                    :key="`${evidence.pageNumber}-${evidence.quote}`"
+                  >
+                    <button
+                      v-if="reportPageByNumber(evidence.pageNumber)"
+                      type="button"
+                      title="查看该证据所在页"
+                      @click="openMorphologyEvidencePage(evidence.pageNumber)"
+                    >
+                      第 {{ evidence.pageNumber }} 页
+                    </button>
+                    <span v-else>第 {{ evidence.pageNumber }} 页</span>
+                    <p>{{ evidence.quote }}</p>
+                  </article>
+                </div>
+                <p v-else>{{ item.rawText }}</p>
               </details>
             </article>
           </div>
         </section>
         <section v-if="detail?.observations.length" class="observation-panel">
           <header>
-            <strong>结构化指标</strong>
-            <span>共 {{ detail.observations.length }} 项<template v-if="abnormalObservations.length"> · {{ abnormalObservations.length }} 项异常</template></span>
+            <strong>{{ primaryObservations.length ? "标准化指标" : "已核验指标" }}</strong>
+            <span>
+              {{ primaryObservations.length ? primaryObservations.length : secondaryObservations.length }} 项
+              <template v-if="abnormalObservations.length"> · {{ abnormalObservations.length }} 项异常</template>
+              <template v-if="conflictingObservations.length"> · {{ conflictingObservations.length }} 项待核验</template>
+            </span>
           </header>
           <div class="observation-list">
             <article v-for="item in visibleObservations" :key="item.id">
               <strong>{{ item.itemName }}</strong>
-              <p>{{ observationValueLine(item) }}<em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em></p>
-              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="item.referenceText">参考 {{ item.referenceText }}</span></div>
+              <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
               <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
               <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
             </article>
           </div>
-          <div v-if="detail.observations.length > visibleObservations.length" class="observation-panel-footer">
-            <span>已显示前 {{ visibleObservations.length }} 项</span>
+          <div v-if="readableObservations.length > visibleObservations.length || governanceObservations.length" class="observation-panel-footer">
+            <span>
+              <template v-if="readableObservations.length > visibleObservations.length">已显示前 {{ visibleObservations.length }} 项</template>
+              <template v-else>指标已按可信度分层</template>
+            </span>
             <button type="button" @click="allObservationsOpen = true">
-              查看全部
+              查看全部<template v-if="secondaryObservations.length"> · {{ secondaryObservations.length }} 项待标准化</template>
               <ChevronRight :size="16" />
             </button>
           </div>
@@ -1419,18 +1797,20 @@ onActivated(() => {
       @saved="structuredSectionSaved"
     />
 
-    <article class="preview-card processing-card">
+    <article id="report-processing-section" class="preview-card processing-card">
       <div class="section-title-row">
         <div>
-          <h4>处理进度</h4>
-          <p v-if="selectedJobs.length">已完成 {{ completedJobs }} / {{ selectedJobs.length }}，失败 {{ failedJobs.length }} 个</p>
+          <h4>当前处理</h4>
+          <p v-if="currentBatch">
+            {{ processingJobBatchLabel(currentBatch) }} · 已完成 {{ completedJobs }} / {{ currentJobs.length }}，失败 {{ failedJobs.length }} 个
+          </p>
           <p v-else>{{ jobsLoading ? "正在读取任务状态" : "这份报告暂无后台任务记录" }}</p>
         </div>
         <div class="section-title-actions">
-          <button class="soft-action-button reprocess-action-button" type="button" :disabled="reprocessingReport || hasProcessingJobs" @click="reprocessCurrentReport">
-            <LoaderCircle v-if="reprocessingReport" class="spin-icon" :size="16" />
+          <button class="soft-action-button reprocess-action-button" type="button" :disabled="processingRecoveryState.reprocessDisabled" @click="reprocessCurrentReport">
+            <LoaderCircle v-if="reprocessingReport || jobsLoading" class="spin-icon" :size="16" />
             <RefreshCw v-else :size="16" />
-            {{ reprocessingReport ? "提交中" : "重跑 OCR+AI" }}
+            {{ processingRecoveryState.reprocessLabel }}
           </button>
           <button
             v-if="selectedJobs.length || jobsError || needsOcrRuntime"
@@ -1447,7 +1827,7 @@ onActivated(() => {
           </button>
         </div>
       </div>
-      <div v-if="selectedJobs.length" class="job-progress-compact">
+      <div v-if="currentJobs.length" class="job-progress-compact">
         <div class="job-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
           <span :style="{ width: `${progressPercent}%` }"></span>
         </div>
@@ -1459,29 +1839,91 @@ onActivated(() => {
           <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isGatewayAdmin ? "原件已保存，安装后任务会自动继续。" : "原件已保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
           <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/runtime">去设置</RouterLink>
         </div>
-        <p v-if="jobsError" class="inline-panel-error">{{ jobsError }}</p>
-        <div v-if="selectedJobs.length" class="job-log-list">
-          <article v-for="job in selectedJobs" :key="job.id" class="job-log-item">
-            <span class="job-icon" :class="`job-icon--${job.status}`">
-              <CheckCircle2 v-if="job.status === 'completed'" :size="17" />
-              <CircleAlert v-else-if="job.status === 'failed'" :size="17" />
-              <LoaderCircle v-else-if="job.status === 'processing'" class="spin-icon" :size="17" />
-              <Clock3 v-else :size="17" />
-            </span>
-            <div>
-              <header>
-                <strong>{{ jobLabel(job.jobType) }}</strong>
-                <span class="chip" :class="jobStatusMeta[job.status].chip">{{ jobStatusMeta[job.status].label }}</span>
-              </header>
-              <span>{{ jobMeta(job) }}</span>
-              <small>{{ jobDetail(job) }}</small>
-            </div>
-            <div class="job-log-actions">
-              <button type="button" @click="openJobEvents(job)"><ScrollText :size="16" />日志</button>
-              <button v-if="job.status === 'failed'" class="retry-action" type="button" @click="retryJob(job)"><RefreshCw :size="16" />重试</button>
-            </div>
-          </article>
+        <div v-if="jobsPollingStopped" class="processing-recovery-notice">
+          <CircleAlert :size="18" />
+          <div>
+            <strong>处理进度暂时无法读取</strong>
+            <span>报告任务不会因此重复提交。请重新连接后继续读取状态。</span>
+            <small v-if="jobsError">{{ jobsError }}</small>
+          </div>
+          <button type="button" :disabled="jobsLoading" @click="refreshJobs()">
+            <LoaderCircle v-if="jobsLoading" class="spin-icon" :size="15" />
+            <RefreshCw v-else :size="15" />
+            {{ jobsLoading ? "连接中" : "重新连接" }}
+          </button>
         </div>
+        <p v-else-if="jobsError" class="inline-panel-error">{{ jobsError }}</p>
+        <div v-if="processingDelayNotice && !jobsPollingStopped" class="runtime-warning compact processing-delay-notice">
+          <Clock3 :size="18" />
+          <div><strong>{{ processingDelayNotice.title }}</strong><span>{{ processingDelayNotice.message }}</span></div>
+          <button type="button" :disabled="jobsLoading" @click="refreshJobs()">刷新进度</button>
+        </div>
+        <section v-if="currentBatch" class="processing-current-batch">
+          <header class="processing-batch-heading">
+            <div>
+              <strong>{{ processingJobBatchLabel(currentBatch) }}</strong>
+              <span>{{ formatDatabaseTime(currentBatch.startedAt) }} · {{ batchSummary(currentBatch) }}</span>
+            </div>
+            <span class="chip" :class="jobStatusMeta[currentBatch.status].chip">{{ jobStatusMeta[currentBatch.status].label }}</span>
+          </header>
+          <div class="job-log-list">
+            <article v-for="job in currentJobs" :key="job.id" class="job-log-item">
+              <span class="job-icon" :class="`job-icon--${job.status}`">
+                <CheckCircle2 v-if="job.status === 'completed'" :size="17" />
+                <CircleAlert v-else-if="job.status === 'failed'" :size="17" />
+                <LoaderCircle v-else-if="job.status === 'processing'" class="spin-icon" :size="17" />
+                <Clock3 v-else :size="17" />
+              </span>
+              <div>
+                <header>
+                  <strong>{{ jobLabel(job.jobType) }}</strong>
+                  <span class="chip" :class="jobStatusMeta[job.status].chip">{{ jobStatusMeta[job.status].label }}</span>
+                </header>
+                <span>{{ jobMeta(job) }}</span>
+                <small>{{ jobDetail(job) }}</small>
+              </div>
+              <div class="job-log-actions">
+                <button type="button" @click="openJobEvents(job)"><ScrollText :size="16" />日志</button>
+                <button v-if="job.status === 'failed'" class="retry-action" type="button" @click="retryJob(job)"><RefreshCw :size="16" />重试</button>
+              </div>
+            </article>
+          </div>
+        </section>
+        <details v-if="historicalBatches.length" class="processing-history">
+          <summary>历史处理记录（{{ historicalBatches.length }} 次）</summary>
+          <div class="processing-history-list">
+            <details v-for="batch in historicalBatches" :key="batch.id" class="processing-history-batch">
+              <summary>
+                <span>
+                  <strong>{{ processingJobBatchLabel(batch) }}</strong>
+                  <small>{{ formatDatabaseTime(batch.startedAt) }} · {{ batchSummary(batch) }}</small>
+                </span>
+                <span class="chip" :class="jobStatusMeta[batch.status].chip">{{ jobStatusMeta[batch.status].label }}</span>
+              </summary>
+              <div class="job-log-list historical-job-log-list">
+                <article v-for="job in batch.jobs" :key="job.id" class="job-log-item">
+                  <span class="job-icon" :class="`job-icon--${job.status}`">
+                    <CheckCircle2 v-if="job.status === 'completed'" :size="17" />
+                    <CircleAlert v-else-if="job.status === 'failed'" :size="17" />
+                    <LoaderCircle v-else-if="job.status === 'processing'" class="spin-icon" :size="17" />
+                    <Clock3 v-else :size="17" />
+                  </span>
+                  <div>
+                    <header>
+                      <strong>{{ jobLabel(job.jobType) }}</strong>
+                      <span class="chip" :class="jobStatusMeta[job.status].chip">{{ jobStatusMeta[job.status].label }}</span>
+                    </header>
+                    <span>{{ jobMeta(job) }}</span>
+                    <small>{{ jobDetail(job) }}</small>
+                  </div>
+                  <div class="job-log-actions">
+                    <button type="button" @click="openJobEvents(job)"><ScrollText :size="16" />日志</button>
+                  </div>
+                </article>
+              </div>
+            </details>
+          </div>
+        </details>
       </div>
     </article>
 
@@ -1491,7 +1933,7 @@ onActivated(() => {
       </div>
       <div v-if="detail?.pages.length" class="original-grid">
         <div v-for="(page, index) in detail.pages" :key="page.id" class="original-tile-card">
-          <button type="button" class="original-tile" @click="openOriginalViewer(index)">
+          <button type="button" class="original-tile" :disabled="savingPages" @click="openOriginalViewer(index)">
             <img v-if="page.hasThumbnail" :src="thumbnailUrl(page)" alt="" loading="lazy" decoding="async" />
             <FileText v-else-if="page.mimeType === 'application/pdf'" :size="28" />
             <FileImage v-else :size="28" />
@@ -1518,21 +1960,74 @@ onActivated(() => {
             <ScrollText :size="20" />
             <div class="observation-all-title">
               <h3>全部结构化指标</h3>
-              <p>共 {{ detail.observations.length }} 项<template v-if="abnormalObservations.length"> · {{ abnormalObservations.length }} 项异常</template></p>
+              <p>{{ readableObservations.length }} 项可查看<template v-if="governanceObservations.length"> · {{ governanceObservations.length }} 项待治理</template></p>
             </div>
           </div>
           <button class="plain-icon-button" type="button" title="关闭" @click="allObservationsOpen = false"><X :size="18" /></button>
         </header>
         <div class="observation-all-body">
-          <div class="observation-list">
-            <article v-for="item in detail.observations" :key="item.id">
-              <strong>{{ item.itemName }}</strong>
-              <p>{{ observationValueLine(item) }}<em v-if="item.abnormalFlag" :class="{ abnormal: item.abnormalFlag !== 'normal' }">{{ abnormalLabel(item.abnormalFlag) }}</em></p>
-              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="item.referenceText">参考 {{ item.referenceText }}</span></div>
-              <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
-              <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
-            </article>
-          </div>
+          <section v-if="primaryObservations.length" class="observation-tier-section">
+            <header><strong>标准化指标</strong><span>{{ primaryObservations.length }} 项，可参与趋势门禁判断</span></header>
+            <div class="observation-list">
+              <article v-for="item in primaryObservations" :key="item.id">
+                <strong>{{ item.itemName }}</strong>
+                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
+                <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
+                <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
+              </article>
+            </div>
+          </section>
+          <section v-if="medicalCandidateObservations.length" class="observation-tier-section">
+            <header><strong>待补标准指标</strong><span>{{ medicalCandidateObservations.length }} 项，已核验但暂不进入趋势</span></header>
+            <div class="observation-list">
+              <article v-for="item in medicalCandidateObservations" :key="item.id">
+                <strong>{{ item.itemName }}</strong>
+                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
+                <small class="observation-display-reason">{{ item.displayReason }}</small>
+                <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
+              </article>
+            </div>
+          </section>
+          <section v-if="qualitativeObservations.length" class="observation-tier-section">
+            <header><strong>定性检查记录</strong><span>{{ qualitativeObservations.length }} 项，保留原报告语义</span></header>
+            <div class="observation-list">
+              <article v-for="item in qualitativeObservations" :key="item.id">
+                <strong>{{ item.itemName }}</strong>
+                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
+                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
+                <small class="observation-display-reason">{{ item.displayReason }}</small>
+              </article>
+            </div>
+          </section>
+          <section v-if="technicalObservations.length" class="observation-tier-section">
+            <header><strong>专业技术参数</strong><span>{{ technicalObservations.length }} 项，默认不进入家庭趋势</span></header>
+            <div class="observation-list">
+              <article v-for="item in technicalObservations" :key="item.id">
+                <strong>{{ item.itemName }}</strong>
+                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
+                <small class="observation-display-reason">{{ item.displayReason }}</small>
+              </article>
+            </div>
+          </section>
+          <details v-if="governanceObservations.length" class="observation-governance-section">
+            <summary>待治理项（{{ governanceObservations.length }}）</summary>
+            <p>设备过程参数或证据不足项默认不混入家庭健康指标。</p>
+            <div class="observation-list">
+              <article v-for="item in governanceObservations" :key="item.id">
+                <strong>{{ item.itemName }}</strong>
+                <p>{{ observationValueLine(item) }}</p>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
+                <small class="observation-display-reason">{{ item.displayReason }}</small>
+              </article>
+            </div>
+          </details>
         </div>
       </section>
     </div>
@@ -1550,10 +2045,20 @@ onActivated(() => {
         </header>
         <div class="edit-workspace-body">
           <section class="edit-col edit-col-originals">
-            <h4>报告原件</h4>
-            <button v-if="firstPdfPage" class="soft-action-button edit-original-pdf" type="button" @click="openPdfOriginalViewer(firstPdfPage)">
-              <FileText :size="16" />打开 PDF 原件
-            </button>
+            <div class="section-title-row">
+              <div><h4>报告原件</h4><p>OCR 文字可叠加在原图上选择复制</p></div>
+              <div class="edit-original-actions">
+                <button v-if="currentOriginalPage" type="button" class="soft-action-button" :disabled="ocrDetailLoading" @click="showOcrOverlay = !showOcrOverlay">
+                  <Sparkles :size="14" />
+                  <template v-if="showOcrOverlay">隐藏</template>
+                  <template v-else>显示</template>
+                  OCR
+                </button>
+                <button v-if="firstPdfPage" class="soft-action-button edit-original-pdf" type="button" @click="openPdfOriginalViewer(firstPdfPage)">
+                  <FileText :size="16" />打开 PDF 原件
+                </button>
+              </div>
+            </div>
             <div v-if="currentOriginalPage" class="edit-swiper">
               <button
                 class="edit-swiper-nav edit-swiper-nav--prev"
@@ -1566,15 +2071,29 @@ onActivated(() => {
                 @touchend="onOriginalSwipeEnd"
               >
                 <Transition name="page-fade" mode="out-in">
-                  <button
+                 <div
                     :key="currentOriginalPage.id"
-                    type="button"
                     class="edit-original-page"
+                    role="button"
+                    tabindex="0"
                     :title="`第 ${currentOriginalPage.pageNumber} 页，点击放大`"
-                    @click="openOriginalViewer(editOriginalIndex)"
+                    @click="handleOriginalClick(editOriginalIndex)"
+                    @keydown.enter="openOriginalViewer(editOriginalIndex)"
+                    @keydown.space.prevent="openOriginalViewer(editOriginalIndex)"
                   >
-                    <img :src="viewerFullUrl(currentOriginalPage)" :alt="`第 ${currentOriginalPage.pageNumber} 页`" decoding="async" />
-                  </button>
+                    <div class="edit-original-image-wrapper">
+                      <img
+                        ref="editOriginalImage"
+                        :src="viewerFullUrl(currentOriginalPage)"
+                        :alt="`第 ${currentOriginalPage.pageNumber} 页`"
+                        :style="originalImageAspectStyle(currentOriginalPage)"
+                        decoding="async"
+                        @load="onOriginalImageLoad(currentOriginalPage.id)"
+                      />
+                      <OcrTextOverlay v-if="showOcrOverlay && ocrDetailPage?.pageId === currentOriginalPage.id && loadedOriginalImagePageId === currentOriginalPage.id" :image="editOriginalImage" :lines="ocrDetailPage.lines" :coord-width="ocrDetailPage.coordWidth" :coord-height="ocrDetailPage.coordHeight" />
+                    </div>
+                    <span>第 {{ currentOriginalPage.pageNumber }} 页</span>
+                  </div>
                 </Transition>
               </div>
               <button
@@ -1651,31 +2170,115 @@ onActivated(() => {
   </Teleport>
 
   <Teleport to="body">
-    <div v-if="ocrSheetOpen" class="sheet-backdrop ocr-text-sheet-backdrop" @click.self="ocrSheetOpen = false">
-      <section class="sheet-panel ocr-text-sheet">
+    <div v-if="ocrSheetOpen" class="sheet-backdrop ocr-text-sheet-backdrop" @click.self="closeOcrText">
+      <section class="sheet-panel ocr-text-sheet" :class="{ 'is-reviewing': diagnosticReviewItem }">
         <span class="sheet-grabber"></span>
         <header class="sheet-header">
           <div>
-            <h3>OCR 识别文本</h3>
+            <h3>{{ diagnosticReviewItem ? "OCR 原文核对" : "OCR 识别文本" }}</h3>
             <p>{{ source?.title }} · 敏感号码已过滤</p>
           </div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="ocrSheetOpen = false"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="closeOcrText"><X :size="18" /></button>
         </header>
         <div class="ocr-text-body">
+          <section v-if="diagnosticReviewItem" class="ocr-review-context" :class="`is-${diagnosticReviewItem.issueType}`">
+            <header>
+              <span>{{ reviewIssueLabel(diagnosticReviewItem.issueType) }}</span>
+              <strong>{{ diagnosticReviewItem.title }}</strong>
+            </header>
+            <p>{{ diagnosticReviewItem.description }}</p>
+            <dl>
+              <div><dt>提取结果</dt><dd>{{ diagnosticReviewItem.resultSummary }}</dd></div>
+              <div><dt>核对原因</dt><dd>{{ diagnosticReviewItem.reason }}</dd></div>
+            </dl>
+            <div class="ocr-review-actions">
+              <p>
+                {{ diagnosticRepairDescription(diagnosticReviewItem) }}新结果成功前继续显示当前结果，失败不会覆盖旧结果，人工校对字段也不会被覆盖。
+              </p>
+              <button
+                class="soft-action-button"
+                type="button"
+                :disabled="diagnosticRepairMode(diagnosticReviewItem) === 'ocr_ai'
+                  ? reprocessingReport || triggeringAi || jobsLoading || hasRunningJobs
+                  : reprocessingReport || aiTriggerState.disabled"
+                @click="repairDiagnosticIssue(diagnosticReviewItem)"
+              >
+                <LoaderCircle
+                  v-if="diagnosticRepairMode(diagnosticReviewItem) === 'ocr_ai'
+                    ? reprocessingReport
+                    : aiTriggerState.loading"
+                  class="spin-icon"
+                  :size="16"
+                />
+                <RefreshCw v-else-if="diagnosticRepairMode(diagnosticReviewItem) === 'ocr_ai'" :size="16" />
+                <Sparkles v-else :size="16" />
+                {{ diagnosticRepairMode(diagnosticReviewItem) === 'ocr_ai' && reprocessingReport
+                  ? "提交中"
+                  : diagnosticRepairMode(diagnosticReviewItem) === 'ai' && aiTriggerState.loading
+                    ? aiTriggerState.label
+                    : diagnosticRepairLabel(diagnosticReviewItem) }}
+              </button>
+            </div>
+          </section>
           <div v-if="ocrLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取 OCR 文本</div>
           <p v-else-if="ocrError" class="inline-panel-error">{{ ocrError }}</p>
           <template v-else-if="ocrPages.length">
-            <article v-for="page in ocrPages" :key="page.pageId" class="ocr-page-text">
+            <article
+              v-for="page in ocrPages"
+              :id="`ocr-review-page-${page.pageNumber}`"
+              :key="page.pageId"
+              class="ocr-page-text"
+              :class="{ 'is-review-target': diagnosticReviewItem?.pages.includes(page.pageNumber) }"
+            >
               <header>
-                <strong>第 {{ page.pageNumber }} 页</strong>
-                <span>
-                  {{ page.engine || "未识别" }}<template v-if="page.elapsedMs"> · {{ formatMs(page.elapsedMs) }}</template> · {{ page.lineCount }} 行
-                  <template v-if="page.qualityLevel"> · 质量{{ page.qualityLevel === "good" ? "良好" : page.qualityLevel === "weak" ? "偏弱" : "较差" }} {{ page.qualityScore ?? "—" }}</template>
-                </span>
+                <div>
+                  <strong>第 {{ page.pageNumber }} 页</strong>
+                  <span>
+                    {{ page.engine || "未识别" }}<template v-if="page.elapsedMs"> · {{ formatMs(page.elapsedMs) }}</template> · {{ page.lineCount }} 行
+                    <template v-if="page.qualityLevel"> · 质量{{ page.qualityLevel === "good" ? "良好" : page.qualityLevel === "weak" ? "偏弱" : "较差" }} {{ page.qualityScore ?? "—" }}</template>
+                  </span>
+                </div>
+                <button class="soft-action-button ocr-page-compare-button" type="button" @click="toggleOcrPageCompare(page.pageNumber)">
+                  {{ ocrComparePageNumber === page.pageNumber ? "收起对照" : "原件对照" }}
+                </button>
               </header>
               <p v-if="page.qualityLevel && page.qualityLevel !== 'good'" class="preview-hint">{{ page.qualityReason || "OCR 文本质量不足，AI 整理可能不完整，可尝试重新 OCR 或启用视觉模型兜底。" }}</p>
-              <pre v-if="page.text">{{ page.text }}</pre>
-              <p v-else class="preview-hint">这一页还没有 OCR 文本，可能仍在处理或识别失败。</p>
+              <div v-if="ocrComparePageNumber === page.pageNumber" class="ocr-page-compare">
+                <div class="ocr-page-compare__original">
+                  <div v-if="reviewOriginalUrl(page.pageNumber)" class="ocr-page-compare__image">
+                    <img :ref="setOcrCompareImage" :src="reviewOriginalUrl(page.pageNumber)" :alt="`第 ${page.pageNumber} 页原件`" decoding="async" @load="onOcrCompareImageLoad(page.pageId)" />
+                    <OcrTextOverlay
+                      v-if="ocrDetailPage?.pageId === page.pageId && loadedOcrCompareImagePageId === page.pageId"
+                      :image="ocrCompareImage"
+                      :lines="ocrDetailPage.lines"
+                      :coord-width="ocrDetailPage.coordWidth"
+                      :coord-height="ocrDetailPage.coordHeight"
+                      :highlight-line-ids="diagnosticSourceLineIds"
+                    />
+                  </div>
+                  <p v-else class="preview-hint">未找到这一页的原件预览。</p>
+                </div>
+                <div class="ocr-page-compare__text">
+                  <div v-if="ocrDetailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取页级 OCR</div>
+                  <p v-else-if="ocrDetailError" class="inline-panel-error">{{ ocrDetailError }}</p>
+                  <ol v-else-if="ocrDetailPage?.pageId === page.pageId && ocrDetailPage.lines.length" class="ocr-page-lines">
+                    <li
+                      v-for="line in ocrDetailPage.lines"
+                      :key="line.id"
+                      class="ocr-page-line"
+                      :class="{ 'is-review-source': isDiagnosticSourceLine(line.id) }"
+                    >
+                      <span v-if="isDiagnosticSourceLine(line.id)">候选原文</span>
+                      <p>{{ line.text }}</p>
+                    </li>
+                  </ol>
+                  <p v-else class="preview-hint">这一页没有可展示的 OCR 行。</p>
+                </div>
+              </div>
+              <template v-else>
+                <pre v-if="page.text">{{ page.text }}</pre>
+                <p v-else class="preview-hint">这一页还没有 OCR 文本，可能仍在处理或识别失败。</p>
+              </template>
             </article>
           </template>
           <p v-else class="preview-hint">暂无 OCR 文本。</p>
@@ -1724,6 +2327,52 @@ onActivated(() => {
         <div class="job-event-body">
           <div v-if="eventLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取详细日志</div>
           <p v-if="eventError" class="inline-panel-error">{{ eventError }}</p>
+          <section
+            v-if="!eventLoading && processingDiagnostics"
+            class="processing-diagnostics"
+            :class="`is-${processingDiagnostics.outcome}`"
+          >
+            <header class="processing-diagnostics__header">
+              <span class="processing-diagnostics__icon">
+                <CheckCircle2 v-if="processingDiagnostics.outcome === 'success'" :size="19" />
+                <LoaderCircle v-else-if="processingDiagnostics.outcome === 'running'" class="spin-icon" :size="19" />
+                <CircleAlert v-else :size="19" />
+              </span>
+              <div>
+                <strong>本次处理摘要</strong>
+                <span>{{ processingDiagnostics.headline }}</span>
+              </div>
+              <small>{{ diagnosticStageLabel(processingDiagnostics.stage) }}</small>
+            </header>
+            <div class="processing-diagnostics__metrics">
+              <div v-for="metric in diagnosticMetrics" :key="metric.label">
+                <span>{{ metric.label }}</span>
+                <strong>{{ metric.value }}</strong>
+              </div>
+            </div>
+            <p v-if="processingDiagnostics.supplement.reason" class="processing-diagnostics__supplement">
+              {{ processingDiagnostics.supplement.reason }}
+            </p>
+            <ul v-if="processingDiagnostics.reasons.length" class="processing-diagnostics__reasons">
+              <li v-for="reason in processingDiagnostics.reasons" :key="reason.code" :class="`is-${reason.severity}`">
+                <span>{{ processingCodeLabel(reason.code) }}</span>
+                <p>{{ reason.message }}<template v-if="reason.pages.length"> · {{ formatPageNumbers(reason.pages) }}</template></p>
+              </li>
+            </ul>
+            <div v-if="processingDiagnostics.reviewItems.length" class="processing-review-list">
+              <article v-for="item in processingDiagnostics.reviewItems" :key="item.id" class="processing-review-item" :class="`is-${item.issueType}`">
+                <div class="processing-review-item__type">{{ reviewIssueLabel(item.issueType) }}</div>
+                <div class="processing-review-item__content">
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.resultSummary }}</p>
+                  <small>{{ item.reason }}</small>
+                </div>
+                <button v-if="item.pages.length" class="soft-action-button" type="button" @click="openDiagnosticReview(item)">
+                  核对第 {{ item.pages[0] }} 页
+                </button>
+              </article>
+            </div>
+          </section>
           <div v-if="!eventLoading && isAiEventLog && jobEventDetail" class="ai-job-plan">
             <section class="ai-job-plan-summary" :class="`is-${jobEventDetail.job.status}`">
               <div class="ai-job-plan-summary__main">
@@ -1750,7 +2399,7 @@ onActivated(() => {
                 <span :style="{ width: `${aiUnitProgressPercent}%` }"></span>
               </div>
               <p v-if="jobEventDetail.job.errorMessage" class="ai-job-plan-error">
-                <template v-if="jobEventDetail.job.errorCode">{{ jobEventDetail.job.errorCode }} · </template>{{ jobEventDetail.job.errorMessage }}
+                <template v-if="jobEventDetail.job.errorCode">{{ processingCodeLabel(jobEventDetail.job.errorCode) }} · </template>{{ jobEventDetail.job.errorMessage }}
               </p>
             </section>
 
@@ -1769,7 +2418,7 @@ onActivated(() => {
                       <span>{{ formatPageNumbers(unit.pageNumbers) }}</span>
                     </div>
                     <small v-if="aiUnitMeta(unit)">{{ aiUnitMeta(unit) }}</small>
-                    <p v-if="unit.errorMessage">{{ unit.errorCode ? `${unit.errorCode} · ` : "" }}{{ unit.errorMessage }}</p>
+                    <p v-if="unit.errorMessage">{{ unit.errorCode ? `${processingCodeLabel(unit.errorCode)} · ` : "" }}{{ unit.errorMessage }}</p>
                   </div>
                   <span class="ai-unit-status-label" :class="`is-${unit.status}`">{{ aiUnitStatusLabel(unit.status) }}</span>
                 </div>

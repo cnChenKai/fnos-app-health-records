@@ -1,0 +1,36 @@
+{
+  "member": {
+    "id": "p2-duplicate-scale-member",
+    "displayName": "P2 重复治理规模化金标"
+  },
+  "scan": {
+    "totalReports": 420,
+    "sourceReportLimit": 300,
+    "candidateWindowLimit": 80,
+    "oldLeftReportId": "scale-old-left",
+    "oldRightReportId": "scale-old-right",
+    "expectedSourceReportsWithGovernedPair": 302,
+    "expectedGovernedCandidateOverrides": 2,
+    "maximumCandidateComparisons": 162
+  },
+  "benchmark": {
+    "totalReports": 1200,
+    "expectedSourceReports": 300,
+    "maximumCandidateComparisons": 0,
+    "maximumScanDurationMs": 5000
+  },
+  "merge": {
+    "sourceReportId": "scale-merge-source",
+    "targetReportId": "scale-merge-target",
+    "distinctLeftReportId": "scale-distinct-left",
+    "distinctRightReportId": "scale-distinct-right"
+  },
+  "candidateBenchmark": {
+    "totalReports": 1200,
+    "evidenceReports": 80,
+    "expectedSourceReports": 300,
+    "expectedCandidateComparisons": 6400,
+    "maximumCandidatePairs": 400,
+    "maximumScanDurationMs": 5000
+  }
+}

@@ -1,0 +1,439 @@
+{
+  "source": {
+    "reportId": "report_ef64f9e2444847af85b760ce1592fac5",
+    "pageNumber": 10,
+    "description": "脱敏后的真实第10页血粘度表格 OCR 行与坐标；保留章节、表头、相邻指标及六项无量纲血液流变指标，不含患者信息",
+    "lines": [
+      {
+        "id": "line_39",
+        "text": "【血粘度】",
+        "confidence": 1,
+        "box": [
+          52.596153259277344,
+          384.37554931640625,
+          122.54751586914062,
+          398.3680725097656
+        ]
+      },
+      {
+        "id": "line_40",
+        "text": "检验中心：深圳机构检验科",
+        "confidence": 1,
+        "box": [
+          60.094825744628906,
+          410.3888244628906,
+          186.29632568359375,
+          420.3845520019531
+        ]
+      },
+      {
+        "id": "line_41",
+        "text": "项目",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          436.50628662109375,
+          83.57789611816406,
+          447.49932861328125
+        ]
+      },
+      {
+        "id": "line_42",
+        "text": "检查结果",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          436.50628662109375,
+          291.87701416015625,
+          447.49932861328125
+        ]
+      },
+      {
+        "id": "line_43",
+        "text": "参考值",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          436.50628662109375,
+          435.80462646484375,
+          447.49932861328125
+        ]
+      },
+      {
+        "id": "line_62",
+        "text": "红细胞沉降率",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          580.4287719726562,
+          112.5638427734375,
+          588.9248046875
+        ]
+      },
+      {
+        "id": "line_63",
+        "text": "6.00 mm/hr",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          580.4287719726562,
+          290.61993408203125,
+          590.275634765625
+        ]
+      },
+      {
+        "id": "line_64",
+        "text": "0.00~15.00 mm/hr",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          580.4287719726562,
+          471.4668273925781,
+          590.275634765625
+        ]
+      },
+      {
+        "id": "line_65",
+        "text": "全血高切相对指数",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          600.6748657226562,
+          129.55316162109375,
+          609.1708984375
+        ]
+      },
+      {
+        "id": "line_66",
+        "text": "3.92",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          600.6748657226562,
+          266.3213806152344,
+          610.521728515625
+        ]
+      },
+      {
+        "id": "line_67",
+        "text": "2.23~4.6",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          600.6748657226562,
+          437.744384765625,
+          610.521728515625
+        ]
+      },
+      {
+        "id": "line_68",
+        "text": "全血低切相对指数",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          620.9214477539062,
+          129.55316162109375,
+          629.41748046875
+        ]
+      },
+      {
+        "id": "line_69",
+        "text": "10.40",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          620.9214477539062,
+          271.0359191894531,
+          630.768310546875
+        ]
+      },
+      {
+        "id": "line_70",
+        "text": "5.05~12.26",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          620.9214477539062,
+          447.1734619140625,
+          630.768310546875
+        ]
+      },
+      {
+        "id": "line_71",
+        "text": "血沉方程K值",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          641.1680297851562,
+          109.89653015136719,
+          650.7090454101562
+        ]
+      },
+      {
+        "id": "line_72",
+        "text": "27.92",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          641.1680297851562,
+          271.0359191894531,
+          651.014892578125
+        ]
+      },
+      {
+        "id": "line_73",
+        "text": "0~76",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          641.1680297851562,
+          423.59228515625,
+          651.014892578125
+        ]
+      },
+      {
+        "id": "line_74",
+        "text": "红细胞聚集指数",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          661.4141235351562,
+          121.05850219726562,
+          669.91015625
+        ]
+      },
+      {
+        "id": "line_75",
+        "text": "1.98",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          661.4141235351562,
+          266.3213806152344,
+          671.260986328125
+        ]
+      },
+      {
+        "id": "line_76",
+        "text": "1.34~2.69",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          661.4141235351562,
+          442.45892333984375,
+          671.260986328125
+        ]
+      },
+      {
+        "id": "line_77",
+        "text": "全血低切还原粘度",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          681.6607055664062,
+          129.55316162109375,
+          690.15673828125
+        ]
+      },
+      {
+        "id": "line_78",
+        "text": "19.61 MPa.s",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          681.6607055664062,
+          291.3332214355469,
+          691.507568359375
+        ]
+      },
+      {
+        "id": "line_79",
+        "text": "8.27~29.63 MPa.s",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          681.6607055664062,
+          467.47003173828125,
+          691.507568359375
+        ]
+      },
+      {
+        "id": "line_80",
+        "text": "全血高切还原粘度",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          701.9072875976562,
+          129.55316162109375,
+          710.4033203125
+        ]
+      },
+      {
+        "id": "line_81",
+        "text": "6.10 MPa.s",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          701.9072875976562,
+          286.62310791015625,
+          711.754150390625
+        ]
+      },
+      {
+        "id": "line_82",
+        "text": "2.52~9.47 MPa.s",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          701.9072875976562,
+          462.7599182128906,
+          711.754150390625
+        ]
+      },
+      {
+        "id": "line_83",
+        "text": "红细胞变形指数TK",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          722.1533813476562,
+          132.194580078125,
+          731.6943969726562
+        ]
+      },
+      {
+        "id": "line_84",
+        "text": "0.88",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          722.1533813476562,
+          266.3213806152344,
+          732.000244140625
+        ]
+      },
+      {
+        "id": "line_85",
+        "text": "0.49~1.12",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          722.1533813476562,
+          442.45892333984375,
+          732.000244140625
+        ]
+      },
+      {
+        "id": "line_86",
+        "text": "红细胞刚性指数",
+        "confidence": 1,
+        "box": [
+          61.59455871582031,
+          742.3999633789062,
+          121.05850219726562,
+          750.89599609375
+        ]
+      },
+      {
+        "id": "line_87",
+        "text": "6.10",
+        "confidence": 1,
+        "box": [
+          247.9131317138672,
+          742.3999633789062,
+          266.3213806152344,
+          752.246826171875
+        ]
+      },
+      {
+        "id": "line_88",
+        "text": "2.51~9.47",
+        "confidence": 1,
+        "box": [
+          402.83099365234375,
+          742.3999633789062,
+          442.45892333984375,
+          752.246826171875
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "sectionName": "血粘度",
+    "tableHeaderText": "项目 | 检查结果 | 参考值",
+    "observations": [
+      {
+        "canonicalKey": "hemorheology_whole_blood_high_shear_relative_index",
+        "normalizedName": "全血高切相对指数",
+        "sourceText": "全血高切相对指数 | 3.92 | 2.23~4.6",
+        "numericValue": 3.92,
+        "unit": null,
+        "referenceLow": 2.23,
+        "referenceHigh": 4.6,
+        "itemSourceLineId": "line_65",
+        "resultSourceLineId": "line_66",
+        "referenceSourceLineId": "line_67"
+      },
+      {
+        "canonicalKey": "hemorheology_whole_blood_low_shear_relative_index",
+        "normalizedName": "全血低切相对指数",
+        "sourceText": "全血低切相对指数 | 10.40 | 5.05~12.26",
+        "numericValue": 10.4,
+        "unit": null,
+        "referenceLow": 5.05,
+        "referenceHigh": 12.26,
+        "itemSourceLineId": "line_68",
+        "resultSourceLineId": "line_69",
+        "referenceSourceLineId": "line_70"
+      },
+      {
+        "canonicalKey": "hemorheology_esr_equation_k_value",
+        "normalizedName": "血沉方程 K 值",
+        "sourceText": "血沉方程K值 | 27.92 | 0~76",
+        "numericValue": 27.92,
+        "unit": null,
+        "referenceLow": 0,
+        "referenceHigh": 76,
+        "itemSourceLineId": "line_71",
+        "resultSourceLineId": "line_72",
+        "referenceSourceLineId": "line_73"
+      },
+      {
+        "canonicalKey": "hemorheology_erythrocyte_aggregation_index",
+        "normalizedName": "红细胞聚集指数",
+        "sourceText": "红细胞聚集指数 | 1.98 | 1.34~2.69",
+        "numericValue": 1.98,
+        "unit": null,
+        "referenceLow": 1.34,
+        "referenceHigh": 2.69,
+        "itemSourceLineId": "line_74",
+        "resultSourceLineId": "line_75",
+        "referenceSourceLineId": "line_76"
+      },
+      {
+        "canonicalKey": "hemorheology_erythrocyte_deformability_index_tk",
+        "normalizedName": "红细胞变形指数（TK）",
+        "sourceText": "红细胞变形指数TK | 0.88 | 0.49~1.12",
+        "numericValue": 0.88,
+        "unit": null,
+        "referenceLow": 0.49,
+        "referenceHigh": 1.12,
+        "itemSourceLineId": "line_83",
+        "resultSourceLineId": "line_84",
+        "referenceSourceLineId": "line_85"
+      },
+      {
+        "canonicalKey": "hemorheology_erythrocyte_rigidity_index",
+        "normalizedName": "红细胞刚性指数",
+        "sourceText": "红细胞刚性指数 | 6.10 | 2.51~9.47",
+        "numericValue": 6.1,
+        "unit": null,
+        "referenceLow": 2.51,
+        "referenceHigh": 9.47,
+        "itemSourceLineId": "line_86",
+        "resultSourceLineId": "line_87",
+        "referenceSourceLineId": "line_88"
+      }
+    ]
+  }
+}

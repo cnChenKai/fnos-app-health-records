@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Database, Download, FileClock, LoaderCircle, RefreshCw, Trash2 } from "@lucide/vue";
+import BackToTop from "../../components/BackToTop.vue";
 import PullIndicator from "../../components/PullIndicator.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -207,5 +208,6 @@ onBeforeUnmount(() => observer?.disconnect());
         <template v-else-if="hasLogs"><span>已加载全部日志</span></template>
       </div>
     </section>
+    <BackToTop />
   </section>
 </template>

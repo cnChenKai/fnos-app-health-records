@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "description": "匿名合成 OCR Worker 的启动屏障、串行背压、协议故障隔离、回收边界和停止竞态金标，不调用真实 OCR 或 AI。",
+  "expected": {
+    "startupRequestCount": 3,
+    "startupProcessCount": 1,
+    "startupEarlyRequestCount": 0,
+    "startupMaxActiveRequests": 1,
+    "protocolProcessCount": 2,
+    "protocolFailureCount": 1,
+    "protocolRecoveredResponseCount": 2,
+    "recycleProcessCount": 2,
+    "recycleSuccessfulResponseCount": 3,
+    "stopRejectedRequestCount": 2,
+    "stopProcessCount": 2,
+    "stopWrittenRequestCount": 2,
+    "retiredProcessCount": 2,
+    "retiredTerminatedProcessCount": 2,
+    "jobReportCount": 2,
+    "jobWorkerProcessCount": 3,
+    "jobWorkerRequestCount": 3,
+    "jobFirstReportAttempts": 2,
+    "jobSecondReportAttempts": 1,
+    "jobOcrResultCount": 2,
+    "jobActiveJobsAfterRecovery": 0
+  }
+}

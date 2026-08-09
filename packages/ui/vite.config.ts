@@ -27,6 +27,12 @@ export default defineConfig({
   },
   build: {
     outDir: fileURLToPath(new URL("../../.ui-dist", import.meta.url)),
-    emptyOutDir: true
+    emptyOutDir: true,
+    /*
+     * fnOS App 内嵌 WebView 可能是多年未更新的出厂内核（如 Android 11 出厂 Chromium 83）。
+     * Vue 3.5 运行时会用到 ??= / ||= / &&=（Chrome 85+），按 chrome80/safari13 降级编译，
+     * 老内核不会因 SyntaxError 整包白屏。
+     */
+    target: ["chrome80", "safari13", "edge80", "firefox78"]
   }
 });

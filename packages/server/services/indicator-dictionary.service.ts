@@ -4,6 +4,8 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import coreIndicators from "../../../dictionary/core/indicators.json" with { type: "json" };
 import coreTaxonomy from "../../../dictionary/core/taxonomy.json" with { type: "json" };
+import remoteIndicators from "../../../dictionary/remote/indicators.json" with { type: "json" };
+import remoteTaxonomy from "../../../dictionary/remote/taxonomy.json" with { type: "json" };
 import indicatorsSchema from "../../../dictionary/schemas/indicators.schema.json" with { type: "json" };
 import manifestSchema from "../../../dictionary/schemas/manifest.schema.json" with { type: "json" };
 import taxonomySchema from "../../../dictionary/schemas/taxonomy.schema.json" with { type: "json" };
@@ -62,6 +64,16 @@ type IndicatorDefinition = {
   aliases: string[];
   allowedUnits: string[];
   sectionHints: string[];
+  trendSourcePreference?: {
+    preferredSections: string[];
+    discouragedSections: string[];
+    discouragedPenalty?: number;
+  };
+  referenceRange?: {
+    low: number | null;
+    high: number | null;
+    note?: string;
+  };
   explanation: string;
 };
 type IndicatorsDocument = {
@@ -115,11 +127,21 @@ function assertAdministrator(user: RequestUser) {
   }
 }
 
+const protectedAliasQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率|^[GT]$|^Ig[GMAED]$/i;
+
 function compactAlias(value: string) {
-  return value
-    .normalize("NFKC")
+  const normalized = value.normalize("NFKC");
+  const brackets = [...normalized.matchAll(/[（(]([^（）()]*)[）)]/g)];
+  const preserveQualifiedBracket = brackets.some((match) =>
+    protectedAliasQualifiers.test(match[1] || ""),
+  );
+  const withoutUnqualifiedBrackets = preserveQualifiedBracket
+    ? normalized
+    : normalized.replace(/[（(].*?[）)]/g, "");
+  return withoutUnqualifiedBrackets
+    .replace(/[(]\s*([GT])\s*[)]/gi, "§$1§")
     .toLocaleLowerCase("zh-CN")
-    .replace(/[（(].*?[）)]/g, "")
+    .replace(/§([gt])§/g, "($1)")
     .replace(/\s+/g, "")
     .replace(/[：:，,。.;；、_\-]/g, "")
     .replace(/[＋]/g, "+")
@@ -423,9 +445,9 @@ function materializeActiveDictionary() {
       id, canonical_key, display_name, category, specimen, default_unit, value_type,
       trend_enabled, explanation, source, ai_managed, builtin_version,
       category_key, item_order, observation_kind, unit_dimension,
-      allowed_units_json, section_hints_json, dictionary_layer,
-      dictionary_revision, dictionary_snapshot_id, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'builtin', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      allowed_units_json, section_hints_json, trend_source_preference_json, reference_range_json,
+      dictionary_layer, dictionary_revision, dictionary_snapshot_id, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'builtin', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     ON CONFLICT(canonical_key) DO UPDATE SET
       display_name = excluded.display_name,
       category = excluded.category,
@@ -443,6 +465,8 @@ function materializeActiveDictionary() {
       unit_dimension = excluded.unit_dimension,
       allowed_units_json = excluded.allowed_units_json,
       section_hints_json = excluded.section_hints_json,
+      trend_source_preference_json = excluded.trend_source_preference_json,
+      reference_range_json = excluded.reference_range_json,
       dictionary_layer = excluded.dictionary_layer,
       dictionary_revision = excluded.dictionary_revision,
       dictionary_snapshot_id = excluded.dictionary_snapshot_id,
@@ -481,6 +505,8 @@ function materializeActiveDictionary() {
       definition.unitDimension,
       JSON.stringify(definition.allowedUnits),
       JSON.stringify(definition.sectionHints),
+      JSON.stringify(definition.trendSourcePreference ?? {}),
+      JSON.stringify(definition.referenceRange ?? {}),
       current.layer,
       current.revision,
       current.snapshotId
@@ -596,8 +622,14 @@ function activateDocuments(input: {
     WHERE layer = ? AND revision = ?
     LIMIT 1
   `).get(input.layer, revision) as { contentSha256: string } | undefined;
-  if (existingRevision && existingRevision.contentSha256 !== contentSha256) {
-    throw new Error(`${input.layer} 字典 revision ${revision} 已存在不同内容，revision 必须递增`);
+  if (
+    existingRevision &&
+    existingRevision.contentSha256 !== contentSha256
+  ) {
+    throw new Error(
+      `${input.layer} 字典 revision ${revision} 已存在不同内容，revision 必须递增；` +
+      "未发版开发期请先执行 npm run dictionary:reset-core 显式重建 core 字典",
+    );
   }
   const updateId = beginUpdate({
     operation: input.operation,
@@ -695,6 +727,26 @@ export function ensureCoreDictionaryMaterialized() {
   } finally {
     coreSyncRunning = false;
   }
+}
+
+/**
+ * 测试与本地维护用：把 dictionary/remote 源文件作为 remote 层快照直接物化。
+ * 运行时装机仍只物化 core；remote 层始终要求管理员显式安装，
+ * 该入口仅供测试搭建与线上快照一致的字典环境，不经过网络下载校验。
+ */
+export function installRemoteDictionarySnapshotForTests() {
+  ensureCoreDictionaryMaterialized();
+  return activateDocuments({
+    operation: "remote_update",
+    layer: "remote",
+    documents: {
+      taxonomy: remoteTaxonomy as unknown as TaxonomyDocument,
+      indicators: remoteIndicators as unknown as IndicatorsDocument
+    },
+    manifest: null,
+    sourceUrl: "app://dictionary/remote",
+    actorUserId: null
+  });
 }
 
 export function activeIndicatorDictionaryVersion() {

@@ -1,0 +1,12 @@
+{
+  "pageMutationButtonLabel": "正在更新页面",
+  "pageBatchLabel": "页面更新",
+  "pageRefreshNoticeTitle": "正在更新报告页面",
+  "evidence": {
+    "references": [4, 2],
+    "currentPages": [1, 2, 3],
+    "expectedPageNumber": 2,
+    "expectedPageIndex": 1,
+    "missingPageNumber": 4
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "mixedExpansion": {
+    "firstPdfPages": 3,
+    "secondPdfPages": 2,
+    "expectedReportPages": 6,
+    "expectedSourcePages": [
+      1,
+      2,
+      3,
+      null,
+      1,
+      2
+    ],
+    "expectedJobCounts": {
+      "pdf_extract": 2,
+      "thumbnail": 6,
+      "ocr": 6
+    }
+  },
+  "timeoutRecovery": {
+    "pdfPages": 3,
+    "expectedReportPagesBeforeRetry": 2,
+    "expectedReportPagesAfterRetry": 4,
+    "timeoutCode": "WORKER_TIMEOUT",
+    "expectedPdfAttempts": 2,
+    "expectedJobCounts": {
+      "pdf_extract": 1,
+      "thumbnail": 4,
+      "ocr": 4
+    }
+  },
+  "lateArrivalFairness": {
+    "pdfPages": 4,
+    "expectedOcrOrderAfterArrival": [
+      "single:1",
+      "large:2"
+    ]
+  },
+  "postCommitRecovery": {
+    "pdfPages": 3,
+    "expectedReportPages": 4,
+    "expectedPdfAttempts": 2,
+    "expectedJobCounts": {
+      "pdf_extract": 1,
+      "thumbnail": 4,
+      "ocr": 4
+    }
+  }
+}

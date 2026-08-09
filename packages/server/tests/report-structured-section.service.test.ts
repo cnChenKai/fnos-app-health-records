@@ -113,3 +113,54 @@ test("keeps manually edited and deleted report sections protected across AI reru
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test("uses short canonical titles for AI report sections and preserves manual titles", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-structured-section-titles-"));
+  process.env.STORAGE_DIR = storageDir;
+  const owner: RequestUser = {
+    id: "owner", displayName: "管理员", provider: "development", authenticated: true, isGatewayAdmin: true
+  };
+  try {
+    const normalized = normalizeAiExtraction({
+      reportType: "checkup",
+      reportSections: [{
+        sectionKey: "checkup_abnormal_summary",
+        title: "异常结果与健康建议 | Abnormal Findings and Health Recommendations",
+        content: "体重指数偏高，建议合理膳食。",
+        p: 18,
+        q: "异常结果与健康建议 | Abnormal Findings and Health Recommendations"
+      }]
+    });
+    assert.equal(normalized.fields.reportSections[0]?.title, "异常汇总");
+
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('owner', '管理员');
+      INSERT INTO health_members (id, display_name, created_by) VALUES ('member', '本人', 'owner');
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('member', 'owner', 'manager', 'owner');
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status)
+      VALUES ('report', 'member', 'owner', 'checkup', '体检报告', 'needs_review');
+      INSERT INTO report_structured_sections (
+        id, report_id, section_key, section_title, content_text, evidence_json, source, manual_fields_json
+      ) VALUES
+        ('section-ai', 'report', 'checkup_abnormal_summary',
+         '异常结果与健康建议 | Abnormal Findings and Health Recommendations', '体重指数偏高', '[]', 'ai', '[]'),
+        ('section-manual', 'report', 'checkup_original_recommendation',
+         '我的复查备注', '三个月后复查', '[]', 'manual', '["*"]');
+    `);
+
+    const detail = getReportDetail(owner, "report");
+    assert.deepEqual(
+      detail.structuredSections.map((section) => [section.sectionKey, section.title]),
+      [
+        ["checkup_abnormal_summary", "异常汇总"],
+        ["checkup_original_recommendation", "我的复查备注"]
+      ]
+    );
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});

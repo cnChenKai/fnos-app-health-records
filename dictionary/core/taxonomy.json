@@ -2,7 +2,7 @@
   "$schema": "../schemas/taxonomy.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 7,
+  "revision": 16,
   "groups": [
     {
       "key": "general",
@@ -477,14 +477,20 @@
       "aliases": [
         "心电图",
         "动脉硬化检测",
-        "功能检查"
+        "功能检查",
+        "肺功能",
+        "肺通气功能",
+        "呼吸功能"
       ],
       "sectionHints": [
         "心电图",
         "心电",
         "动脉硬化",
         "ABI",
-        "baPWV"
+        "baPWV",
+        "肺功能",
+        "肺通气功能",
+        "呼吸功能"
       ]
     },
     {

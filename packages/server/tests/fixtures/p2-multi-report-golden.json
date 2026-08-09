@@ -1,0 +1,43 @@
+{
+  "member": {
+    "id": "p2-golden-member",
+    "displayName": "匿名成员"
+  },
+  "reports": [
+    {
+      "id": "p2-checkup-2025",
+      "reportType": "checkup",
+      "title": "匿名年度体检",
+      "reportIssuedAt": "2025-01-10 09:00:00",
+      "observations": [
+        { "id": "p2-checkup-height", "sectionName": "一般检查", "itemCode": "HT", "itemName": "身高", "normalizedName": "身高", "resultText": "175 cm", "numericValue": 175, "unit": "cm" },
+        { "id": "p2-checkup-weight", "sectionName": "一般检查", "itemCode": "WT", "itemName": "体重", "normalizedName": "体重", "resultText": "76.1 kg", "numericValue": 76.1, "unit": "kg" },
+        { "id": "p2-checkup-bmi", "sectionName": "一般检查", "itemCode": "BMI", "itemName": "身体质量指数", "normalizedName": "体重指数", "resultText": "24.8 kg/m²", "numericValue": 24.8, "unit": "kg/m²" },
+        { "id": "p2-checkup-wbc", "sectionName": "血常规", "itemCode": "WBC", "itemName": "白细胞计数", "normalizedName": "白细胞计数", "resultText": "5.2 10^9/L", "numericValue": 5.2, "unit": "10^9/L" },
+        { "id": "p2-checkup-hct", "sectionName": "血常规", "itemCode": "HCT", "itemName": "红细胞压积", "normalizedName": "红细胞压积", "resultText": "48 %", "numericValue": 48, "unit": "%" }
+      ]
+    },
+    {
+      "id": "p2-laboratory-2025",
+      "reportType": "laboratory",
+      "title": "匿名复查检验",
+      "reportIssuedAt": "2025-07-10 09:00:00",
+      "observations": [
+        { "id": "p2-lab-wbc", "sectionName": "血液常规（五分类）", "itemCode": "WBC", "itemName": "WBC-白细胞计数", "normalizedName": "白细胞计数", "resultText": "6.1 ×10^9/L", "numericValue": 6.1, "unit": "×10^9/L" },
+        { "id": "p2-lab-hct", "sectionName": "血常规", "itemCode": "HCT", "itemName": "血细胞比容", "normalizedName": "红细胞压积", "resultText": "0.49 L/L", "numericValue": 0.49, "unit": "L/L" },
+        { "id": "p2-lab-glucose", "sectionName": "生化检验", "itemCode": "GLU", "itemName": "空腹血糖", "normalizedName": "空腹血糖", "resultText": "5.4 mmol/L", "numericValue": 5.4, "unit": "mmol/L" }
+      ]
+    },
+    {
+      "id": "p2-urinalysis-2025",
+      "reportType": "laboratory",
+      "title": "匿名尿液检验",
+      "reportIssuedAt": "2025-08-01 09:00:00",
+      "observations": [
+        { "id": "p2-urine-wbc", "sectionName": "尿常规", "itemCode": "UWBC", "itemName": "白细胞计数", "normalizedName": "尿白细胞", "resultText": "12 /HPF", "numericValue": 12, "unit": "/HPF" },
+        { "id": "p2-urine-protein", "sectionName": "尿常规", "itemCode": "PRO", "itemName": "尿蛋白", "normalizedName": "尿蛋白", "resultText": "阴性", "numericValue": null, "unit": null },
+        { "id": "p2-urine-custom", "sectionName": "尿液内部评估", "itemCode": null, "itemName": "机构尿液内部评分", "normalizedName": "机构尿液内部评分", "resultText": "8 分", "numericValue": 8, "unit": "分" }
+      ]
+    }
+  ]
+}

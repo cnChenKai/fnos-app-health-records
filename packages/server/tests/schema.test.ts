@@ -28,7 +28,9 @@ test("initializes the health records schema with WAL", () => {
       "ai_audit_events", "report_field_overrides", "file_gc_queue", "maintenance_tasks",
       "user_trend_pins", "indicator_dictionary_snapshots", "indicator_dictionary_state",
       "indicator_dictionary_updates", "indicator_taxonomy_groups", "indicator_taxonomy_subgroups",
-      "indicator_taxonomy_categories", "indicator_unmatched_names", "indicator_unmatched_occurrences"
+      "indicator_taxonomy_categories", "indicator_unmatched_names", "indicator_unmatched_occurrences",
+      "indicator_governance_decisions", "indicator_governance_history",
+      "report_duplicate_decisions", "report_duplicate_history", "report_duplicate_operations"
     ]) {
       assert.equal(names.has(expected), true, `missing table ${expected}`);
     }
@@ -46,6 +48,18 @@ test("initializes the health records schema with WAL", () => {
     const normalizationColumns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_category"), true);
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_explanation"), true);
+    for (const columnName of [
+      "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
+    ]) {
+      assert.equal(normalizationColumns.some((column) => column.name === columnName), true, `missing column ${columnName}`);
+    }
+    const duplicateDecisionColumns = db.prepare("PRAGMA table_info(report_duplicate_decisions)").all() as Array<{ name: string }>;
+    const duplicateHistoryColumns = db.prepare("PRAGMA table_info(report_duplicate_history)").all() as Array<{ name: string }>;
+    for (const columnName of ["rule_version", "rule_snapshot_json"]) {
+      assert.equal(duplicateDecisionColumns.some((column) => column.name === columnName), true, `missing duplicate decision column ${columnName}`);
+      assert.equal(duplicateHistoryColumns.some((column) => column.name === columnName), true, `missing duplicate history column ${columnName}`);
+    }
+    assert.equal(schemaVersion, 16);
     const organizationIndex = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'index' AND name = 'reports_organization_idx'
@@ -114,6 +128,12 @@ test("migrates an existing v1 database to PDF source page columns", () => {
     const normalizationColumns = getDatabase().prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_category"), true);
     assert.equal(normalizationColumns.some((column) => column.name === "canonical_explanation"), true);
+    for (const columnName of [
+      "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
+    ]) {
+      assert.equal(normalizationColumns.some((column) => column.name === columnName), true, `missing column ${columnName}`);
+    }
+    assert.equal(schemaVersion, 16);
     const upgrades = getDatabase().prepare("SELECT COUNT(*) AS count FROM app_upgrade_history WHERE status = 'completed'").get() as
       { count: number };
     assert.equal(upgrades.count, 1);
@@ -358,7 +378,7 @@ test("repairs an early v15 dictionary catalog without losing existing rows", () 
   }
 });
 
-test("upgrades an early v16 database and adds AI candidate tracking in v17", () => {
+test("upgrades an early v16 database through AI candidate tracking and governance provenance", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v16-final-"));
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(join(storageDir, "db"), { recursive: true });
@@ -376,6 +396,8 @@ test("upgrades an early v16 database and adds AI candidate tracking in v17", () 
   legacy.exec("DROP TABLE report_procedures");
   legacy.exec("DROP TABLE report_medications");
   legacy.exec("DROP TABLE report_structured_sections");
+  legacy.exec("DROP TABLE report_duplicate_decisions");
+  legacy.exec("DROP TABLE report_duplicate_history");
   legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN manual_fields_json");
   legacy.exec("ALTER TABLE report_diagnoses DROP COLUMN is_deleted");
   for (let version = 1; version <= 16; version += 1) {
@@ -386,21 +408,23 @@ test("upgrades an early v16 database and adds AI candidate tracking in v17", () 
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 17);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
     const tables = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'table' AND name IN (
         'morphology_findings', 'ai_extraction_units', 'ai_extraction_unit_routes',
         'ai_extraction_attempts', 'ai_extraction_candidates', 'report_diagnoses', 'report_medications',
         'report_procedures', 'vaccination_records', 'billing_summaries', 'billing_items',
-        'report_structured_sections'
+        'report_structured_sections', 'report_duplicate_decisions', 'report_duplicate_history',
+        'report_duplicate_operations'
       )
     `).all() as Array<{ name: string }>;
     assert.deepEqual(new Set(tables.map((table) => table.name)), new Set([
       "morphology_findings", "ai_extraction_units", "ai_extraction_unit_routes",
       "ai_extraction_attempts", "ai_extraction_candidates", "report_diagnoses", "report_medications",
       "report_procedures", "vaccination_records", "billing_summaries", "billing_items",
-      "report_structured_sections"
+      "report_structured_sections", "report_duplicate_decisions", "report_duplicate_history",
+      "report_duplicate_operations"
     ]));
     const organizationIndex = db.prepare(`
       SELECT name FROM sqlite_master
@@ -418,13 +442,182 @@ test("upgrades an early v16 database and adds AI candidate tracking in v17", () 
     const migration = db.prepare(`
       SELECT name, checksum FROM schema_migrations WHERE version = 16
     `).get() as { name: string; checksum: string };
-    assert.equal(migration.name, "finalize_indicator_dictionary_morphology_and_ai_units");
-    assert.match(migration.checksum, /ai-units/);
-    const candidateMigration = db.prepare(`
-      SELECT name, checksum FROM schema_migrations WHERE version = 17
-    `).get() as { name: string; checksum: string };
-    assert.equal(candidateMigration.name, "add_ai_extraction_candidate_tracking");
-    assert.match(candidateMigration.checksum, /candidate-tracking/);
+    assert.equal(migration.name, "finalize_indicator_dictionary_morphology_ai_units_and_data_governance");
+    assert.match(migration.checksum, /ai-units-data-governance/);
+    const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
+    assert.equal(migrationCount.count, 16);
+    const normalizationColumns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
+    for (const columnName of [
+      "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
+    ]) {
+      assert.equal(normalizationColumns.some((column) => column.name === columnName), true, `missing column ${columnName}`);
+    }
+    const decisionColumns = db.prepare("PRAGMA table_info(indicator_governance_decisions)").all() as Array<{ name: string }>;
+    assert.equal(decisionColumns.some((column) => column.name === "alias_id"), true);
+    const historyTable = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'indicator_governance_history'
+    `).get() as { name: string } | undefined;
+    assert.equal(historyTable?.name, "indicator_governance_history");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("rejects unreleased v17-v19 metadata until explicitly repaired into the final v16 governance schema", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-migration-v16-squashed-governance-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  legacy.exec("DROP TABLE indicator_governance_history");
+  legacy.exec("DROP TABLE indicator_governance_decisions");
+  legacy.exec("DROP TABLE report_duplicate_decisions");
+  legacy.exec("DROP TABLE report_duplicate_history");
+  for (const columnName of [
+    "reviewed_at", "reviewed_by", "review_status", "alias_source", "source_name", "source_origin"
+  ]) {
+    legacy.exec(`ALTER TABLE observation_normalizations DROP COLUMN ${columnName}`);
+  }
+  for (let version = 1; version <= 19; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.prepare("INSERT INTO users (id, display_name) VALUES ('user-v17', '旧用户')").run();
+  legacy.prepare(`
+    INSERT INTO health_members (id, display_name, created_by)
+    VALUES ('member-v17', '旧成员', 'user-v17')
+  `).run();
+  legacy.prepare(`
+    INSERT INTO reports (id, member_id, created_by, report_type, title, status)
+    VALUES ('report-v17', 'member-v17', 'user-v17', 'laboratory', '旧报告', 'ready')
+  `).run();
+  const insertObservation = legacy.prepare(`
+    INSERT INTO observations (id, report_id, item_name, normalized_name, result_text, numeric_value, unit)
+    VALUES (?, 'report-v17', ?, ?, '5.2', 5.2, 'mmol/L')
+  `);
+  const insertNormalization = legacy.prepare(`
+    INSERT INTO observation_normalizations (
+      observation_id, canonical_key, canonical_name, canonical_value, canonical_unit,
+      confidence, quality, matched_by, match_reason, version
+    ) VALUES (?, NULL, NULL, 5.2, 'mmol/L', 0.5, 'low', ?, '旧版整理', 'indicator-normalization-old')
+  `);
+  for (const row of [
+    { id: "v17-ai-name", name: "AI 名称", normalizedName: "空腹血糖", matchedBy: "normalized_name_fallback" },
+    { id: "v17-builtin", name: "空腹血糖", normalizedName: "空腹血糖", matchedBy: "builtin_alias" },
+    { id: "v17-ai-suggestion", name: "自定义指标", normalizedName: "自定义指标", matchedBy: "ai_suggestion" },
+    { id: "v17-none", name: "未知项目", normalizedName: "未知项目", matchedBy: "none" }
+  ]) {
+    insertObservation.run(row.id, row.name, row.normalizedName);
+    insertNormalization.run(row.id, row.matchedBy);
+  }
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    assert.throws(() => getDatabase(), /未正式发布阶段的 schema v19/);
+    closeDatabaseForTests();
+
+    const repair = new DatabaseSync(databasePath);
+    repair.prepare("DELETE FROM schema_migrations WHERE version > 16 AND version <= 19").run();
+    repair.close();
+
+    const db = getDatabase();
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
+    assert.equal(migrationCount.count, 16);
+    const columns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
+    for (const columnName of [
+      "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
+    ]) {
+      assert.equal(columns.some((column) => column.name === columnName), true, `missing migrated column ${columnName}`);
+    }
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, source_origin AS sourceOrigin,
+        alias_source AS aliasSource, review_status AS reviewStatus
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'v17-%'
+      ORDER BY observation_id
+    `).all() as Array<{
+      observationId: string;
+      sourceOrigin: string;
+      aliasSource: string | null;
+      reviewStatus: string;
+    }>;
+    assert.deepEqual(rows.map((row) => ({ ...row })), [
+      { observationId: "v17-ai-name", sourceOrigin: "ai_normalized_name", aliasSource: null, reviewStatus: "unreviewed" },
+      { observationId: "v17-ai-suggestion", sourceOrigin: "legacy", aliasSource: "ai_suggestion", reviewStatus: "unreviewed" },
+      { observationId: "v17-builtin", sourceOrigin: "legacy", aliasSource: "builtin", reviewStatus: "unreviewed" },
+      { observationId: "v17-none", sourceOrigin: "none", aliasSource: null, reviewStatus: "unreviewed" }
+    ]);
+    const governanceTable = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'indicator_governance_decisions'
+    `).get() as { name: string } | undefined;
+    assert.equal(governanceTable?.name, "indicator_governance_decisions");
+    const decisionColumns = db.prepare("PRAGMA table_info(indicator_governance_decisions)").all() as Array<{ name: string }>;
+    assert.equal(decisionColumns.some((column) => column.name === "alias_id"), true);
+    const historyTable = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name = 'indicator_governance_history'
+    `).get() as { name: string } | undefined;
+    assert.equal(historyTable?.name, "indicator_governance_history");
+    const duplicateGovernanceTables = db.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'table' AND name IN (
+        'report_duplicate_decisions', 'report_duplicate_history', 'report_duplicate_operations'
+      )
+      ORDER BY name
+    `).all() as Array<{ name: string }>;
+    assert.deepEqual(duplicateGovernanceTables.map((row) => row.name), [
+      "report_duplicate_decisions",
+      "report_duplicate_history",
+      "report_duplicate_operations"
+    ]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs an already-recorded v16 duplicate governance schema without creating v17", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-v16-duplicate-rule-repair-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  legacy.exec(`
+    ALTER TABLE report_duplicate_decisions DROP COLUMN rule_snapshot_json;
+    ALTER TABLE report_duplicate_decisions DROP COLUMN rule_version;
+    ALTER TABLE report_duplicate_history DROP COLUMN rule_snapshot_json;
+    ALTER TABLE report_duplicate_history DROP COLUMN rule_version;
+  `);
+  for (let version = 1; version <= 16; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
+    assert.equal(migrationCount.count, 16);
+    for (const tableName of ["report_duplicate_decisions", "report_duplicate_history"]) {
+      const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+      assert.equal(columns.some((column) => column.name === "rule_version"), true);
+      assert.equal(columns.some((column) => column.name === "rule_snapshot_json"), true);
+    }
+    const cacheTable = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'report_duplicate_pair_cache'
+    `).get() as { name: string } | undefined;
+    assert.equal(cacheTable, undefined);
+    const operationTable = db.prepare(`
+      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'report_duplicate_operations'
+    `).get() as { name: string } | undefined;
+    assert.equal(operationTable?.name, "report_duplicate_operations");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

@@ -9,15 +9,15 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.1.18` | `package.json` |
-| fnOS manifest 版本 | `0.1.18` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.1.18.0` | `scripts/prepare-package.mjs` 生成 |
-| 数据库 schema | `v17` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
+| 应用版本 | `0.2.0` | `package.json` |
+| fnOS manifest 版本 | `0.2.0` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.2.0.0` | `scripts/prepare-package.mjs` 生成 |
+| 数据库 schema | `v16` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
-当前 `0.1.18` 的目标数据库版本为 v17。v16 包含指标字典运行时、独立形态发现表、分类专属领域表、报告专属章节表和 AI 解析单元/尝试表；v17 增加 AI 提取候选追踪表。发布 v17 安装包、tag 或对外测试包后，v17 即冻结；此后任何表、字段、索引或约束变化都必须新增 v18。
+当前 `0.2.0` 的目标数据库版本为 v16。v16 包含指标字典运行时、独立形态发现表、分类专属领域表、报告专属章节表、AI 解析单元/尝试表和 AI 提取候选追踪表；开发期的 v17-v19 仅存在于预发布阶段，已折叠回 v16 并在启动时幂等补齐。发布 v16 安装包、tag 或对外测试包后，v16 即冻结；此后任何表、字段、索引或约束变化都必须新增 v17。
 
 ## 记录什么时候建立
 

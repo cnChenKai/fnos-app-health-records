@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,15 +9,61 @@ import {
   executeAiExtractionPlan,
   mergeAiExtractionResults
 } from "../services/ai-extraction-orchestrator.service.ts";
+import { buildAiExtractionPlan } from "../services/ai-input-planner.service.ts";
+import { buildProcessingJobDiagnostics } from "../services/processing-job-diagnostics.service.ts";
 import {
   deduplicateReportMorphologyFindings,
   deduplicateReportObservations,
   normalizeAiExtraction,
   persistAiExtraction,
+  sanitizeReportObservations,
   aiExtractionPromptVersion,
   type AiExecutor,
-  type AiExtractionResult
+  type AiExtractionResult,
+  type AiMorphologyFinding
 } from "../services/ai-extraction.service.ts";
+
+const ultrasoundMorphologyGolden = JSON.parse(readFileSync(
+  new URL(
+    "./fixtures/p3-ultrasound-summary-detail-morphology-golden.json",
+    import.meta.url
+  ),
+  "utf8"
+)) as {
+  source: { findings: AiMorphologyFinding[] };
+  expected: {
+    findingCount: number;
+    findings: Array<{
+      findingType: string;
+      findingName: string;
+      organ: string;
+      region?: string;
+      laterality: AiMorphologyFinding["laterality"];
+      size?: { length: number; unit: string };
+      measurement?: { key: string; value: number; unit: string };
+      morphologyIncludes?: string[];
+      attributeEntries: Record<string, string>;
+      evidencePages: number[];
+      evidenceQuotes: string[];
+    }>;
+    prohibitedFindingNames: string[];
+  };
+};
+
+const processingDiagnosticsGolden = JSON.parse(readFileSync(
+  new URL("./fixtures/p3-processing-diagnostics-golden.json", import.meta.url),
+  "utf8"
+)) as {
+  denseProcessing: {
+    pages: number;
+    plannedUnits: number;
+    candidates: number;
+    resolvedCandidates: number;
+    candidateClosurePercent: number;
+    supplementUnits: number;
+    unresolvedCandidates: number;
+  };
+};
 
 async function withReport(
   pageCount: number,
@@ -431,6 +477,302 @@ test("merges summary and detailed morphology for the same lesion while preservin
   assert.deepEqual(merged[0].evidence.map((item) => item.pageNumber), [2, 15]);
 });
 
+test("merges morphology regions with and without the organ prefix", () => {
+  const base = {
+    sectionName: "腹部超声",
+    organ: "肝脏",
+    laterality: "right" as const,
+    findingType: "钙化灶",
+    findingName: "肝右叶钙化灶",
+    presence: "present" as const,
+    findingCount: 1,
+    measurements: [],
+    morphology: null,
+    attributes: {},
+    classification: null,
+    comparisonText: null,
+    confidence: 0.9
+  };
+  const merged = deduplicateReportMorphologyFindings([
+    {
+      ...base,
+      region: "肝右叶",
+      size: { length: null, width: null, height: null, unit: null },
+      rawText: "肝右叶钙化灶",
+      evidence: [{ pageNumber: 4, quote: "肝右叶钙化灶" }]
+    },
+    {
+      ...base,
+      region: "右叶",
+      size: { length: 5, width: 4, height: null, unit: "mm" },
+      rawText: "肝右叶可见钙化灶",
+      evidence: [{ pageNumber: 18, quote: "肝右叶可见钙化灶" }]
+    }
+  ]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].size.length, 5);
+  assert.deepEqual(merged[0].evidence.map((item) => item.pageNumber), [4, 18]);
+});
+
+test("merges the real ultrasound summary and detail golden into two canonical findings", () => {
+  const merged = deduplicateReportMorphologyFindings(
+    ultrasoundMorphologyGolden.source.findings
+  );
+  assert.equal(merged.length, ultrasoundMorphologyGolden.expected.findingCount);
+  for (const expected of ultrasoundMorphologyGolden.expected.findings) {
+    const finding = merged.find((item) => item.findingType === expected.findingType);
+    assert.ok(finding, `缺少标准 finding：${expected.findingType}`);
+    assert.equal(finding.findingName, expected.findingName);
+    assert.equal(finding.organ, expected.organ);
+    assert.equal(finding.laterality, expected.laterality);
+    if (expected.region) assert.equal(finding.region, expected.region);
+    if (expected.size) {
+      assert.equal(finding.size.length, expected.size.length);
+      assert.equal(finding.size.unit, expected.size.unit);
+    }
+    if (expected.measurement) {
+      assert.equal(
+        finding.measurements.some(
+          (item) =>
+            item.key === expected.measurement?.key &&
+            item.value === expected.measurement.value &&
+            item.unit === expected.measurement.unit
+        ),
+        true
+      );
+    }
+    for (const text of expected.morphologyIncludes || []) {
+      assert.match(finding.morphology || "", new RegExp(text));
+    }
+    for (const [key, value] of Object.entries(expected.attributeEntries)) {
+      assert.equal(finding.attributes[key], value);
+    }
+    assert.deepEqual(
+      [...new Set(finding.evidence.map((item) => item.pageNumber))].sort(
+        (left, right) => left - right
+      ),
+      expected.evidencePages
+    );
+    for (const quote of expected.evidenceQuotes) {
+      assert.equal(
+        finding.evidence.some((item) => item.quote === quote),
+        true,
+        `缺少原文证据：${quote}`
+      );
+    }
+  }
+  for (const prohibited of ultrasoundMorphologyGolden.expected.prohibitedFindingNames) {
+    assert.equal(
+      merged.some((item) => item.findingName === prohibited),
+      false,
+      `描述性别名不得形成独立 finding：${prohibited}`
+    );
+  }
+});
+
+test("sanitizes metadata fragments and qualitative results stored as units", () => {
+  const base = {
+    sectionName: "检验检查",
+    itemCode: null,
+    normalizedName: null,
+    numericValue: null,
+    referenceLow: null,
+    referenceHigh: null,
+    referenceText: null,
+    abnormalFlag: null,
+    method: null,
+    evidence: [{ pageNumber: 1, quote: "检测结果" }]
+  };
+  const sanitized = sanitizeReportObservations([
+    { ...base, itemName: "性别", resultText: "男", unit: null },
+    { ...base, itemName: "P", resultText: "12", unit: null },
+    { ...base, itemName: "某定性检查", resultText: "-", unit: "阴性" },
+    { ...base, itemName: "另一项定性检查", resultText: "未检出", unit: "未检出" }
+  ]);
+  assert.equal(sanitized.length, 2);
+  assert.deepEqual(sanitized.map((item) => ({
+    itemName: item.itemName,
+    resultText: item.resultText,
+    unit: item.unit
+  })), [
+    { itemName: "某定性检查", resultText: "阴性", unit: null },
+    { itemName: "另一项定性检查", resultText: "未检出", unit: null }
+  ]);
+});
+
+test("repairs observation values, rejects date fragments, and withholds reversed reference bounds", () => {
+  const base = {
+    sectionName: "检验检查",
+    itemCode: null,
+    normalizedName: null,
+    unit: "mmol/L",
+    referenceText: "3.9-6.1",
+    abnormalFlag: null,
+    method: null,
+    evidence: [
+      { pageNumber: 1, quote: "空腹血糖 5.2 mmol/L 参考范围 3.9-6.1" },
+      { pageNumber: 1, quote: "空腹血糖 5.2 mmol/L 参考范围 3.9-6.1" }
+    ]
+  };
+  const sanitized = sanitizeReportObservations([
+    {
+      ...base,
+      itemName: "空腹血糖",
+      resultText: "5.2",
+      numericValue: 9.9,
+      referenceLow: 6.1,
+      referenceHigh: 3.9
+    },
+    { ...base, itemName: "2026-08-05", resultText: "5.2", numericValue: 5.2, referenceLow: null, referenceHigh: null },
+    { ...base, itemName: "3.9-6.1", resultText: "5.2", numericValue: 5.2, referenceLow: null, referenceHigh: null }
+  ]);
+  assert.equal(sanitized.length, 1);
+  assert.equal(sanitized[0].numericValue, 5.2);
+  assert.equal(sanitized[0].referenceLow, null);
+  assert.equal(sanitized[0].referenceHigh, null);
+  assert.equal(sanitized[0].referenceText, "3.9-6.1");
+  assert.equal(sanitized[0].evidence.length, 1);
+});
+
+test("repairs embedded numeric names and report-level qualitative headings safely", () => {
+  const base = {
+    itemCode: null,
+    normalizedName: null,
+    referenceLow: null,
+    referenceHigh: null,
+    referenceText: null,
+    abnormalFlag: null,
+    method: null,
+    evidence: [{ pageNumber: 1, quote: "可核验检查结果" }]
+  };
+  const sanitized = sanitizeReportObservations([
+    {
+      ...base,
+      sectionName: "骨密度检查",
+      itemName: "BUA:22.1",
+      resultText: "22.1",
+      numericValue: 22.1,
+      unit: null
+    },
+    {
+      ...base,
+      sectionName: "骨密度检查",
+      itemName: "ABC:99",
+      resultText: "22.1",
+      numericValue: 22.1,
+      unit: null
+    },
+    {
+      ...base,
+      sectionName: "某专项检验报告",
+      itemName: "某专项检验报告",
+      resultText: "阴性",
+      numericValue: null,
+      unit: null
+    }
+  ]);
+
+  assert.equal(sanitized.length, 3);
+  assert.equal(sanitized[0].itemName, "BUA");
+  assert.equal(sanitized[0].numericValue, 22.1);
+  assert.equal(sanitized[1].itemName, "ABC:99");
+  assert.equal(sanitized[2].itemName, "某专项");
+  assert.equal(sanitized[2].resultText, "阴性");
+});
+
+test("rejects unverified AI observations and downgrades fields that cannot close the OCR loop", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const normalized = normalizeAiExtraction({
+      reportType: "laboratory",
+      observations: [
+        {
+          itemName: "空腹血糖", resultText: "5.2", numericValue: 5.2, unit: "mmol/L",
+          referenceLow: 3.9, referenceHigh: 6.1,
+          evidence: [{ pageNumber: 1, quote: "空腹血糖 5.2 mmol/L 参考范围 3.9-6.1" }]
+        },
+        {
+          itemName: "总胆固醇", resultText: "5.3", numericValue: 5.3, unit: "mmol/L",
+          referenceLow: 0, referenceHigh: 5.2,
+          evidence: [{ pageNumber: 1, quote: "总胆固醇 5.3 mmol/L" }]
+        },
+        {
+          itemName: "白细胞计数", resultText: "5.0", numericValue: 5, unit: "10^9/L",
+          evidence: [{ pageNumber: 1, quote: "不存在的白细胞计数 5.0 10^9/L" }]
+        },
+        {
+          itemName: "丙氨酸氨基转移酶", resultText: "20", numericValue: 99, unit: "U/L",
+          evidence: [{ pageNumber: 1, quote: "丙氨酸氨基转移酶 20 U/L" }]
+        }
+      ]
+    });
+    persistAiExtraction(reportId, jobId, {
+      provider: "test", model: "test", promptVersion: "test", ...normalized,
+      rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+    }, 100);
+    const rows = getDatabase().prepare(`
+      SELECT o.item_name AS itemName, o.numeric_value AS numericValue, o.evidence_json AS evidenceJson,
+        n.quality, n.excluded_reason AS excludedReason
+      FROM observations o
+      JOIN observation_normalizations n ON n.observation_id = o.id
+      WHERE o.report_id = ? ORDER BY o.item_name
+    `).all(reportId) as Array<{
+      itemName: string; numericValue: number; evidenceJson: string;
+      quality: string; excludedReason: string | null;
+    }>;
+    const byName = Object.fromEntries(rows.map((row) => [row.itemName, row]));
+    assert.equal(byName["空腹血糖"].quality, "high");
+    assert.equal(byName["总胆固醇"].quality, "low");
+    assert.match(byName["总胆固醇"].excludedReason || "", /参考范围下限/);
+    assert.equal(byName["白细胞计数"], undefined);
+    assert.equal(byName["丙氨酸氨基转移酶"].numericValue, 20);
+    assert.equal(byName["丙氨酸氨基转移酶"].quality, "high");
+  }, () => [
+    "空腹血糖 5.2 mmol/L 参考范围 3.9-6.1",
+    "总胆固醇 5.3 mmol/L",
+    "白细胞计数 5.0 10^9/L",
+    "丙氨酸氨基转移酶 20 U/L"
+  ]);
+});
+
+
+test("accepts an exact deterministic preprocessed OCR row as persisted evidence", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const rawLines = [
+      { id: "name", text: "空腹血糖", confidence: 0.99, box: [10, 10, 100, 30] },
+      { id: "value", text: "5.2", confidence: 0.99, box: [130, 10, 170, 30] },
+      { id: "unit", text: "mmol/L", confidence: 0.99, box: [200, 10, 270, 30] },
+      { id: "range", text: "3.9-6.1", confidence: 0.99, box: [300, 10, 380, 30] }
+    ];
+    getDatabase().prepare(`
+      UPDATE ocr_results SET lines_json = ?, text_length = ? WHERE page_id = 'page-1'
+    `).run(JSON.stringify(rawLines), JSON.stringify(rawLines).length);
+    const plannedLine = buildAiExtractionPlan(reportId).pages[0].lines
+      .find((line) => line.text.includes("空腹血糖") && line.text.includes("mmol/L"))?.text;
+    assert.ok(plannedLine);
+    assert.equal(rawLines.some((line) => line.text === plannedLine), false);
+
+    const normalized = normalizeAiExtraction({
+      reportType: "laboratory",
+      observations: [{
+        itemName: "空腹血糖", resultText: "5.2", numericValue: 5.2, unit: "mmol/L",
+        referenceLow: 3.9, referenceHigh: 6.1,
+        evidence: [{ pageNumber: 1, quote: plannedLine }]
+      }]
+    });
+    persistAiExtraction(reportId, jobId, {
+      provider: "test", model: "test", promptVersion: "test", ...normalized,
+      rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+    }, 100);
+    const stored = getDatabase().prepare(`
+      SELECT o.evidence_json AS evidenceJson, n.quality
+      FROM observations o JOIN observation_normalizations n ON n.observation_id = o.id
+      WHERE o.report_id = ?
+    `).get(reportId) as { evidenceJson: string; quality: string };
+    assert.equal(stored.quality, "high");
+    assert.deepEqual(JSON.parse(stored.evidenceJson), [{ pageNumber: 1, quote: plannedLine }]);
+  });
+});
+
 test("prefers final-review and examination dates from OCR when persisting a checkup", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const normalized = normalizeAiExtraction({
@@ -518,6 +860,43 @@ test("processes 24 pages and 200 dense indicators end to end without a real prov
       SELECT COUNT(*) AS count FROM observations WHERE report_id = ?
     `).get(reportId) as { count: number };
     assert.equal(stored.count, 200);
+    getDatabase().prepare(`
+      UPDATE processing_jobs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(jobId);
+    const units = getDatabase().prepare(`
+      SELECT unit_type AS unitType, page_numbers_json AS pageNumbersJson, status,
+        character_count AS characterCount, candidate_count AS candidateCount,
+        matched_count AS matchedCount
+      FROM ai_extraction_units WHERE job_id = ? AND status <> 'superseded'
+      ORDER BY unit_index, id
+    `).all(jobId).map((row) => {
+      const unit = row as {
+        unitType: "complete_pages" | "page_chunk" | "supplement";
+        pageNumbersJson: string;
+        status: "planned" | "processing" | "completed" | "warning" | "failed";
+        characterCount: number;
+        candidateCount: number;
+        matchedCount: number;
+      };
+      return { ...unit, pageNumbers: JSON.parse(unit.pageNumbersJson) as number[] };
+    });
+    const diagnostics = buildProcessingJobDiagnostics({
+      id: jobId,
+      reportId,
+      jobType: "ai_extract",
+      status: "completed",
+      errorCode: null,
+      errorMessage: null
+    }, [], units);
+    const golden = processingDiagnosticsGolden.denseProcessing;
+    assert.equal(diagnostics.metrics.pageCount, golden.pages);
+    assert.equal(diagnostics.metrics.plannedUnits, golden.plannedUnits);
+    assert.equal(diagnostics.metrics.candidateCount, golden.candidates);
+    assert.equal(diagnostics.metrics.resolvedCandidateCount, golden.resolvedCandidates);
+    assert.equal(diagnostics.metrics.candidateClosurePercent, golden.candidateClosurePercent);
+    assert.equal(diagnostics.metrics.supplementUnits, golden.supplementUnits);
+    assert.equal(diagnostics.metrics.unresolvedCount, golden.unresolvedCandidates);
+    assert.equal(diagnostics.metrics.persistedObservationCount, 200);
   }, (pageNumber) => {
     const count = pageNumber <= 8 ? 9 : 8;
     return [
@@ -599,7 +978,7 @@ test("merges duplicate indicator variants that resolve to the same OCR source ro
           unit: "10^9/L",
           referenceLow: scalarCalls === 1 ? 3.5 : null,
           referenceHigh: scalarCalls === 1 ? 9.5 : null,
-          evidence: [{ pageNumber: 1, quote: "指标1 1.2 mmol/L 参考范围 1.0-20.0" }]
+          evidence: [{ pageNumber: 1, quote: "白细胞数目(WBC) 5.0 10^9/L 参考范围 3.5-9.5" }]
         }]
       });
       return {
@@ -614,7 +993,7 @@ test("merges duplicate indicator variants that resolve to the same OCR source ro
     assert.equal(execution.result.fields.observations[0].referenceHigh, 9.5);
   }, (pageNumber) => [
     pageNumber === 1
-      ? "指标1 1.2 mmol/L 参考范围 1.0-20.0"
+      ? "白细胞数目(WBC) 5.0 10^9/L 参考范围 3.5-9.5"
       : `第${pageNumber}页普通说明`
   ]);
 });
@@ -678,6 +1057,132 @@ test("deduplicates the same normalized indicator across report pages before pers
         ? "白细胞数目 5.00 10^9/L 参考范围 3.5-9.5"
         : `第${pageNumber}页普通说明`
   ]);
+});
+
+test("blanks conflicting clinical fields instead of silently picking one when merging same-source duplicates", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "laboratory",
+        observations: [
+          {
+            sectionName: "生化检验",
+            itemName: "空腹血糖",
+            resultText: "5.18",
+            numericValue: 5.18,
+            unit: "mmol/L",
+            referenceLow: 3.9,
+            referenceHigh: 6.1,
+            abnormalFlag: "normal",
+            evidence: [{ pageNumber: 1, quote: "空腹血糖 5.18 mmol/L 参考范围 3.9-6.1" }]
+          },
+          {
+            sectionName: "生化检验",
+            itemName: "空腹血糖",
+            resultText: "5.18",
+            numericValue: 5.18,
+            unit: "mg/dL",
+            referenceLow: 70,
+            referenceHigh: 110,
+            abnormalFlag: "high",
+            evidence: [{ pageNumber: 1, quote: "空腹血糖 5.18 mmol/L 参考范围 3.9-6.1" }]
+          }
+        ]
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+
+    const stored = getDatabase().prepare(`
+      SELECT item_name AS itemName, numeric_value AS numericValue, unit,
+        reference_low AS referenceLow, reference_high AS referenceHigh,
+        abnormal_flag AS abnormalFlag
+      FROM observations WHERE report_id = ?
+    `).all(reportId) as Array<{
+      itemName: string;
+      numericValue: number;
+      unit: string | null;
+      referenceLow: number | null;
+      referenceHigh: number | null;
+      abnormalFlag: string | null;
+    }>;
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].numericValue, 5.18);
+    // 单位、参考范围、异常标记两边冲突，合并结果必须置空而不是静默二选一
+    assert.equal(stored[0].unit, null);
+    assert.equal(stored[0].referenceLow, null);
+    assert.equal(stored[0].referenceHigh, null);
+    assert.equal(stored[0].abnormalFlag, null);
+  }, () => ["空腹血糖 5.18 mmol/L 参考范围 3.9-6.1"]);
+});
+
+test("deduplicates low-quality summary and detail aliases using semantic fact identity", async () => {
+  await withReport(1, async ({ reportId }) => {
+    const base = {
+      itemCode: null,
+      normalizedName: null,
+      resultText: "1.23",
+      numericValue: 1.23,
+      unit: "mg/L",
+      referenceLow: null,
+      referenceHigh: null,
+      referenceText: null,
+      abnormalFlag: null,
+      method: null
+    };
+    const deduplicated = deduplicateReportObservations(reportId, [
+      {
+        ...base,
+        sectionName: "异常指标汇总",
+        itemName: "血清胱抑素C(CysC)",
+        evidence: [{ pageNumber: 4, quote: "血清胱抑素C(CysC) 1.23 mg/L" }]
+      },
+      {
+        ...base,
+        sectionName: "肾功能检验明细",
+        itemName: "胱抑素C",
+        referenceLow: 0.5,
+        referenceHigh: 1.0,
+        evidence: [{ pageNumber: 10, quote: "胱抑素C 1.23 mg/L 参考范围 0.5-1.0" }]
+      }
+    ]);
+    assert.equal(deduplicated.length, 1);
+    assert.equal(deduplicated[0].itemName, "胱抑素C");
+    assert.equal(deduplicated[0].referenceLow, 0.5);
+    assert.equal(deduplicated[0].referenceHigh, 1.0);
+    assert.deepEqual(deduplicated[0].evidence.map((item) => item.pageNumber), [4, 10]);
+  });
+});
+
+test("does not merge distinct qualitative antibody tests that share IgM or IgG codes", async () => {
+  await withReport(1, async ({ reportId }) => {
+    const base = {
+      sectionName: "抗体检查",
+      itemCode: null,
+      normalizedName: null,
+      resultText: "阴性",
+      numericValue: null,
+      unit: "阴性",
+      referenceLow: null,
+      referenceHigh: null,
+      referenceText: null,
+      abnormalFlag: null,
+      method: null,
+      evidence: [{ pageNumber: 1, quote: "抗体检查结果" }]
+    };
+    const deduplicated = deduplicateReportObservations(reportId, [
+      { ...base, itemName: "甲病原体抗体测定（IgM）" },
+      { ...base, itemName: "乙病原体抗体测定（IgM）" },
+      { ...base, itemName: "甲病原体抗体测定IgG" },
+      { ...base, itemName: "乙病原体抗体测定IgG" }
+    ]);
+    assert.equal(deduplicated.length, 4);
+    assert.equal(deduplicated.every((item) => item.unit === null), true);
+  });
 });
 
 test("does not merge same-valued indicators when explicit methods conflict", async () => {
@@ -1054,6 +1559,12 @@ test("supplements only unmatched candidate rows once per page", async () => {
     const modes: Array<string | undefined> = [];
     const executor: AiExecutor = async (input) => {
       modes.push(input.promptMode);
+      if (input.promptMode === "supplement") {
+        assert.deepEqual((input.candidateFacts || []).map((fact) => fact.sourceText), [
+          "总胆固醇 5.3 mmol/L 参考范围 0-5.2"
+        ]);
+        assert.doesNotMatch(input.text, /饮水|风险等级|环境温度|18-39岁|调节说明|基础代谢/);
+      }
       const normalized = normalizeAiExtraction({
         reportType: "laboratory",
         observations: input.promptMode === "supplement" ? [{
@@ -1068,14 +1579,28 @@ test("supplements only unmatched candidate rows once per page", async () => {
       };
     };
     const execution = await executeAiExtractionPlan(jobId, reportId, executor);
-    assert.deepEqual(modes, ["standard", "supplement"]);
+    assert.equal(modes.filter((mode) => mode === "supplement").length, 1);
+    assert.equal(modes.at(-1), "supplement");
     assert.equal(execution.result.fields.observations[0]?.itemName, "总胆固醇");
     assert.equal(execution.unmatchedCandidates, 0);
     const unitTypes = getDatabase().prepare(`
       SELECT unit_type AS unitType FROM ai_extraction_units WHERE job_id = ? ORDER BY unit_index
     `).all(jobId) as Array<{ unitType: string }>;
-    assert.deepEqual(unitTypes.map((item) => item.unitType), ["complete_pages", "supplement"]);
-  }, () => ["血脂", "总胆固醇 5.3 mmol/L 参考范围 0-5.2"]);
+    assert.equal(unitTypes.filter((item) => item.unitType === "supplement").length, 1);
+    assert.equal(unitTypes.at(-1)?.unitType, "supplement");
+    const candidateCount = (getDatabase().prepare(`
+      SELECT COUNT(*) AS count FROM ai_extraction_candidates WHERE job_id = ?
+    `).get(jobId) as { count: number }).count;
+    assert.equal(candidateCount, 1);
+  }, () => [
+    "血脂",
+    "建议每日饮水 2000 mL，并每周运动 150 分钟。",
+    "风险等级 | 0-5 | 6-10 | 11-20 | 21-30",
+    "18-39岁 | -20% | 21-34% | 35-39%",
+    "环境温度：25 ℃ | 湿度：60%",
+    "时间：2025-07-1208:03:29 | 调节说明（kg） | 基础代谢",
+    "总胆固醇 5.3 mmol/L 参考范围 0-5.2"
+  ]);
 });
 
 test("treats a checkup summary as redundant when the detailed local table has the same indicator and result", async () => {
@@ -1096,11 +1621,13 @@ test("treats a checkup summary as redundant when the detailed local table has th
       /体重指数|BMI/i.test(item.itemName) && item.numericValue === 24.9
     ), true);
     const statuses = getDatabase().prepare(`
-      SELECT status, COUNT(*) AS count FROM ai_extraction_candidates
-      WHERE job_id = ? GROUP BY status
-    `).all(jobId) as Array<{ status: string; count: number }>;
+      SELECT status, reason, COUNT(*) AS count FROM ai_extraction_candidates
+      WHERE job_id = ? GROUP BY status, reason
+    `).all(jobId) as Array<{ status: string; reason: string | null; count: number }>;
     assert.equal(statuses.some((item) => item.status === "local_extracted" && item.count >= 1), true);
-    assert.equal(statuses.some((item) => item.status === "redundant" && item.count >= 1), true);
+    assert.equal(statuses.some((item) =>
+      item.status === "redundant" && item.count >= 1 && item.reason?.startsWith("duplicate_evidence:")
+    ), true);
   }, () => [
     "异常结果与健康建议",
     "体重指数BMI值偏高(24.9)(参考值18.5~23.9)；建议合理膳食并控制体重。",
@@ -1149,6 +1676,31 @@ test("processes every omission candidate when one page contains more than thirty
   ]);
 });
 
+test("does not create supplements for opaque repeated device-range rows", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    let supplementCalls = 0;
+    const executor: AiExecutor = async (input) => {
+      if (input.promptMode === "supplement") supplementCalls += 1;
+      const normalized = normalizeAiExtraction({ reportType: "functional", observations: [] });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const unresolved = getDatabase().prepare(`
+      SELECT status, reason FROM ai_extraction_candidates WHERE job_id = ?
+    `).get(jobId) as { status: string; reason: string };
+
+    assert.equal(supplementCalls, 0);
+    assert.equal(execution.warningUnits, 0);
+    assert.equal(execution.unmatchedCandidates, 1);
+    assert.equal(unresolved.status, "unresolved");
+    assert.match(unresolved.reason, /^ambiguous_layout:/);
+  }, () => ["功能检查", "ABC18-70(ABC1) | 0.603"]);
+});
+
 test("finishes with a warning when an omission supplement still cannot be parsed", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async (input) => {
@@ -1165,6 +1717,11 @@ test("finishes with a warning when an omission supplement still cannot be parsed
     assert.equal(execution.warningUnits, 1);
     assert.equal(execution.unmatchedCandidates, 1);
     assert.equal(execution.result.fields.observations.length, 0);
+    const unresolved = getDatabase().prepare(`
+      SELECT status, reason FROM ai_extraction_candidates WHERE job_id = ?
+    `).get(jobId) as { status: string; reason: string };
+    assert.equal(unresolved.status, "unresolved");
+    assert.match(unresolved.reason, /^supplement_required:/);
   }, () => ["血脂", "总胆固醇 5.3 mmol/L 参考范围 0-5.2"]);
 });
 
@@ -1196,8 +1753,384 @@ test("rejects fabricated observations and canonicalizes valid evidence to the OC
       "总胆固醇 5.3 mmol/L 参考范围 0-5.2"
     );
     assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
+    assert.deepEqual(execution.result.evidenceValidation?.rejectedObservationSamples, [
+      { itemName: "不存在指标", resultText: "99", pageNumbers: [1] },
+    ]);
     assert.equal(execution.warningUnits, 1);
   }, () => ["血脂", "总胆固醇 5.3 mmol/L 参考范围 0-5.2"]);
+});
+
+test("tolerates minor OCR text errors while requiring the actual result cell value", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "laboratory",
+        observations: [
+          {
+            itemName: "血红蛋白", resultText: "135", numericValue: 135, unit: "g/L",
+            evidence: [{ pageNumber: 1, quote: "血红蛋白 135 g/L" }]
+          },
+          {
+            itemName: "血红蛋白", resultText: "150", numericValue: 150, unit: "g/L",
+            evidence: [{ pageNumber: 1, quote: "血红蛋白 150 g/L" }]
+          }
+        ]
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.deepEqual(
+      execution.result.fields.observations.map((item) => [item.itemName, item.numericValue]),
+      [["血红蛋白", 135]]
+    );
+    assert.equal(
+      execution.result.fields.observations[0].evidence[0].quote,
+      "血红旦白 | 135 | g/L | 115-150"
+    );
+    assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
+  }, () => ["血常规", "血红旦白 | 135 | g/L | 115-150"]);
+});
+
+// 真实回归：报告单表头/测量区常被规划器拼成「名：值 | 名：值」多格行，
+// 结果区域必须取同格余量（身高：175.5cm）或侧别片段格（右踝：1.07），
+// 不得串到下一格取来相邻项目的值；左右错配的值必须拒绝。
+test("accepts same-cell name:value pairs and laterality cells in joined lines", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "checkup",
+        observations: [
+          {
+            itemName: "身高", resultText: "175.5", numericValue: 175.5, unit: "cm",
+            evidence: [{ pageNumber: 1, quote: "身高：175.5cm" }]
+          },
+          {
+            itemName: "PWV（右）", resultText: "1315", numericValue: 1315, unit: "cm/s",
+            evidence: [{ pageNumber: 1, quote: "右：1315" }]
+          },
+          {
+            itemName: "PWV（左）", resultText: "1395", numericValue: 1395, unit: "cm/s",
+            evidence: [{ pageNumber: 1, quote: "左：1395" }]
+          },
+          {
+            itemName: "踝臂指数（右踝）", resultText: "1.07", numericValue: 1.07, unit: null,
+            evidence: [{ pageNumber: 1, quote: "右踝：1.07" }]
+          },
+          {
+            itemName: "踝臂指数（左踝）", resultText: "1.08", numericValue: 1.08, unit: null,
+            evidence: [{ pageNumber: 1, quote: "左踝：1.08" }]
+          },
+          // 左右错配：右踝的值不是 1.08，必须拒绝
+          {
+            itemName: "踝臂指数（右踝）", resultText: "1.08", numericValue: 1.08, unit: null,
+            evidence: [{ pageNumber: 1, quote: "右踝：1.08" }]
+          },
+          // 幻觉值：身高不是 999
+          {
+            itemName: "身高", resultText: "999", numericValue: 999, unit: "cm",
+            evidence: [{ pageNumber: 1, quote: "身高：999cm" }]
+          }
+        ]
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.deepEqual(
+      execution.result.fields.observations.map((item) => [item.itemName, item.numericValue]),
+      [
+        ["身高", 175.5],
+        ["PWV（右）", 1315],
+        ["PWV（左）", 1395],
+        ["踝臂指数（右踝）", 1.07],
+        ["踝臂指数（左踝）", 1.08],
+        // 规划器本地提取从同一拼接行解析出的正确补充
+        ["体重", 76.7],
+        ["体重指数", 24.9]
+      ]
+    );
+    assert.deepEqual(
+      execution.result.fields.observations[3].evidence[0].quote,
+      "右踝：1.07 | 左踝：1.08"
+    );
+    assert.deepEqual(
+      execution.result.evidenceValidation?.rejectedObservationSamples?.map(
+        (sample) => [sample.itemName, sample.resultText]
+      ),
+      [["踝臂指数（右踝）", "1.08"], ["身高", "999"]]
+    );
+  }, () => [
+    "动脉阻塞与僵硬度检测报告单",
+    "动脉阻塞与僵硬度检测报告单 | 身高：175.5cm | 体重：76.7kg | BMI:24.9",
+    "右：1315 | 左：1395 | 2000 | PWV(cm/s) | LD | 血管模型",
+    "右踝：1.07 | 左踝：1.08",
+    `说明 ${"内容".repeat(450)}`
+  ]);
+});
+
+// 真实回归：名称在提示行、测量值在描述行且描述句被 OCR 断行时，带尺寸的形态发现不得被拒
+test("keeps a measured morphology finding when name and measurement sit on different OCR lines", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async (input) => {
+      const normalized = normalizeAiExtraction(
+        input.extractionMode === "morphology" || input.promptMode === "supplement"
+          ? {
+              reportType: "ultrasound",
+              morphologyFindings: [
+                {
+                  sectionName: "超声提示",
+                  organ: "肝脏",
+                  region: "右叶",
+                  laterality: "right",
+                  findingType: "钙化灶",
+                  findingName: "肝右叶局灶性钙化灶",
+                  presence: "present",
+                  size: { length: 5, width: null, height: null, unit: "mm" },
+                  rawText: "肝右叶局灶性钙化灶",
+                  evidence: [{ pageNumber: 1, quote: "肝右叶局灶性钙化灶" }]
+                },
+                {
+                  sectionName: "超声提示",
+                  organ: "肝脏",
+                  laterality: "unspecified",
+                  findingType: "囊肿",
+                  findingName: "肝囊肿",
+                  presence: "present",
+                  size: { length: 99, width: null, height: null, unit: "mm" },
+                  rawText: "肝囊肿",
+                  evidence: [{ pageNumber: 1, quote: "肝囊肿" }]
+                }
+              ]
+            }
+          : { reportType: "ultrasound" }
+      );
+      return {
+        provider: "test",
+        model: "test",
+        promptVersion: "test",
+        ...normalized,
+        rawResponseJson: "{}",
+        promptTokens: 10,
+        completionTokens: 5,
+        elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const kept = execution.result.fields.morphologyFindings;
+    const calcification = kept.find((item) => item.findingName.includes("钙化灶"));
+    assert.equal(calcification?.size.length, 5, JSON.stringify(kept));
+    assert.equal(
+      kept.some((item) => item.findingName.includes("囊肿")),
+      false,
+      "文中不存在的发现仍应被拒绝"
+    );
+  }, () => [
+    "超声描述：",
+    "肝脏形态大小正常，实质回声细腻，稍增强，血管纹理清晰。肝右叶见强回声区，直径约5mm，后方无声影，未见胆",
+    "管扩张。CDFI：未见明显异常血流信号。",
+    "超声提示：",
+    "肝右叶局灶性钙化灶"
+  ]);
+});
+
+test("supplements a composite ultrasound detail and deterministically restores the calcification diameter", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const detail =
+      "肝脏形态大小正常，实质回声细腻，稍增强，考虑轻度脂肪肝。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。";
+    const supplementSources: string[] = [];
+    const executor: AiExecutor = async (input) => {
+      const isSupplement = input.promptMode === "supplement";
+      if (isSupplement) {
+        supplementSources.push(
+          ...(input.candidateFacts || []).map((fact) => fact.sourceText),
+        );
+      }
+      const normalized = normalizeAiExtraction(
+        isSupplement
+          ? {
+              reportType: "ultrasound",
+              morphologyFindings: [
+                {
+                  sectionName: "超声检查",
+                  organ: "肝脏",
+                  region: "右叶",
+                  laterality: "right",
+                  findingType: "钙化灶",
+                  findingName: "肝右叶局灶性钙化灶",
+                  presence: "present",
+                  rawText: "肝右叶局灶性钙化灶",
+                  evidence: [
+                    { pageNumber: 1, quote: "肝右叶局灶性钙化灶" },
+                  ],
+                },
+              ],
+            }
+          : input.extractionMode === "morphology"
+            ? {
+                reportType: "ultrasound",
+                morphologyFindings: [
+                  {
+                    sectionName: "超声检查",
+                    organ: "肝脏",
+                    laterality: "unspecified",
+                    findingType: "脂肪肝",
+                    findingName: "脂肪肝（轻度）",
+                    presence: "present",
+                    rawText: detail,
+                    evidence: [{ pageNumber: 1, quote: detail }],
+                  },
+                ],
+              }
+            : { reportType: "ultrasound" },
+      );
+      return {
+        provider: "test",
+        model: "test",
+        promptVersion: "test",
+        ...normalized,
+        rawResponseJson: "{}",
+        promptTokens: 10,
+        completionTokens: 5,
+        elapsedMs: 1,
+      };
+    };
+
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(
+      supplementSources.includes(detail),
+      true,
+      JSON.stringify(
+        buildAiExtractionPlan(reportId).pages[0].lines.map((line) => ({
+          text: line.text,
+          kind: line.candidateKind,
+          reason: line.candidateResolutionReason,
+        })),
+      ),
+    );
+    const calcifications = execution.result.fields.morphologyFindings.filter(
+      (item) => item.findingName.includes("钙化"),
+    );
+    assert.equal(calcifications.length, 1);
+    assert.deepEqual(calcifications[0].size, {
+      length: 5,
+      width: null,
+      height: null,
+      unit: "mm",
+    });
+    assert.equal(
+      calcifications[0].measurements.some(
+        (item) => item.key === "直径" && item.value === 5 && item.unit === "mm",
+      ),
+      true,
+    );
+    assert.deepEqual(
+      calcifications[0].evidence.map((item) => item.quote),
+      ["肝右叶局灶性钙化灶", detail],
+    );
+    const fattyLiver = execution.result.fields.morphologyFindings.find((item) =>
+      item.findingName.includes("脂肪肝"),
+    );
+    assert.equal(fattyLiver?.size.length, null);
+  }, () => [
+    "超声检查",
+    "肝脏形态大小正常，实质回声细腻，稍增强，考虑轻度脂肪肝。肝右叶见强回声区，直径约5mm，后方无声影，未见胆管扩张。CDFI：未见明显异常血流信号。",
+    "检查结论",
+    "脂肪肝（轻度）",
+    "肝右叶局灶性钙化灶",
+  ]);
+});
+
+test("keeps morphology size empty when two same-location detail candidates are ambiguous", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async (input) => {
+      const normalized = normalizeAiExtraction(
+        input.extractionMode === "morphology" || input.promptMode === "supplement"
+          ? {
+              reportType: "ultrasound",
+              morphologyFindings: [
+                {
+                  sectionName: "超声检查",
+                  organ: "肝脏",
+                  region: "右叶",
+                  laterality: "right",
+                  findingType: "钙化灶",
+                  findingName: "肝右叶局灶性钙化灶",
+                  presence: "present",
+                  rawText: "肝右叶局灶性钙化灶",
+                  evidence: [
+                    { pageNumber: 1, quote: "肝右叶局灶性钙化灶" },
+                  ],
+                },
+              ],
+            }
+          : { reportType: "ultrasound" },
+      );
+      return {
+        provider: "test",
+        model: "test",
+        promptVersion: "test",
+        ...normalized,
+        rawResponseJson: "{}",
+        promptTokens: 10,
+        completionTokens: 5,
+        elapsedMs: 1,
+      };
+    };
+
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const calcification = execution.result.fields.morphologyFindings.find(
+      (item) => item.findingName.includes("钙化"),
+    );
+    assert.equal(calcification?.size.length, null);
+    assert.deepEqual(calcification?.measurements, []);
+  }, () => [
+    "超声检查",
+    "肝右叶见强回声区，直径约5mm，后方无声影。",
+    "肝右叶另见强回声区，直径约8mm，后方无声影。",
+    "检查结论",
+    "肝右叶局灶性钙化灶",
+  ]);
+});
+
+test("tolerates minor morphology OCR errors but rejects fabricated measurements", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "ultrasound",
+        morphologyFindings: [
+          {
+            sectionName: "超声检查", organ: "右肾", findingType: "囊肿", findingName: "右肾囊肿",
+            presence: "present", size: { length: 8, width: 6, unit: "mm" },
+            rawText: "右肾囊肿，大小约 8×6 mm",
+            evidence: [{ pageNumber: 1, quote: "右肾囊肿，大小约 8×6 mm" }]
+          },
+          {
+            sectionName: "超声检查", organ: "右肾", findingType: "囊肿", findingName: "右肾囊肿",
+            presence: "present", size: { length: 8, width: 7, unit: "mm" },
+            rawText: "右肾囊肿，大小约 8×7 mm",
+            evidence: [{ pageNumber: 1, quote: "右肾囊肿，大小约 8×7 mm" }]
+          }
+        ]
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.morphologyFindings.length, 1);
+    assert.equal(execution.result.fields.morphologyFindings[0].findingName, "右肾囊肿");
+    assert.equal(
+      execution.result.fields.morphologyFindings[0].evidence[0].quote,
+      "右贤囊肿，大小约 8x6 mm"
+    );
+    assert.ok((execution.result.evidenceValidation?.rejectedMorphologyFindings || 0) >= 1);
+  }, () => ["超声检查", "右贤囊肿，大小约 8x6 mm"]);
 });
 
 test("passes dictionary facts and keeps scalar and morphology main output in separate calls", async () => {
@@ -1499,5 +2432,186 @@ test("rejects outpatient sections inferred from composite checkup table labels",
     "个人史 | 无特殊",
     "体格检查",
     "营养 | 营养良好 | 营养良好"
+  ]);
+});
+
+test("keeps every deterministic observation from one multi-value row while auditing the row once", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const calls: Array<{ mode: string | undefined; candidateCount: number }> = [];
+    const executor: AiExecutor = async (input) => {
+      calls.push({ mode: input.promptMode, candidateCount: input.candidateFacts?.length || 0 });
+      const normalized = normalizeAiExtraction({ reportType: "physical_exam", observations: [] });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const local = execution.result.fields.observations.filter((item) =>
+      item.normalizedName === "身高" || item.normalizedName === "体重"
+    );
+
+    assert.deepEqual(local.map((item) => item.normalizedName).sort(), ["体重", "身高"]);
+    assert.equal(new Set(local.map((item) => `${item.normalizedName}:${item.numericValue}`)).size, 2);
+    assert.equal(execution.plan.localObservationCount, 2);
+    assert.equal(execution.unmatchedCandidates, 0);
+    assert.equal(calls.some((call) => call.mode === "supplement"), false);
+    assert.equal(calls.every((call) => call.candidateCount === 0), true);
+
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const stored = getDatabase().prepare(`
+      SELECT normalized_name AS normalizedName, numeric_value AS numericValue, evidence_json AS evidenceJson
+      FROM observations WHERE report_id = ? ORDER BY normalized_name
+    `).all(reportId) as Array<{ normalizedName: string; numericValue: number; evidenceJson: string }>;
+    assert.deepEqual(stored.map((item) => [item.normalizedName, item.numericValue]), [
+      ["体重", 65], ["身高", 170]
+    ]);
+    assert.equal(stored.every((item) => JSON.parse(item.evidenceJson).length === 1), true);
+
+    const candidates = getDatabase().prepare(`
+      SELECT status, matched_entity_key AS matchedEntityKey, reason
+      FROM ai_extraction_candidates WHERE job_id = ?
+    `).all(jobId) as Array<{ status: string; matchedEntityKey: string | null; reason: string | null }>;
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].status, "local_extracted");
+    assert.match(candidates[0].matchedEntityKey || "", /身高/);
+    assert.match(candidates[0].matchedEntityKey || "", /体重/);
+    assert.match(candidates[0].reason || "", /拆分 2 项/);
+  }, () => [
+    "身高: 170 cm | 体重: 65 kg"
+  ]);
+});
+
+test("reconciles a combined blood-pressure summary with both deterministic component observations", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    let supplementCalls = 0;
+    const executor: AiExecutor = async (input) => {
+      if (input.promptMode === "supplement") supplementCalls += 1;
+      const normalized = normalizeAiExtraction({ reportType: "physical_exam", observations: [] });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const names = execution.result.fields.observations.map((item) => item.itemName).sort();
+    const candidate = getDatabase().prepare(`
+      SELECT status, reason FROM ai_extraction_candidates
+      WHERE job_id = ? AND status = 'redundant'
+    `).get(jobId) as { status: string; reason: string };
+
+    assert.deepEqual(names, ["收缩压", "舒张压"]);
+    assert.equal(supplementCalls, 0);
+    assert.equal(execution.unmatchedCandidates, 0);
+    assert.equal(candidate.status, "redundant");
+    assert.match(candidate.reason, /^duplicate_evidence:/);
+  }, () => [
+    "一般检查",
+    "项目 | 结果 | 单位 | 参考范围",
+    "收缩压 | 132 | mmHg | 90-140",
+    "舒张压 | 86 | mmHg | 60-90",
+    "异常结果与健康建议",
+    "血压值 132/86 mmHg；建议保持规律作息。"
+  ]);
+});
+
+
+test("persists locally verified table evidence for pulmonary actual values and rejects AI-forged column provenance", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "functional",
+        observations: []
+      });
+      return {
+        provider: "test",
+        model: "test",
+        promptVersion: aiExtractionPromptVersion,
+        ...normalized,
+        rawResponseJson: "{}",
+        promptTokens: 10,
+        completionTokens: 5,
+        elapsedMs: 1
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const pulmonary = execution.result.fields.observations.find(
+      (item) => item.itemName === "FVC" || item.normalizedName?.includes("FVC")
+    );
+
+    assert.ok(pulmonary);
+    assert.equal(pulmonary.numericValue, 3.21);
+    assert.notEqual(pulmonary.numericValue, 3.8);
+    pulmonary.evidence = pulmonary.evidence.map((evidence) => ({
+      ...evidence,
+      table: {
+        headerText: "伪造表头",
+        headerSourceLineIds: ["forged-header"],
+        rowSourceLineIds: ["forged-row"],
+        resultColumn: {
+          index: 2,
+          headerText: "预测",
+          selectionBasis: "local_source_map"
+        }
+      }
+    }));
+
+    persistAiExtraction(
+      reportId,
+      jobId,
+      execution.result,
+      execution.inputCharacters
+    );
+    const stored = getDatabase().prepare(`
+      SELECT item_name AS itemName, numeric_value AS numericValue,
+        evidence_json AS evidenceJson
+      FROM observations
+      WHERE report_id = ?
+    `).all(reportId) as Array<{
+      itemName: string;
+      numericValue: number;
+      evidenceJson: string;
+    }>;
+
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].numericValue, 3.21);
+    const evidence = JSON.parse(stored[0].evidenceJson) as Array<{
+      pageNumber: number;
+      quote: string;
+      table?: {
+        headerText: string;
+        headerSourceLineIds: string[];
+        rowSourceLineIds: string[];
+        resultColumn: {
+          index: number;
+          headerText: string | null;
+          selectionBasis: string;
+        } | null;
+        sourceMap?: {
+          result: {
+            cellIndices: number[];
+            headerText?: string;
+          };
+        };
+      };
+    }>;
+    assert.equal(evidence.length, 1);
+    assert.equal(evidence[0].table?.headerText, "项目 | 实测 | 预测 | %预测");
+    assert.deepEqual(evidence[0].table?.headerSourceLineIds, ["page-1-line-2"]);
+    assert.deepEqual(evidence[0].table?.rowSourceLineIds, ["page-1-line-3"]);
+    assert.equal(evidence[0].table?.resultColumn?.index, 1);
+    assert.equal(evidence[0].table?.resultColumn?.headerText, "实测");
+    assert.equal(
+      evidence[0].table?.resultColumn?.selectionBasis,
+      "explicit_current_result_header"
+    );
+    assert.deepEqual(evidence[0].table?.sourceMap?.result.cellIndices, [1]);
+    assert.equal(evidence[0].table?.sourceMap?.result.headerText, "实测");
+  }, () => [
+    "肺功能",
+    "项目 | 实测 | 预测 | %预测",
+    "FVC | 3.21 | 3.80 | 84.5"
   ]);
 });

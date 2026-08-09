@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "description": "匿名合成多页报告的进程重启、队列持久化、AI 单元续跑与结果提交边界金标，不包含真实报告内容或真实健康数据。",
+  "expected": {
+    "pages": 9,
+    "minimumPersistedAiUnits": 1,
+    "observationCount": 9,
+    "trendPointCount": 9,
+    "duplicateGroups": 0,
+    "persistedRecoveryAiCalls": 0,
+    "persistedRecoveryEvents": 1,
+    "activeJobsAfterRecovery": 0,
+    "reviewItemCountAfterRecovery": 0,
+    "settledReportStatus": "needs_review"
+  }
+}

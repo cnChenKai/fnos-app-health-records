@@ -1,0 +1,118 @@
+{
+  "source": {
+    "reportId": "report_ef64f9e2444847af85b760ce1592fac5",
+    "description": "脱敏后的真实第4页健康建议与第18页超声提示 OCR 行；用于约束非表格叙述中的单字电解质别名匹配",
+    "pages": [
+      {
+        "pageId": "page_3bf213fe7f26414db31a8b389557ed5a",
+        "pageNumber": 4,
+        "lines": [
+          {
+            "id": "line_4",
+            "text": "【一般检查】",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 156.05633544921875, 126.039306640625,
+              167.0493927001953
+            ]
+          },
+          {
+            "id": "line_6",
+            "text": "血压：133/89mmHg，血压正常高值；建议低盐富钾饮食，定期复查血压。",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 208.3670654296875, 376.23516845703125,
+              219.3698272705078
+            ]
+          },
+          {
+            "id": "line_22",
+            "text": "【超声成像检查】",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 626.2230834960938, 148.0198974609375,
+              637.2161254882812
+            ]
+          },
+          {
+            "id": "line_24",
+            "text": "肝右叶局灶性钙化灶；建议肝胆外科随诊。",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 678.5338134765625, 240.41685485839844,
+              688.4163818359375
+            ]
+          }
+        ]
+      },
+      {
+        "pageId": "page_eeb7aea1607e4bcabf22fa31a830bdc1",
+        "pageNumber": 18,
+        "lines": [
+          {
+            "id": "line_11",
+            "text": "超声提示：",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 357.02044677734375, 115.04902648925781,
+              368.01348876953125
+            ]
+          },
+          {
+            "id": "line_13",
+            "text": "肝右叶局灶性钙化灶",
+            "confidence": 1,
+            "box": [
+              60.094825744628906, 397.3333740234375, 145.5120086669922,
+              406.8266906738281
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "excludedDictionaryFacts": [
+      {
+        "pageNumber": 4,
+        "sourceLineId": "line_6",
+        "canonicalKey": "electrolyte_potassium",
+        "reason": "“富钾饮食”是健康建议，不是血钾测量结果"
+      },
+      {
+        "pageNumber": 4,
+        "sourceLineId": "line_24",
+        "canonicalKey": "electrolyte_calcium",
+        "reason": "异常摘要中的“钙化灶”是形态学发现，不是血钙测量结果"
+      },
+      {
+        "pageNumber": 18,
+        "sourceLineId": "line_13",
+        "canonicalKey": "electrolyte_calcium",
+        "reason": "“钙化灶”是形态学发现，不是血钙测量结果"
+      }
+    ],
+    "retainedSemantics": [
+      {
+        "pageNumber": 4,
+        "sourceLineId": "line_6",
+        "contentRole": "measurement",
+        "candidate": true
+      },
+      {
+        "pageNumber": 4,
+        "sourceLineId": "line_24",
+        "contentRole": "measurement",
+        "candidate": true,
+        "candidateKind": "morphology"
+      },
+      {
+        "pageNumber": 18,
+        "sourceLineId": "line_13",
+        "contentRole": "measurement",
+        "candidate": true,
+        "candidateKind": "morphology"
+      }
+    ]
+  }
+}

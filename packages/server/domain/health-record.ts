@@ -39,8 +39,16 @@ export type Observation = {
   resultText: string;
   numericValue: number | null;
   unit: string | null;
+  referenceLow: number | null;
+  referenceHigh: number | null;
   referenceText: string | null;
   abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+  reportedAbnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+  displayAbnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
+  abnormalSource: "stored" | "result_marker" | "marker_column" | "evidence_marker" | "qualitative_result" | "reference_range" | "none";
+  abnormalStatus: "reported" | "computed" | "conflict" | "unresolved";
+  abnormalConflict: boolean;
+  abnormalReason: string | null;
   evidence: EvidenceRef | null;
   canonicalName: string | null;
   canonicalValue: number | null;
@@ -50,6 +58,9 @@ export type Observation = {
   normalizationConfidence: number | null;
   normalizationReason: string | null;
   normalizationExcludedReason: string | null;
+  displayTier: "primary" | "secondary" | "governance_only";
+  displayCategory: "standardized" | "medical_candidate" | "technical_measurement" | "qualitative_finding" | "governance_noise";
+  displayReason: string | null;
 };
 
 export type MorphologyMeasurement = {
@@ -274,9 +285,17 @@ export type ReportSummary = {
 };
 
 export type DuplicateReportCandidate = ReportSummary & {
+  pairKey: string;
+  governanceDecision: "duplicate" | null;
   confidence: "high" | "medium";
   matchedFields: string[];
   reason: string;
+  ruleSnapshot: {
+    version: string;
+    ruleId: string;
+    signals: string[];
+    signalProfileKey: string;
+  };
 };
 
 export type DuplicateReportGroup = {
@@ -284,7 +303,117 @@ export type DuplicateReportGroup = {
   candidates: DuplicateReportCandidate[];
 };
 
+export type ReportDuplicateMetrics = {
+  candidateGroups: number;
+  candidatePairs: number;
+  highCandidates: number;
+  mediumCandidates: number;
+  sameOriginalCandidates: number;
+  manualDuplicateDecisions: number;
+  manualDistinctDecisions: number;
+  totalDecisionHistory: number;
+  duplicateConfirmRate: number;
+  distinctRejectRate: number;
+  mergedPairs: number;
+  sourceReportsScanned: number;
+  candidateComparisons: number;
+  governedCandidateOverrides: number;
+  scanDurationMs: number;
+  scanPolicy: {
+    sourceReportLimit: number;
+    candidateWindowLimit: number;
+    automaticCandidateReturnLimit: number;
+  };
+};
+
+export type ReportDuplicateComparison = {
+  left: Pick<ReportSummary, "id" | "title" | "reportType" | "status" | "hospitalName" | "hospitalBranch" | "departmentName" | "bodyPart" | "reportIssuedAt" | "pageCount">;
+  right: Pick<ReportSummary, "id" | "title" | "reportType" | "status" | "hospitalName" | "hospitalBranch" | "departmentName" | "bodyPart" | "reportIssuedAt" | "pageCount">;
+  fields: Array<{
+    key: string;
+    label: string;
+    left: string | null;
+    right: string | null;
+    equal: boolean;
+  }>;
+  observations: {
+    leftCount: number;
+    rightCount: number;
+    shared: number;
+    conflicts: number;
+    leftOnly: number;
+    rightOnly: number;
+    truncated: boolean;
+    differences: Array<{
+      key: string;
+      itemName: string;
+      status: "conflict" | "left_only" | "right_only";
+      leftResult: string | null;
+      rightResult: string | null;
+    }>;
+  };
+};
+
+export type ReportDuplicateOperationRecord = {
+  id: string;
+  operation: "scan" | "recompute" | "rollback_drill";
+  memberId: string;
+  ruleVersion: string | null;
+  status: "running" | "completed" | "failed";
+  purpose: string;
+  stats: Record<string, unknown>;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+export type DuplicateReportOverview = {
+  groups: DuplicateReportGroup[];
+  decisions: ReportDuplicateDecisionRecord[];
+  metrics: ReportDuplicateMetrics;
+  operations: ReportDuplicateOperationRecord[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalGroups: number;
+    totalPairs: number;
+    totalPages: number;
+  };
+  filterOptions: {
+    reportTypes: string[];
+    hospitals: string[];
+  };
+};
+
+export type ReportDuplicateDecisionRecord = {
+  pairKey: string;
+  memberId: string;
+  leftReportId: string;
+  leftTitle: string;
+  leftStatus: string;
+  rightReportId: string;
+  rightTitle: string;
+  rightStatus: string;
+  decision: "duplicate" | "distinct";
+  reason: string | null;
+  evidence: Record<string, unknown>;
+  ruleVersion: string;
+  ruleSnapshot: {
+    version: string;
+    ruleId: string;
+    signals: string[];
+    signalProfileKey: string;
+  };
+  decidedBy: string | null;
+  decidedByName: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ReportDetail = ReportSummary & {
+  createdAt: string;
+  updatedAt: string;
   hospitalBranch: string | null;
   city: string | null;
   visitType: string | null;

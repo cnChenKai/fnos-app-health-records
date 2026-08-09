@@ -1,0 +1,106 @@
+{
+  "member": {
+    "id": "p2-duplicate-member",
+    "displayName": "匿名重复报告回归成员"
+  },
+  "reports": [
+    {
+      "id": "same-original-left",
+      "title": "匿名血脂生化检查",
+      "reportType": "laboratory",
+      "status": "ready",
+      "hospitalName": "示例第一医院",
+      "reportIssuedAt": "2025-01-04",
+      "bodyParts": ["血脂"],
+      "fileSignature": "golden-file-same-original",
+      "observations": [
+        { "id": "same-original-left-tc", "name": "总胆固醇", "resultText": "4.26 mmol/L", "numericValue": 4.26, "unit": "mmol/L" }
+      ]
+    },
+    {
+      "id": "same-original-right",
+      "title": "匿名综合体检报告",
+      "reportType": "checkup",
+      "status": "needs_review",
+      "hospitalName": "示例第一医院",
+      "reportIssuedAt": "2025-01-04",
+      "bodyParts": ["综合体检"],
+      "fileSignature": "golden-file-same-original",
+      "observations": [
+        { "id": "same-original-right-tc", "name": "血清胆固醇", "normalizedName": "总胆固醇", "resultText": "4.26", "numericValue": 4.26, "unit": "mmol/L" }
+      ]
+    },
+    {
+      "id": "hospital-alias-left",
+      "title": "匿名年度健康体检报告",
+      "reportType": "checkup",
+      "status": "ready",
+      "hospitalName": "安徽滨湖国宾健康体检中心",
+      "reportIssuedAt": "2025-02-04",
+      "bodyParts": [],
+      "fileSignature": "golden-file-hospital-alias-left",
+      "observations": [
+        { "id": "hospital-alias-left-tg", "name": "甘油三酯", "resultText": "0.87", "numericValue": 0.87, "unit": "mmol/L" },
+        { "id": "hospital-alias-left-tc", "name": "总胆固醇", "resultText": "4.26", "numericValue": 4.26, "unit": "mmol/L" },
+        { "id": "hospital-alias-left-hdl", "name": "高密度脂蛋白胆固醇", "resultText": "1.42", "numericValue": 1.42, "unit": "mmol/L" },
+        { "id": "hospital-alias-left-ldl", "name": "低密度脂蛋白胆固醇", "resultText": "2.31", "numericValue": 2.31, "unit": "mmol/L" },
+        { "id": "hospital-alias-left-glu", "name": "空腹血糖", "resultText": "5.18", "numericValue": 5.18, "unit": "mmol/L" },
+        { "id": "hospital-alias-left-ua", "name": "尿酸", "resultText": "326", "numericValue": 326, "unit": "umol/L" }
+      ]
+    },
+    {
+      "id": "hospital-alias-right",
+      "title": "匿名健康检查结果汇总",
+      "reportType": "checkup",
+      "status": "needs_review",
+      "hospitalName": "国宾健康体检中心",
+      "reportIssuedAt": "2025-02-04",
+      "bodyParts": [],
+      "fileSignature": "golden-file-hospital-alias-right",
+      "observations": [
+        { "id": "hospital-alias-right-tg", "name": "甘油三酯", "resultText": "0.87 mmol/L", "numericValue": 0.87, "unit": null },
+        { "id": "hospital-alias-right-tc", "name": "总胆固醇", "resultText": "4.26 mmol/L", "numericValue": 4.26, "unit": null },
+        { "id": "hospital-alias-right-hdl", "name": "高密度脂蛋白胆固醇", "resultText": "1.42 mmol/L", "numericValue": 1.42, "unit": null },
+        { "id": "hospital-alias-right-ldl", "name": "低密度脂蛋白胆固醇", "resultText": "2.31 mmol/L", "numericValue": 2.31, "unit": null },
+        { "id": "hospital-alias-right-glu", "name": "空腹血糖", "resultText": "5.18 mmol/L", "numericValue": 5.18, "unit": null },
+        { "id": "hospital-alias-right-ua", "name": "尿酸", "resultText": "326 umol/L", "numericValue": 326, "unit": null }
+      ]
+    },
+    {
+      "id": "different-panel-left",
+      "title": "匿名肝功能检查",
+      "reportType": "laboratory",
+      "status": "ready",
+      "hospitalName": "示例第二医院",
+      "reportIssuedAt": "2025-03-04",
+      "bodyParts": [],
+      "fileSignature": "golden-file-different-panel-left",
+      "observations": [
+        { "id": "different-panel-left-tg", "name": "甘油三酯", "resultText": "0.87", "numericValue": 0.87, "unit": "mmol/L" },
+        { "id": "different-panel-left-alt", "name": "丙氨酸氨基转移酶", "resultText": "22", "numericValue": 22, "unit": "U/L" },
+        { "id": "different-panel-left-ast", "name": "天门冬氨酸氨基转移酶", "resultText": "20", "numericValue": 20, "unit": "U/L" },
+        { "id": "different-panel-left-tbil", "name": "总胆红素", "resultText": "12.1", "numericValue": 12.1, "unit": "umol/L" },
+        { "id": "different-panel-left-alb", "name": "白蛋白", "resultText": "45", "numericValue": 45, "unit": "g/L" },
+        { "id": "different-panel-left-tp", "name": "总蛋白", "resultText": "72", "numericValue": 72, "unit": "g/L" }
+      ]
+    },
+    {
+      "id": "different-panel-right",
+      "title": "匿名甲状腺与肿瘤标志物检查",
+      "reportType": "laboratory",
+      "status": "ready",
+      "hospitalName": "示例第二医院",
+      "reportIssuedAt": "2025-03-04",
+      "bodyParts": [],
+      "fileSignature": "golden-file-different-panel-right",
+      "observations": [
+        { "id": "different-panel-right-tg", "name": "甘油三酯", "resultText": "0.87", "numericValue": 0.87, "unit": "mmol/L" },
+        { "id": "different-panel-right-tsh", "name": "促甲状腺激素", "resultText": "2.16", "numericValue": 2.16, "unit": "mIU/L" },
+        { "id": "different-panel-right-ft4", "name": "游离甲状腺素", "resultText": "16.4", "numericValue": 16.4, "unit": "pmol/L" },
+        { "id": "different-panel-right-afp", "name": "甲胎蛋白", "resultText": "2.8", "numericValue": 2.8, "unit": "ng/mL" },
+        { "id": "different-panel-right-cea", "name": "癌胚抗原", "resultText": "1.9", "numericValue": 1.9, "unit": "ng/mL" },
+        { "id": "different-panel-right-ca125", "name": "糖类抗原125", "resultText": "8.6", "numericValue": 8.6, "unit": "U/mL" }
+      ]
+    }
+  ]
+}
