@@ -251,6 +251,41 @@ const pageMarkerPattern =
   /^(?:第?\s*\d+\s*页(?:\s*[/／]?\s*共\s*\d+\s*页)?|\d+\s*[/／]\s*\d+\s*页?|页码\s*[:：]?\s*\d+(?:\s*[/／]\s*\d+)?)$/i;
 const footerNoisePattern =
   /(?:本报告仅供|仅供临床参考|仅供参考|如有疑问.{0,16}(?:咨询|联系)|打印时间|打印日期|打印人|制表时间|客服电话|服务热线|官方网址|微信公众号|扫码关注|未经.*不得|报告声明)/;
+/*
+ * 页脚噪声片段（打印时间、页码、送检声明）常与采样/报告时间同处一行、
+ * 或与元数据行视觉合并成一行。逐片段剥离而不是整行丢弃，
+ * 避免连带丢失报告时间等元数据。整行剥离后为空时保留原文，
+ * 交给既有噪声分类处理，维持噪声统计口径不变。
+ */
+const footerNoiseFragmentPatterns = [
+  /打印(?:时间|日期|人)\s*[:：]?\s*\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?/g,
+  /第\s*\d+\s*页\s*[,，/／]?\s*共\s*\d+\s*页/g,
+  /本报告仅[^|｜。]*。/g,
+  /如有疑问[^|｜。]*(?:咨询|联系)[^|｜。]*。?/g,
+];
+
+const footerFragmentSentinel = "\u0000";
+
+function stripFooterNoiseFragments(text: string) {
+  let stripped = text;
+  for (const pattern of footerNoiseFragmentPatterns) {
+    stripped = stripped.replace(pattern, footerFragmentSentinel);
+  }
+  if (!stripped.includes(footerFragmentSentinel)) return text.trim();
+  /* 只丢弃被剥离片段留下的空单元格，保留行内原本就存在的空单元格（如“身高 | | 170”），
+     避免破坏表头列对齐。 */
+  return stripped
+    .split(/[|｜]/)
+    .map((cell) => ({
+      hadFragment: cell.includes(footerFragmentSentinel),
+      cleaned: cell.split(footerFragmentSentinel).join(" ").trim(),
+    }))
+    .filter((cell) => cell.cleaned.length > 0 || !cell.hadFragment)
+    .map((cell) => cell.cleaned)
+    .join(" | ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 const educationHeadingPattern =
   /^(?:专家)?健康(?:宣教|教育)|^疾病知识|^健康知识|^科普知识|^温馨提示/;
 const historicalSectionPattern =
@@ -1548,8 +1583,12 @@ function mergeVisualRow(
   const rects = ordered
     .map((line) => boxRect(line.box))
     .filter((rect): rect is BoxRect => Boolean(rect));
+  const joinedText = redactAiInputText(
+    ordered.map((line) => line.text).join(" | "),
+  );
+  /* 合并行里的页脚声明等噪声片段会把整行拖入噪声分类，剥离后保住同行的报告时间等元数据 */
   const text = stripChartAxisTicks(
-    redactAiInputText(ordered.map((line) => line.text).join(" | ")),
+    stripFooterNoiseFragments(joinedText) || joinedText,
   );
   const sourceCells =
     ordered.length === 1 && isCoordinateSyntheticLine(ordered[0])
@@ -1569,7 +1608,7 @@ function mergeVisualRow(
     !nonResultNoise &&
     !metadataRow &&
     rawDictionaryFacts.length > 0 &&
-    /\d|阴性|阳性|弱阳性|正常|异常|未见|可见/.test(text) &&
+    /\d|阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型/.test(text) &&
     !metadataCandidatePattern.test(text) &&
     !metadataRowPattern.test(text);
   const provisionalCandidate =
@@ -5038,7 +5077,7 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   if (
     cells.length >= 2 &&
     /[\p{L}\u3400-\u9fff]{1,}/u.test(firstCell) &&
-    /^(?:[-+±]+|[-+]?\d+(?:\.\d+)?(?:\s|$)|阴性|阳性|弱阳性|正常|异常|未见|可见)/.test(
+    /^(?:[-+±]+|[-+]?\d+(?:\.\d+)?(?:\s|$)|阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(
       cells[1],
     )
   )
@@ -5046,20 +5085,20 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   if (unitPattern.test(text) && /\d/.test(text)) return true;
   if (/[↑↓▲▼]/.test(text) && /\d/.test(text)) return true;
   if (
-    /(?:检验)?结果\s*[:：]\s*(?:阴性|阳性|弱阳性|正常|异常|未见|可见)/.test(
+    /(?:检验)?结果\s*[:：]\s*(?:阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(
       text,
     )
   )
     return true;
   if (
-    /^[^|｜，。；:：]{1,30}\s+(?:阴性|阳性|弱阳性|正常|异常|未见|可见)$/.test(
+    /^[^|｜，。；:：]{1,30}\s+(?:阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)$/.test(
       trimmed,
     )
   )
     return true;
   if (
     /[|｜]/.test(text) &&
-    /(?:^|[|｜])\s*(?:阴性|阳性|弱阳性|正常|异常|未见|可见)\s*(?:[|｜]|$)/.test(
+    /(?:^|[|｜])\s*(?:阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)\s*(?:[|｜]|$)/.test(
       text,
     ) &&
     !/(?:异常|正常)区域/.test(text)
@@ -5093,9 +5132,14 @@ function parseLines(
       .replace(redactionPlaceholderPattern, " ")
       .replace(/^[\s|,，;；:：]+|[\s|,，;；:：]+$/g, "")
       .replace(/(?<=\d)\.\s+(?=\d)/g, ".")
+      /* OCR 常把日期与时间粘连（如“2024-01-0912:41”），不拆开 AI 难以稳定解析报告时间等字段 */
+      .replace(/(\d{4}-\d{1,2}-\d{1,2})(?=\d{1,2}:\d{2})/g, "$1 ")
+      /* 同理，时间与后续中文标签粘连（如“10:10接收时间”）也需要拆开 */
+      .replace(/(\d{1,2}:\d{2}(?::\d{2})?)(?=[一-鿿])/g, "$1 ")
       .replace(/\s{2,}/g, " ")
       .trim();
-    if (!text) return [];
+    const plannedText = stripFooterNoiseFragments(text) || text;
+    if (!plannedText) return [];
     const confidence = Number(line.confidence);
     return [
       {
@@ -5111,7 +5155,7 @@ function parseLines(
         sourceCells: [
           {
             index: 0,
-            text,
+            text: plannedText,
             sourceLineIds: [
               typeof line.id === "string" && line.id.trim()
                 ? line.id.trim()
@@ -5121,7 +5165,7 @@ function parseLines(
           },
         ],
         index,
-        text,
+        text: plannedText,
         confidence: Number.isFinite(confidence)
           ? Math.max(0, Math.min(1, confidence))
           : null,

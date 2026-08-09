@@ -178,6 +178,23 @@ for (const redirect of redirects) {
 }
 
 const aliasesByName = new Map();
+/**
+ * 已审计确认可安全共存的撞名别名。这些名称在真实报告中本就跨项目共用
+ * （便常规也写「白细胞」、心电图与一般检查都写「心率」），不能靠删别名解决；
+ * 运行时由归一化层的章节上下文、单位兼容与定性/定量分流消歧（有回归测试覆盖）。
+ * 新增撞名不在此清单内，仍会照常警告，迫使维护者显式确认消歧路径。
+ */
+const acknowledgedAmbiguousAliases = new Set([
+  "wbc",
+  "白细胞",
+  "白细胞计数",
+  "rbc",
+  "红细胞",
+  "红细胞计数",
+  "尿蛋白",
+  "心率",
+  "vc"
+]);
 for (const indicator of definitions) {
   for (const alias of indicator.aliases) {
     const key = alias.normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s+/g, "");
@@ -193,7 +210,8 @@ for (const extension of extensions) {
   }
 }
 for (const [alias, keys] of aliasesByName) {
-  if (keys.size > 1) warnings.push(`ambiguous global alias "${alias}" is used by ${[...keys].join(", ")}`);
+  if (keys.size > 1 && !acknowledgedAmbiguousAliases.has(alias))
+    warnings.push(`ambiguous global alias "${alias}" is used by ${[...keys].join(", ")}`);
 }
 
 if (selectedLayer !== "remote") {

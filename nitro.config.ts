@@ -6,6 +6,9 @@ export default defineNitroConfig({
   baseURL: `${templateConfig.gatewayPrefix}/`,
   serverDir: "packages/server",
   errorHandler: "packages/server/error-handler.ts",
+  /* 关闭 nitro 内建静态服务（它插队在所有中间件之前，会绕过维护模式拦截）。
+     静态资源由 routes/[...path].ts 统一分发，publicAssets 仍负责构建期拷贝到 output/public */
+  serveStatic: false,
   output: {
     dir: ".server-dist"
   },

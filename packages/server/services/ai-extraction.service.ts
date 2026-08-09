@@ -1,6 +1,7 @@
 import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import { getAiTaskSettings } from "./ai-settings.service";
+import { backfillMemberBloodTypeFromReport } from "./member.service";
 import { resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
 import { executeAiTask } from "./ai-task.service";
 import {
@@ -3467,6 +3468,8 @@ export function persistAiExtraction(
         JSON.stringify(observation.evidence),
       );
     }
+    /* 血型等成员固有属性随提取结果沉淀到成员档案（仅填空、人工优先） */
+    backfillMemberBloodTypeFromReport(reportId, fields.observations);
     db.prepare(
       `
       DELETE FROM report_diagnoses

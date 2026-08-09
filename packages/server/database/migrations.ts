@@ -422,6 +422,21 @@ export function ensureOcrCoordSpaceColumns(db: DatabaseSync) {
   if (!columns.has("coord_height")) db.exec("ALTER TABLE ocr_results ADD COLUMN coord_height REAL");
 }
 
+// 成员固有属性（血型）：ABO/Rh 拆分存储，source_report_id 记录自动回填来源。
+// 版本冻结期不新增 schema 版本，随每次启动幂等补齐。
+export function ensureMemberBloodTypeColumns(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "health_members");
+  if (!columns.has("blood_type_abo")) {
+    db.exec("ALTER TABLE health_members ADD COLUMN blood_type_abo TEXT CHECK (blood_type_abo IS NULL OR blood_type_abo IN ('A', 'B', 'AB', 'O'))");
+  }
+  if (!columns.has("blood_type_rh")) {
+    db.exec("ALTER TABLE health_members ADD COLUMN blood_type_rh TEXT CHECK (blood_type_rh IS NULL OR blood_type_rh IN ('positive', 'negative'))");
+  }
+  if (!columns.has("blood_type_source_report_id")) {
+    db.exec("ALTER TABLE health_members ADD COLUMN blood_type_source_report_id TEXT REFERENCES reports(id)");
+  }
+}
+
 export function ensureIndicatorGovernanceSchema(db: DatabaseSync) {
   const columns = tableColumnNames(db, "observation_normalizations");
   if (!columns.has("source_origin")) {

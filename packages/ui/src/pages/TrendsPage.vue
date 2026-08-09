@@ -25,7 +25,7 @@ import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
 import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
-import type { OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
+import type { IndicatorNormalizationMetrics, OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
 
 const app = useAppContext();
 const route = useRoute();
@@ -44,6 +44,8 @@ const previewReportId = ref<string | null>(null);
 const activeDetailKey = ref<string | null>(null);
 const activeNoticeKey = ref<string | null>(null);
 const pinPendingKeys = ref(new Set<string>());
+// 仅管理员可见：指标问题池待治理组数，0 表示无待办或非管理员
+const adminIssueCount = ref(0);
 const sourcePreview = ref<{
   point: TrendPoint | TrendExcludedPoint;
   seriesName: string;
@@ -291,6 +293,15 @@ function reloadTrends() {
   const memberId = app.selectedMemberId.value;
   if (!memberId) return;
   load(memberId, true).catch((cause) => console.warn("[health-records] 指标趋势后台刷新失败", cause));
+  loadAdminIssueCount();
+}
+
+// 问题池接口仅管理员可访问，非管理员直接跳过，避免无谓的 403
+function loadAdminIssueCount() {
+  if (!app.session.value?.isGatewayAdmin) return;
+  request<IndicatorNormalizationMetrics>("maintenance/indicator-normalization/metrics")
+    .then((metrics) => { adminIssueCount.value = metrics.totals.issueGroups; })
+    .catch(() => {});
 }
 
 useRefreshOnActivate(reloadTrends);
@@ -699,6 +710,11 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   load(memberId).catch(() => {});
 }, { immediate: true });
 
+// session 可能在页面挂载后才就绪，这里等管理员身份确定后再拉取待治理数
+watch(() => app.session.value?.isGatewayAdmin, (isAdmin) => {
+  if (isAdmin) loadAdminIssueCount();
+}, { immediate: true });
+
 watch([query, groupFilter, attentionFilter], () => {
   closeDetails();
 });
@@ -762,6 +778,11 @@ onDeactivated(() => {
         <FormSelect v-model="attentionFilter" class="trend-status-select records-filter-select" :options="attentionOptions" aria-label="指标状态" />
       </div>
       <p v-if="hasActiveFilters" class="trend-filter-summary">{{ filterSummary }}</p>
+      <RouterLink v-if="adminIssueCount > 0" class="trend-admin-issue-entry" to="/me/maintenance/indicator-issues">
+        <CircleAlert :size="16" />
+        <span>{{ adminIssueCount }} 组指标未进入趋势，待治理</span>
+        <ChevronRight :size="16" />
+      </RouterLink>
       <EmptyState
         v-if="!filteredSeries.length"
         title="没有符合条件的指标"

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Cpu, UserRound } from "@lucide/vue";
+import { Copy, Cpu, UserRound } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
+import { useToast } from "../../composables/useToast";
+import { copyTextToClipboard } from "../../utils/clipboard";
 
 type AboutSummary = {
   appName: string;
@@ -33,6 +35,13 @@ type AboutSummary = {
 const about = ref<AboutSummary | null>(null);
 const loadFailed = ref(false);
 const message = ref("");
+const toast = useToast();
+const qqGroupNumber = "1085626763";
+
+async function copyQqGroup() {
+  const copied = await copyTextToClipboard(qqGroupNumber);
+  toast.show(copied ? "QQ 群号已复制" : "复制失败，请长按群号手动复制");
+}
 const placeholder = computed(() => (loadFailed.value ? "—" : "加载中"));
 const subtitle = computed(() => `应用标识：${about.value?.appName || "fnos-app-health-records"}`);
 const currentSchemaVersion = computed(() => about.value?.database?.appliedSchemaVersion || about.value?.database?.schemaVersion || "—");
@@ -85,6 +94,7 @@ onMounted(() => {
       <div class="about-kv-list">
         <div><span>维护者</span><strong>{{ about?.maintainer || placeholder }}</strong></div>
         <div><span>源代码</span><a v-if="about?.maintainerUrl" :href="about.maintainerUrl" target="_blank" rel="noreferrer">{{ about.maintainerUrl }}</a><strong v-else>{{ placeholder }}</strong></div>
+        <div><span>QQ 交流群</span><button class="about-copy-value" type="button" title="点击复制群号" @click="copyQqGroup"><strong>{{ qqGroupNumber }}</strong><Copy :size="13" /></button></div>
       </div>
     </section>
 

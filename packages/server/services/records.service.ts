@@ -140,6 +140,12 @@ const reportAbnormalCountSql = `
    FROM observations o
    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
    WHERE o.report_id = r.id AND o.display_abnormal_flag IN ('high', 'low', 'abnormal') AND o.abnormal_conflict = 0) AS abnormalCount
+ `;
+
+/* 报告展示日期：部分报告缺少“报告时间”（OCR 粘连或版式缺失），按审核→接收→检查→采样→申请
+   依次借用同报告的真实时间，避免列表、详情与趋势点出现“日期待确认”。 */
+const reportDisplayDateSql = `
+  COALESCE(r.report_issued_at, r.reviewed_at, r.received_at, r.examined_at, r.sampled_at, r.ordered_at)
 `;
 
 function decodeCursor(value?: string): ReportCursor | null {
@@ -487,7 +493,7 @@ function duplicateSourceRowsByIds(memberId: string, reportIds: string[]) {
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
-      r.report_issued_at AS reportIssuedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount,
       r.city, r.visit_type AS visitType, r.ordering_department AS orderingDepartment,
@@ -809,7 +815,7 @@ function findDuplicateCandidates(
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
-      r.report_issued_at AS reportIssuedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount,
       r.city, r.visit_type AS visitType, r.ordering_department AS orderingDepartment,
@@ -919,7 +925,7 @@ function duplicateSourceRowsForMember(user: RequestUser, memberId: string) {
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
-      r.report_issued_at AS reportIssuedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount,
       r.city, r.visit_type AS visitType, r.ordering_department AS orderingDepartment,
@@ -1040,7 +1046,9 @@ export function listMembers(user: RequestUser) {
     .prepare(
       `
     SELECT hm.id, hm.display_name AS displayName, hm.relationship, hm.birth_date AS birthDate,
-      hm.sex, hm.avatar_path AS avatarPath, mp.permission
+      hm.sex, hm.blood_type_abo AS bloodTypeAbo, hm.blood_type_rh AS bloodTypeRh,
+      hm.blood_type_source_report_id AS bloodTypeSourceReportId,
+      hm.avatar_path AS avatarPath, mp.permission
     FROM health_members hm
     JOIN member_permissions mp ON mp.member_id = hm.id AND mp.user_id = ?
     WHERE hm.deleted_at IS NULL
@@ -1090,11 +1098,11 @@ export function listReports(
     params.push(filters.reportType);
   }
   if (filters.dateFrom) {
-    where.push("COALESCE(r.report_issued_at, r.created_at) >= ?");
+    where.push(`COALESCE(${reportDisplayDateSql}, r.created_at) >= ?`);
     params.push(filters.dateFrom);
   }
   if (filters.dateTo) {
-    where.push("COALESCE(r.report_issued_at, r.created_at) <= ?");
+    where.push(`COALESCE(${reportDisplayDateSql}, r.created_at) <= ?`);
     params.push(filters.dateTo);
   }
   const query = normalizeContentKey(filters.query);
@@ -1150,7 +1158,7 @@ export function listReports(
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
-      r.report_issued_at AS reportIssuedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount
     FROM reports r
@@ -1495,7 +1503,7 @@ export function getReportDetail(
       r.reporting_department AS reportingDepartment, r.inpatient_ward AS inpatientWard,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
       r.body_parts_json AS bodyPartsJson, r.identifiers_json AS identifiersJson,
-      r.report_issued_at AS reportIssuedAt, r.examined_at AS examinedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt, r.examined_at AS examinedAt,
       r.ordered_at AS orderedAt, r.sampled_at AS sampledAt, r.received_at AS receivedAt,
       r.reviewed_at AS reviewedAt, r.admitted_at AS admittedAt, r.discharged_at AS dischargedAt,
       r.clinicians_json AS cliniciansJson, r.clinical_diagnosis AS clinicalDiagnosis,
@@ -3269,7 +3277,7 @@ function duplicateComparisonReport(reportId: string) {
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
-      r.report_issued_at AS reportIssuedAt,
+      ${reportDisplayDateSql} AS reportIssuedAt,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount,
       r.summary, r.findings, r.impression
@@ -4912,8 +4920,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       r.title AS reportTitle,
       r.report_type AS reportType,
       r.status AS reportStatus,
-      r.report_issued_at AS reportIssuedAt,
-      COALESCE(r.report_issued_at, r.created_at) AS sortDate,
+      ${reportDisplayDateSql} AS reportIssuedAt,
+      COALESCE(${reportDisplayDateSql}, r.created_at) AS sortDate,
       r.hospital_name_raw AS hospitalName,
       hm.birth_date AS memberBirthDate
     FROM observations o
@@ -4928,7 +4936,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       AND n.canonical_key IS NOT NULL
       AND n.canonical_name IS NOT NULL
       AND n.quality IN ('high', 'medium', 'low', 'excluded')
-    ORDER BY COALESCE(r.report_issued_at, r.created_at), r.id, o.id
+    ORDER BY COALESCE(${reportDisplayDateSql}, r.created_at), r.id, o.id
   `,
     )
     .all(user.id, memberId || null, memberId || null) as Array<{
@@ -5783,7 +5791,7 @@ export function listReminders(user: RequestUser, memberId?: string) {
     SELECT re.id, re.member_id AS memberId, CASE WHEN r.id IS NULL THEN NULL ELSE re.report_id END AS reportId, re.title,
       re.due_at AS dueAt, re.status, re.source,
       r.title AS reportTitle, r.hospital_name_raw AS reportHospitalName,
-      r.report_issued_at AS reportIssuedAt
+      ${reportDisplayDateSql} AS reportIssuedAt
     FROM reminders re
     JOIN member_permissions mp ON mp.member_id = re.member_id AND mp.user_id = ?
     LEFT JOIN reports r ON r.id = re.report_id AND r.status <> 'trashed'
@@ -5958,7 +5966,8 @@ function createReportSuggestionReminder(user: RequestUser, reportId: string) {
   const report = getDatabase()
     .prepare(
       `
-    SELECT member_id AS memberId, title, recommendation, report_issued_at AS reportIssuedAt
+    SELECT member_id AS memberId, title, recommendation,
+      COALESCE(report_issued_at, reviewed_at, received_at, examined_at, sampled_at, ordered_at) AS reportIssuedAt
     FROM reports WHERE id = ? AND status <> 'trashed'
   `,
     )

@@ -21,6 +21,9 @@ export type HealthMember = {
   relationship: string;
   birthDate: string | null;
   sex: string | null;
+  bloodTypeAbo: "A" | "B" | "AB" | "O" | null;
+  bloodTypeRh: "positive" | "negative" | null;
+  bloodTypeSourceReportId: string | null;
   avatarPath: string | null;
   permission: "viewer" | "manager";
 };

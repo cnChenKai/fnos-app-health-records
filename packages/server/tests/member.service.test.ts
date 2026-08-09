@@ -7,6 +7,7 @@ import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
   assertMemberAccess,
+  backfillMemberBloodTypeFromReport,
   createMember,
   deleteMember,
   setMemberPermission,
@@ -113,6 +114,73 @@ test("prevents viewer-only users from editing member profiles or permissions", (
     assert.throws(
       () => setMemberPermission(viewer, created.id, { userId: viewer.id, permission: "manager" }),
       (error: unknown) => (error as { statusCode?: number }).statusCode === 403
+    );
+  });
+});
+
+test("backfills member blood type from report observations only into empty fields", () => {
+  withDatabase(() => {
+    const db = getDatabase();
+    const member = createMember(admin, { displayName: "小华", relationship: "child" });
+    const insertReport = db.prepare(
+      "INSERT INTO reports (id, member_id, created_by, report_type, title) VALUES (?, ?, ?, 'laboratory', ?)"
+    );
+    insertReport.run("report-blood-1", member.id, admin.id, "ABO及Rh血型鉴定检验报告");
+
+    const filled = backfillMemberBloodTypeFromReport("report-blood-1", [
+      { itemName: "ABO血型(BG)", resultText: "O型" },
+      { itemName: "Rh(D)血型(Rh(D))", resultText: "阳性(+)" },
+      { itemName: "白细胞计数", resultText: "5.6" }
+    ]);
+    assert.deepEqual(filled, { memberId: member.id, bloodTypeAbo: "O", bloodTypeRh: "positive" });
+
+    let listed = listMembers(admin).find((item) => item.id === member.id);
+    assert.equal(listed?.bloodTypeAbo, "O");
+    assert.equal(listed?.bloodTypeRh, "positive");
+    assert.equal(listed?.bloodTypeSourceReportId, "report-blood-1");
+
+    // 已有值时不覆盖（无论是回填还是人工设置）
+    insertReport.run("report-blood-2", member.id, admin.id, "血型复查");
+    const skipped = backfillMemberBloodTypeFromReport("report-blood-2", [
+      { itemName: "ABO血型", resultText: "A型" },
+      { itemName: "Rh(D)血型", resultText: "阴性(-)" }
+    ]);
+    assert.equal(skipped, null);
+    listed = listMembers(admin).find((item) => item.id === member.id);
+    assert.equal(listed?.bloodTypeAbo, "O");
+    assert.equal(listed?.bloodTypeRh, "positive");
+
+    // 人工修改后清除来源标记，后续报告回填不覆盖人工值
+    updateMember(admin, member.id, { bloodTypeAbo: "B" });
+    listed = listMembers(admin).find((item) => item.id === member.id);
+    assert.equal(listed?.bloodTypeAbo, "B");
+    assert.equal(listed?.bloodTypeSourceReportId, null);
+    const afterManual = backfillMemberBloodTypeFromReport("report-blood-2", [
+      { itemName: "ABO血型", resultText: "AB型" }
+    ]);
+    assert.equal(afterManual, null);
+    listed = listMembers(admin).find((item) => item.id === member.id);
+    assert.equal(listed?.bloodTypeAbo, "B");
+  });
+});
+
+test("validates blood type input on create and update", () => {
+  withDatabase(() => {
+    assert.throws(
+      () => createMember(admin, { displayName: "小华", relationship: "child", bloodTypeAbo: "C" }),
+      /ABO/
+    );
+    const member = createMember(admin, {
+      displayName: "小华",
+      relationship: "child",
+      bloodTypeAbo: "AB",
+      bloodTypeRh: "negative"
+    });
+    assert.equal(member.bloodTypeAbo, "AB");
+    assert.equal(member.bloodTypeRh, "negative");
+    assert.throws(
+      () => updateMember(admin, member.id, { bloodTypeRh: "unknown" }),
+      /Rh/
     );
   });
 });

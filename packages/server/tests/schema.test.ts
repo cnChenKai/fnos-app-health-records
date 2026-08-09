@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { closeDatabaseForTests, getDatabase, getDatabaseStatus } from "../database/client.ts";
+import {
+  closeDatabaseForTests,
+  getDatabase,
+  getDatabaseStatus,
+  getUnreleasedSchemaMaintenance,
+  repairUnreleasedSchemaVersions
+} from "../database/client.ts";
 import { schemaSql, schemaVersion } from "../database/schema.ts";
 
 test("initializes the health records schema with WAL", () => {
@@ -516,7 +522,9 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
 
   process.env.STORAGE_DIR = storageDir;
   try {
-    assert.throws(() => getDatabase(), /未正式发布阶段的 schema v19/);
+    // 未发版 schema 不再让进程崩溃：应用以维护模式启动，等待维护页显式修复
+    getDatabase();
+    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: 16 });
     closeDatabaseForTests();
 
     const repair = new DatabaseSync(databasePath);
@@ -524,6 +532,7 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
     repair.close();
 
     const db = getDatabase();
+    assert.equal(getUnreleasedSchemaMaintenance(), null);
     assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
     const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
     assert.equal(migrationCount.count, 16);
@@ -575,6 +584,46 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
       "report_duplicate_history",
       "report_duplicate_operations"
     ]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("repairs unreleased schema from the maintenance page flow with backup and data intact", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-maintenance-repair-"));
+  const databasePath = join(storageDir, "db", "health-records.sqlite");
+  mkdirSync(join(storageDir, "db"), { recursive: true });
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(schemaSql);
+  for (let version = 1; version <= 19; version += 1) {
+    legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
+  }
+  legacy.prepare("INSERT INTO users (id, display_name) VALUES ('user-keep', '保留用户')").run();
+  legacy.close();
+
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    getDatabase();
+    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: 16 });
+
+    const result = repairUnreleasedSchemaVersions();
+    assert.equal(result.fromVersion, 19);
+    assert.equal(result.toVersion, 16);
+    assert.ok(result.backupPath && existsSync(result.backupPath), "修复前必须生成数据库备份");
+
+    assert.equal(getUnreleasedSchemaMaintenance(), null);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    const kept = getDatabase()
+      .prepare("SELECT display_name AS name FROM users WHERE id = 'user-keep'")
+      .get() as { name: string } | undefined;
+    assert.equal(kept?.name, "保留用户");
+    const backups = readdirSync(join(storageDir, "backups", "db"));
+    assert.equal(backups.length, 1);
+
+    // 重复调用必须报错，不允许修复正常数据库
+    assert.throws(() => repairUnreleasedSchemaVersions(), /不需要未发版 schema 修复/);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

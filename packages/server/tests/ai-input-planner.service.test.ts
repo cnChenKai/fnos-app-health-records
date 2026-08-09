@@ -387,6 +387,61 @@ test("detects candidate rows with units supplied only by the indicator dictionar
   }
 });
 
+test("splits OCR-concatenated date and time so datetime fields stay parseable", () => {
+  const rebuilt = rebuildOcrPages([
+    page(1, [
+      "采样时间：2024-01-0911:07报告时间：2024-01-0912:41打印时间：2024-01-0912:41:12第1页，共1页",
+    ]),
+  ]);
+
+  assert.match(rebuilt[0].lines[0].text, /2024-01-09 11:07/);
+  assert.match(rebuilt[0].lines[0].text, /2024-01-09 12:41/);
+});
+
+test("keeps report timestamps when a footer disclaimer merges into the same visual row", () => {
+  const rebuilt = rebuildOcrPages([
+    {
+      pageId: "page-1",
+      pageNumber: 1,
+      linesJson: JSON.stringify([
+        {
+          id: "p1-line-1",
+          text: "采样时间：2024-01-0911:07报告时间：2024-01-0912:41打印时间：2024-01-0912:41:12第1页，共1页",
+          confidence: 0.98,
+          box: [0, 0, 300, 10],
+        },
+        {
+          id: "p1-line-2",
+          text: "本报告仅对该样本负责，结果供医师参考，如有疑问请一周内与检验科联系。",
+          confidence: 0.98,
+          box: [320, 0, 600, 10],
+        },
+      ]),
+    },
+  ]);
+
+  const line = rebuilt[0].lines.find((item) => item.text.includes("报告时间"));
+  assert.ok(line);
+  assert.match(line.text, /报告时间：2024-01-09 12:41/);
+  assert.doesNotMatch(line.text, /本报告仅|打印时间|第\s*1\s*页/);
+  assert.equal(rebuilt[0].removedLineCount, 0);
+});
+
+test("treats blood type qualitative rows as scalar candidates", () => {
+  const rebuilt = rebuildOcrPages([
+    page(1, [
+      "项目名称 | 结果 | 单位 | 参考区间 | 检测方法",
+      "ABO血型(BG) | O型 | 微柱凝莎法",
+      "Rh(D)血型(Rh(D)) | 阳性(+) | 微柱凝胶法",
+    ]),
+  ]);
+  const abo = rebuilt[0].lines.find((line) => line.text.includes("ABO血型"));
+  const rh = rebuilt[0].lines.find((line) => line.text.includes("Rh(D)血型"));
+
+  assert.equal(abo?.candidateKind, "scalar");
+  assert.equal(rh?.candidateKind, "scalar");
+});
+
 test("creates separate scalar and morphology extraction routes", () => {
   const plan = planRebuiltOcrPages(
     "routed-report",

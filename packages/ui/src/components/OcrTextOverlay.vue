@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { OcrLineDetail } from "../types/api";
+import { copyTextToClipboard } from "../utils/clipboard";
 
 // interactive 必须显式给默认值 true：type-only 声明的可选 boolean prop
 // 会被 Vue 按布尔转型成 false，导致未传该 prop 的校对弹窗叠加层
@@ -64,33 +65,7 @@ let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 const toastPosition = ref({ left: 0, top: 0 });
 
 async function copyLineText(line: OcrLineDetail) {
-  const text = line.text;
-  let copied = false;
-  // http 内网环境下 navigator.clipboard 不可用，退回 execCommand 兼容老 WebView。
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      copied = true;
-    }
-  } catch {
-    copied = false;
-  }
-  if (!copied) {
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.setAttribute("readonly", "");
-    textarea.style.position = "fixed";
-    textarea.style.top = "0";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      copied = document.execCommand("copy");
-    } catch {
-      copied = false;
-    }
-    textarea.remove();
-  }
+  const copied = await copyTextToClipboard(line.text);
   if (!copied) return;
   copiedLineId.value = line.id;
   // 原图通常比视口高，toast 定位到图片在视口内可见部分的中心，避免落在视口外。

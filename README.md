@@ -304,3 +304,9 @@ AI 返回无效 JSON 时只对当前单元进行一次严格格式重试。合�
 开源仓库：[https://github.com/timor-m/fnos-app-health-records](https://github.com/timor-m/fnos-app-health-records)
 
 项目基于 [fnos-app-template](https://github.com/timor-m/fnos-app-template) 初始化。
+
+## 交流群
+
+使用问题、功能建议和指标字典反馈都可以在 QQ 群里讨论，群号：1085626763。
+
+<img src="./snapshot/qq-group-qr.jpeg" alt="FN健康档案 QQ 交流群二维码" width="260">

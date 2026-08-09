@@ -1548,6 +1548,46 @@ test("heals legacy PDF OCR coordinate space with page rotation", async () => {
   }
 });
 
+test("falls back to other report timestamps for display when reportIssuedAt is missing", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-display-date-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name) VALUES (?, ?)").run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('display-date-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('display-date-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    // 报告时间为空但有接收时间：展示日期借用接收时间
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, received_at)
+      VALUES ('display-date-fallback', 'display-date-member', ?, 'laboratory', '血型鉴定', 'ready', '2024-01-09 11:11:00')
+    `).run(manager.id);
+    // 全部时间为空：展示日期保持为空，不借用上传时间
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status)
+      VALUES ('display-date-empty', 'display-date-member', ?, 'laboratory', '无时间报告', 'ready')
+    `).run(manager.id);
+
+    const list = listReports(manager, 30, 'display-date-member');
+    const fallback = list.items.find((item) => item.id === 'display-date-fallback');
+    const empty = list.items.find((item) => item.id === 'display-date-empty');
+    assert.equal(fallback?.reportIssuedAt, '2024-01-09 11:11:00');
+    assert.equal(empty?.reportIssuedAt, null);
+
+    const detail = getReportDetail(manager, 'display-date-fallback');
+    assert.equal(detail.reportIssuedAt, '2024-01-09 11:11:00');
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("sanitizes stored reference bounds when reading report detail", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-reference-detail-"));
   process.env.STORAGE_DIR = storageDir;

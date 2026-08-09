@@ -22,7 +22,7 @@ const error = ref("");
 const accessUsers = ref<AccessUser[]>([]);
 const memberAccess = ref<MemberAccess[]>([]);
 const accessMember = ref<HealthMember | null>(null);
-const form = ref({ displayName: "", relationship: "child", birthDate: "", sex: "" });
+const form = ref({ displayName: "", relationship: "child", birthDate: "", sex: "", bloodTypeAbo: "", bloodTypeRh: "" });
 const editorTitle = computed(() => editingId.value ? "编辑成员" : "添加家庭成员");
 const isAdmin = computed(() => Boolean(app.session.value?.isGatewayAdmin));
 useScrollLock(computed(() => editorOpen.value || accessOpen.value));
@@ -48,9 +48,19 @@ function resetForm(member?: HealthMember) {
     displayName: member?.displayName || "",
     relationship: member?.relationship === "self" ? "self" : member?.relationship || "child",
     birthDate: member?.birthDate || "",
-    sex: member?.sex || ""
+    sex: member?.sex || "",
+    bloodTypeAbo: member?.bloodTypeAbo || "",
+    bloodTypeRh: member?.bloodTypeRh || ""
   };
   error.value = "";
+}
+
+function bloodTypeLabel(member: HealthMember) {
+  const abo = member.bloodTypeAbo ? `${member.bloodTypeAbo} 型` : "";
+  const rh =
+    member.bloodTypeRh === "positive" ? "Rh 阳性" :
+    member.bloodTypeRh === "negative" ? "Rh 阴性" : "";
+  return [abo, rh].filter(Boolean).join(" · ");
 }
 
 async function openEditor(member?: HealthMember) {
@@ -138,6 +148,13 @@ const sexOptions = [
   { value: "", label: "未填写" }, { value: "male", label: "男" },
   { value: "female", label: "女" }, { value: "unknown", label: "未知" }
 ];
+const bloodTypeAboOptions = [
+  { value: "", label: "未填写" }, { value: "A", label: "A 型" },
+  { value: "B", label: "B 型" }, { value: "AB", label: "AB 型" }, { value: "O", label: "O 型" }
+];
+const bloodTypeRhOptions = [
+  { value: "", label: "未填写" }, { value: "positive", label: "Rh 阳性" }, { value: "negative", label: "Rh 阴性" }
+];
 const permissionOptions = [
   { value: "", label: "无权限" }, { value: "viewer", label: "查看" }, { value: "manager", label: "管理" }
 ];
@@ -156,7 +173,7 @@ const permissionOptions = [
         <span class="member-avatar" aria-hidden="true">{{ member.displayName.slice(0, 1) }}</span>
         <div class="member-summary">
           <strong>{{ member.displayName }}</strong>
-          <span>{{ relationshipLabels[member.relationship] || "其他" }}<template v-if="member.birthDate"> · {{ member.birthDate }}</template><template v-if="member.sex"> · {{ sexLabels[member.sex] }}</template></span>
+          <span>{{ relationshipLabels[member.relationship] || "其他" }}<template v-if="member.birthDate"> · {{ member.birthDate }}</template><template v-if="member.sex"> · {{ sexLabels[member.sex] }}</template><template v-if="bloodTypeLabel(member)"> · {{ bloodTypeLabel(member) }}</template></span>
         </div>
         <span class="permission-label">{{ member.permission === "manager" ? "可管理" : "仅查看" }}</span>
         <div class="member-actions">
@@ -177,6 +194,10 @@ const permissionOptions = [
         <div class="form-grid">
           <label><span>家庭关系</span><FormSelect v-model="form.relationship" :options="relationshipOptions" :disabled="form.relationship === 'self'" aria-label="家庭关系" /></label>
           <label><span>性别</span><FormSelect v-model="form.sex" :options="sexOptions" aria-label="性别" /></label>
+        </div>
+        <div class="form-grid">
+          <label><span>ABO 血型</span><FormSelect v-model="form.bloodTypeAbo" :options="bloodTypeAboOptions" aria-label="ABO 血型" /></label>
+          <label><span>Rh 血型</span><FormSelect v-model="form.bloodTypeRh" :options="bloodTypeRhOptions" aria-label="Rh 血型" /></label>
         </div>
         <label><span>出生日期</span><input v-model="form.birthDate" type="date" /></label>
         <p v-if="error" class="form-error">{{ error }}</p>

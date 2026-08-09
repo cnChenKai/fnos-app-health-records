@@ -645,6 +645,14 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-group-select, .trend-status-select { width: 128px; min-width: 0; }
 .trend-group-select .form-select-trigger, .trend-status-select .form-select-trigger { height: 38px; }
 .trend-filter-summary { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.trend-admin-issue-entry {
+  display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 9px 12px;
+  border-radius: var(--radius-m); background: color-mix(in srgb, var(--amber) 9%, var(--surface));
+  color: var(--ink); font-size: 12.5px; font-weight: 600; text-decoration: none;
+}
+.trend-admin-issue-entry > svg { flex: none; color: var(--amber); }
+.trend-admin-issue-entry > span { flex: 1; min-width: 0; }
+.trend-admin-issue-entry > svg:last-child { color: var(--muted); }
 .trend-card {
   padding: 14px; border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s);
   position: relative; display: grid; gap: 12px;
@@ -966,6 +974,10 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 
 .report-detail-modal { width: min(680px, 100%); height: 88dvh; max-height: 88dvh; display: flex; flex-direction: column; }
 .report-detail-floating-header { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); }
+.report-history-bar { position: sticky; top: 0; z-index: 3; flex: 0 0 auto; padding: 5px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.report-history-back { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--brand); font-size: 13px; font-weight: 600; cursor: pointer; }
+.report-history-back:hover { background: var(--brand-softer); }
+.report-detail-modal.has-report-history .report-detail-floating-header { top: 33px; }
 .report-detail-loading { padding: 48px 0; display: flex; justify-content: center; }
 .mini-loading { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .inline-panel-error { width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 12px; line-height: 1.55; }
@@ -1566,6 +1578,12 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   display: grid; grid-template-columns: 96px minmax(0, 1fr); align-items: center; gap: 12px;
 }
 .about-kv-list > div:first-child { border-top: 0; }
+.about-copy-value {
+  margin: 0; padding: 0; border: 0; background: none; cursor: pointer; justify-self: start;
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; font: inherit;
+}
+.about-copy-value svg { color: var(--muted); flex: none; }
+.about-copy-value:hover svg, .about-copy-value:active svg { color: var(--brand); }
 .table-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 8px; }
 .table-counts article {
   min-height: 48px; padding: 9px 12px; border: 1px solid var(--line);
@@ -3295,10 +3313,15 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 }
 @media (max-width: 620px) {
   .indicator-quality-dashboard > header { gap: 8px; }
-  .indicator-metrics-version { max-width: 100%; }
-  .indicator-report-metrics { overflow-x: auto; }
-  .indicator-report-metric-head,
-  .indicator-report-metric-row { min-width: 540px; }
+}
+@media (max-width: 760px) {
+  /* 触屏只保留核心统计与待治理工作区：诊断分布面板、按类型统计、截断的版本徽章和
+     说明性文案收起，避免长字符串挤压标题且减少干扰；桌面端不受影响 */
+  .indicator-metrics-version,
+  .indicator-metric-panels,
+  .indicator-report-metrics,
+  .indicator-metric-cards article:last-child,
+  .maintenance-issue-list > .indicator-feedback-note { display: none; }
 }
 
 /* ---------- P2 指标治理历史与别名控制 ---------- */

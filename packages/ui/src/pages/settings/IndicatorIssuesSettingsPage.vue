@@ -5,6 +5,7 @@ import {
   BarChart3,
   Ban,
   CheckCircle2,
+  Copy,
   Database,
   ExternalLink,
   History,
@@ -19,8 +20,15 @@ import {
 import EmptyState from "../../components/EmptyState.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
+import { useToast } from "../../composables/useToast";
+import { copyTextToClipboard } from "../../utils/clipboard";
 import { formatRawIndicatorResult } from "../../utils/indicator-display";
-import { buildIndicatorDictionaryIssueUrl, sanitizeIndicatorFeedbackName } from "../../utils/indicator-feedback";
+import {
+  buildIndicatorDictionaryIssueUrl,
+  buildIndicatorFeedbackText,
+  feedbackQqGroup,
+  sanitizeIndicatorFeedbackName
+} from "../../utils/indicator-feedback";
 import type {
   IndicatorAliasGovernanceOverview,
   IndicatorAliasUpdateResult,
@@ -74,6 +82,36 @@ const selectableNames = computed(() => [...new Set(displayedIssues.value.map((is
 const allSelected = computed(() => selectableNames.value.length > 0
   && selectableNames.value.slice(0, maxFeedbackNames).every((key) => selectedNames.value.includes(key)));
 const feedbackUrl = computed(() => buildIndicatorDictionaryIssueUrl(selectedIssueNames.value));
+const toast = useToast();
+
+/* 反馈内容附应用与数据库版本，便于按字典运行环境排查；读取失败不阻塞反馈 */
+const aboutInfo = ref<{ appVersion?: string; schemaVersion?: number }>({});
+async function loadAboutInfo() {
+  try {
+    const summary = await request<{
+      appVersion: string;
+      database: { schemaVersion: number; appliedSchemaVersion: number };
+    }>("about");
+    aboutInfo.value = {
+      appVersion: summary.appVersion,
+      schemaVersion: summary.database?.appliedSchemaVersion || summary.database?.schemaVersion
+    };
+  } catch { /* 版本信息缺失不影响复制 */ }
+}
+
+const feedbackText = computed(() => buildIndicatorFeedbackText(selectedIssueNames.value, {
+  appVersion: aboutInfo.value.appVersion,
+  schemaVersion: aboutInfo.value.schemaVersion
+}));
+
+/** 无法访问 GitHub 的国内用户：复制同一份脱敏名单，粘贴到 QQ 群即可反馈。 */
+async function copyFeedback() {
+  if (!feedbackText.value) return;
+  const copied = await copyTextToClipboard(feedbackText.value);
+  toast.show(copied
+    ? `已复制 ${selectedIssueNames.value.length} 项，请粘贴到 QQ 群 ${feedbackQqGroup} 反馈`
+    : "复制失败，请稍后重试");
+}
 
 const issueStatusLabels: Record<IndicatorNormalizationIssue["status"], string> = {
   unknown: "未命中字典",
@@ -303,6 +341,7 @@ async function loadIssues() {
 
 onMounted(() => {
   void loadIssues();
+  void loadAboutInfo();
 });
 </script>
 
@@ -418,6 +457,15 @@ onMounted(() => {
           <button class="soft-action-button compact-soft" type="button" @click="toggleAll">
             {{ allSelected ? "取消全选" : "全选" }}
           </button>
+          <button
+            class="soft-action-button compact-soft"
+            type="button"
+            :disabled="!feedbackText"
+            :title="`复制脱敏指标名称，粘贴到 QQ 交流群 ${feedbackQqGroup} 反馈`"
+            @click="copyFeedback"
+          >
+            <Copy :size="15" />复制{{ selectedIssueNames.length ? ` ${selectedIssueNames.length}` : "" }}项
+          </button>
           <a
             class="primary-button compact-primary"
             :class="{ disabled: !feedbackUrl }"
@@ -425,13 +473,14 @@ onMounted(() => {
             target="_blank"
             rel="noreferrer"
             :aria-disabled="!feedbackUrl"
+            title="打开预填的 GitHub Issue（需要 GitHub 账号）"
             @click="!feedbackUrl && $event.preventDefault()"
           >
             <ExternalLink :size="15" />反馈{{ selectedIssueNames.length ? ` ${selectedIssueNames.length}` : "" }}项
           </a>
         </div>
       </header>
-      <p class="indicator-feedback-note">反馈不会包含报告数据；治理操作只作用于当前本地指标规则和趋势结果。</p>
+      <p class="indicator-feedback-note">反馈仅包含指标名称，不包含报告数据；无法访问 GitHub 时点击“复制”，粘贴到 QQ 交流群 {{ feedbackQqGroup }} 即可反馈。治理操作只作用于当前本地指标规则和趋势结果。</p>
       <div class="maintenance-issue-rows">
         <article v-for="issue in displayedIssues" :key="issue.fingerprint" class="indicator-issue-row indicator-governance-row">
           <label class="indicator-issue-check" :aria-label="`选择 ${issue.rawName}`">

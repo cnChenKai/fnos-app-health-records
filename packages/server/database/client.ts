@@ -8,6 +8,7 @@ import {
   ensureClinicalFactColumns,
   ensureIndicatorDictionaryColumns,
   ensureIndicatorGovernanceSchema,
+  ensureMemberBloodTypeColumns,
   ensureObservationDisplayFlagColumns,
   ensureOcrCoordSpaceColumns,
   ensureReportDuplicateGovernanceSchema,
@@ -85,14 +86,21 @@ function appliedSchemaVersion(db: DatabaseSync) {
   return current?.version ?? 0;
 }
 
-function assertNoUnreleasedSchemaVersions(currentVersion: number) {
-  // v17-v19 only existed during pre-release development and were folded back into v16.
-  // 不再静默删除迁移记录：检测到未来版本时必须显式修复，避免掩盖数据库曾经进入过未发版 schema 的事实。
-  if (schemaVersion !== 16 || currentVersion <= schemaVersion || currentVersion > 19) return;
-  throw new Error(
-    `数据库记录了未正式发布阶段的 schema v${currentVersion}（v17-v19 已折叠回 v16）。` +
-    "请先停止服务并执行 npm run db:repair-unreleased 显式修复（会自动备份数据库），完成后再启动。",
-  );
+function isUnreleasedSchemaVersion(currentVersion: number) {
+  return schemaVersion === 16 && currentVersion > schemaVersion && currentVersion <= 19;
+}
+
+/**
+ * v17-v19 只存在于发版前的开发过程，已折叠回 v16。
+ * 检测到这些版本时不再让进程崩溃：应用以维护模式启动，
+ * 由维护页引导用户显式确认修复（自动备份），修复后无需重启。
+ */
+let unreleasedSchemaVersion: number | null = null;
+
+export function getUnreleasedSchemaMaintenance() {
+  return unreleasedSchemaVersion
+    ? { databaseVersion: unreleasedSchemaVersion, supportedVersion: schemaVersion }
+    : null;
 }
 
 function recordMigration(db: DatabaseSync, version: number, elapsedMs: number) {
@@ -203,6 +211,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
     ensureIndicatorDictionaryColumns(db);
+    ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
     ensureOcrCoordSpaceColumns(db);
@@ -219,7 +228,10 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const hasMigrationTable = tableExists(db, "schema_migrations");
   let currentVersion = hasMigrationTable ? appliedSchemaVersion(db) : 0;
-  if (hasMigrationTable) assertNoUnreleasedSchemaVersions(currentVersion);
+  if (hasMigrationTable && isUnreleasedSchemaVersion(currentVersion)) {
+    unreleasedSchemaVersion = currentVersion;
+    return;
+  }
   if (currentVersion === 0 && tableExists(db, "reports")) {
     currentVersion = 1;
   }
@@ -255,6 +267,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     db.exec(schemaSql);
     ensureClinicalFactColumns(db);
     ensureIndicatorDictionaryColumns(db);
+    ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
     ensureOcrCoordSpaceColumns(db);
@@ -289,6 +302,24 @@ export function getDatabase() {
 
 export function getDatabasePath() {
   return join(getAppConfig().storageDir, "db", "health-records.sqlite");
+}
+
+/**
+ * 维护页触发的显式修复：备份后删除未发版迁移记录（v17-v19），
+ * 折叠回当前支持的 schema 并补齐幂等结构，无需重启进程。
+ */
+export function repairUnreleasedSchemaVersions() {
+  if (!unreleasedSchemaVersion || !database) {
+    throw new Error("当前数据库不需要未发版 schema 修复");
+  }
+  const { storageDir } = getAppConfig();
+  const databasePath = getDatabasePath();
+  const fromVersion = unreleasedSchemaVersion;
+  const backupPath = backupDatabaseBeforeMigration(database, storageDir, databasePath, fromVersion, schemaVersion);
+  database.prepare("DELETE FROM schema_migrations WHERE version > ? AND version <= 19").run(schemaVersion);
+  unreleasedSchemaVersion = null;
+  migrate(database, storageDir, databasePath);
+  return { fromVersion, toVersion: schemaVersion, backupPath };
 }
 
 export function checkpointDatabase() {
@@ -337,6 +368,7 @@ export function getDatabaseStatus() {
 export function closeDatabase() {
   database?.close();
   database = null;
+  unreleasedSchemaVersion = null;
 }
 
 export function closeDatabaseForTests() {

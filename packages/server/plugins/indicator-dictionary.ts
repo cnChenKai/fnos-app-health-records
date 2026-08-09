@@ -1,5 +1,5 @@
 import { definePlugin } from "nitro";
-import { getDatabase } from "../database/client";
+import { getDatabase, getUnreleasedSchemaMaintenance } from "../database/client";
 import { ensureCoreDictionaryMaterialized } from "../services/indicator-dictionary.service";
 import {
   backfillLegacyMorphologyFindings,
@@ -8,6 +8,8 @@ import {
 
 export default definePlugin(() => {
   getDatabase();
+  // 未发版 schema 维护模式：跳过字典物化与形态学回填，等待维护页修复后再初始化
+  if (getUnreleasedSchemaMaintenance()) return;
   ensureCoreDictionaryMaterialized();
   backfillLegacyMorphologyFindings();
   rebuildMorphologyTrackingIfNeeded();
