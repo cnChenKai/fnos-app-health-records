@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 3,
+  "revision": 4,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -1550,6 +1550,31 @@
       "explanation": "反映红细胞刚性特征的无量纲血液流变指标，受检测方法影响，应结合原报告参考范围并优先比较同方法结果。"
     }
   ],
-  "extensions": [],
+  "extensions": [
+    {
+      "canonicalKey": "urine_wbc",
+      "aliases": [
+        "白细胞"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检",
+        "尿液"
+      ]
+    },
+    {
+      "canonicalKey": "urine_rbc",
+      "aliases": [
+        "红细胞"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检",
+        "尿液"
+      ]
+    }
+  ],
   "redirects": {}
 }

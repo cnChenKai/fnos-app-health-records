@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { Database, Download, History, RefreshCw, RotateCcw } from "@lucide/vue";
+import { CircleAlert, Database, Download, History, RefreshCw, RotateCcw } from "@lucide/vue";
 import EmptyState from "../../components/EmptyState.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { useConfirm } from "../../composables/useConfirm";
@@ -51,6 +51,7 @@ type UpdateCheck = {
   currentRevision: number | null;
   latestRevision: number;
   updateAvailable: boolean;
+  revisionContentChanged?: boolean;
   generatedAt: string;
   signatureVerified: boolean;
   sourceUrl: string;
@@ -133,14 +134,42 @@ async function checkUpdate() {
   error.value = "";
   try {
     checkResult.value = await request<UpdateCheck>("maintenance/indicator-dictionary/check", { method: "POST" });
-    toast.show(checkResult.value.updateAvailable
-      ? `发现远程字典 revision ${checkResult.value.latestRevision}`
-      : "远程字典已经是最新版本");
+    toast.show(checkResult.value.revisionContentChanged
+      ? `远程 revision ${checkResult.value.latestRevision} 内容与本地不一致`
+      : checkResult.value.updateAvailable
+        ? `发现远程字典 revision ${checkResult.value.latestRevision}`
+        : "远程字典已经是最新版本");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "远程字典检查失败";
   } finally {
     checking.value = false;
   }
+}
+
+function forceReinstall() {
+  if (!checkResult.value?.revisionContentChanged) return;
+  confirmDialog.ask({
+    title: "强制重装远程字典",
+    message: `远程 revision ${checkResult.value.latestRevision} 的内容与本地不一致（未发版期间可能被重新发布过）。确认以远程内容覆盖重装？下载内容会先完成大小、哈希、结构和签名策略校验，失败不会改变当前字典。`,
+    confirmText: "验证并重装",
+    run: async () => {
+      updating.value = true;
+      error.value = "";
+      try {
+        await request("maintenance/indicator-dictionary/update", {
+          method: "POST",
+          body: JSON.stringify({ force: true })
+        });
+        checkResult.value = null;
+        await loadStatus();
+        toast.show("远程指标字典已重装");
+      } catch (cause) {
+        error.value = cause instanceof Error ? cause.message : "远程字典重装失败";
+      } finally {
+        updating.value = false;
+      }
+    }
+  });
 }
 
 function updateDictionary() {
@@ -259,6 +288,13 @@ onMounted(() => {
         {{ checkResult.signatureVerified ? "签名已验证" : "未配置签名验证" }} ·
         来源 {{ sourceName(checkResult.sourceUrl) }}
       </p>
+      <div v-if="checkResult?.revisionContentChanged" class="dictionary-drift-notice">
+        <CircleAlert :size="16" />
+        <span>远程 revision {{ checkResult.latestRevision }} 的内容与本地不一致（未发版期间可能被重新发布过），可以远程内容为准强制重装。</span>
+        <button class="soft-action-button" type="button" :disabled="updating" @click="forceReinstall">
+          <Download :size="14" :class="{ 'spin-icon': updating }" />{{ updating ? "重装中" : "强制重装" }}
+        </button>
+      </div>
       <template v-if="checkResult?.changes">
         <div class="maintenance-result dictionary-change-summary">
           <div><span>新增指标</span><strong>{{ checkResult.changes.indicators.added }}</strong></div>

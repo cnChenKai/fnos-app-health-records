@@ -612,6 +612,9 @@ function activateDocuments(input: {
   manifest: DictionaryManifest | null;
   sourceUrl: string | null;
   actorUserId: string | null;
+  /* 未发版期显式修复：允许以同 revision 的新内容替换该层已有快照（管理员强制重装）。
+     正式发版后远程内容在同一 revision 下不应变化，此开关仅服务开发期。 */
+  allowSameRevisionReplace?: boolean;
 }) {
   validateDocuments(input.layer, input.documents);
   const revision = input.documents.indicators.revision;
@@ -624,13 +627,21 @@ function activateDocuments(input: {
   `).get(input.layer, revision) as { contentSha256: string } | undefined;
   if (
     existingRevision &&
-    existingRevision.contentSha256 !== contentSha256
+    existingRevision.contentSha256 !== contentSha256 &&
+    !input.allowSameRevisionReplace
   ) {
-    throw new Error(
-      `${input.layer} 字典 revision ${revision} 已存在不同内容，revision 必须递增；` +
-      "未发版开发期请先执行 npm run dictionary:reset-core 显式重建 core 字典",
-    );
+    throw createError({
+      statusCode: 409,
+      statusMessage:
+        `${input.layer} 字典 revision ${revision} 已存在不同内容，revision 必须递增；` +
+        "未发版开发期请先执行 npm run dictionary:reset-core 显式重建 core 字典",
+    });
   }
+  const replacingSameRevision = Boolean(
+    input.allowSameRevisionReplace &&
+    existingRevision &&
+    existingRevision.contentSha256 !== contentSha256,
+  );
   const updateId = beginUpdate({
     operation: input.operation,
     layer: input.layer,
@@ -641,6 +652,13 @@ function activateDocuments(input: {
   const db = getDatabase();
   try {
     db.exec("BEGIN IMMEDIATE");
+    if (replacingSameRevision) {
+      /* state 引用着旧快照且无 ON DELETE 行为，须先清 state 再删快照；同事务内失败可整体回滚 */
+      db.prepare("DELETE FROM indicator_dictionary_state WHERE layer = ?").run(input.layer);
+      db.prepare(
+        "DELETE FROM indicator_dictionary_snapshots WHERE layer = ? AND revision = ?",
+      ).run(input.layer, revision);
+    }
     const existing = db.prepare(`
       SELECT id FROM indicator_dictionary_snapshots
       WHERE layer = ? AND revision = ? AND content_sha256 = ?
@@ -903,7 +921,10 @@ async function fetchRemoteBundle(includeFiles: boolean) {
       failures.push(`${baseUrl.host}：${message}`);
     }
   }
-  throw new Error(`所有远程指标字典源均不可用（${failures.join("；")}）`);
+  throw createError({
+    statusCode: 502,
+    statusMessage: `所有远程指标字典源均不可用（${failures.join("；")}）`,
+  });
 }
 
 export async function checkRemoteIndicatorDictionary(user: RequestUser) {
@@ -912,14 +933,18 @@ export async function checkRemoteIndicatorDictionary(user: RequestUser) {
   const remote = activeSnapshot("remote");
   const bundle = await fetchRemoteBundle(true);
   const previous = remote ? snapshotDocuments(remote) : null;
-  if (remote?.revision === bundle.manifest.revision
-    && remote.contentSha256 !== documentContentHash(bundle.documents!)) {
-    throw new Error(`远程字典 revision ${remote.revision} 的内容已变化，发布方必须递增 revision`);
-  }
+  /* 未发版期远程内容可能在同一 revision 下被重新发布：不作为错误抛出，
+     而是显式返回标志，由界面给出强制重装入口。 */
+  const revisionContentChanged = Boolean(
+    remote &&
+    remote.revision === bundle.manifest.revision &&
+    remote.contentSha256 !== documentContentHash(bundle.documents!),
+  );
   return {
     currentRevision: remote?.revision ?? null,
     latestRevision: bundle.manifest.revision,
     updateAvailable: !remote || bundle.manifest.revision > remote.revision,
+    revisionContentChanged,
     generatedAt: bundle.manifest.generatedAt,
     signatureVerified: bundle.signatureVerified,
     sourceUrl: bundle.baseUrl.toString(),
@@ -927,13 +952,22 @@ export async function checkRemoteIndicatorDictionary(user: RequestUser) {
   };
 }
 
-export async function updateRemoteIndicatorDictionary(user: RequestUser) {
+export async function updateRemoteIndicatorDictionary(
+  user: RequestUser,
+  options?: { force?: boolean },
+) {
   assertAdministrator(user);
   ensureCoreDictionaryMaterialized();
   try {
     const bundle = await fetchRemoteBundle(true);
     const current = activeSnapshot("remote");
-    if (current && bundle.manifest.revision <= current.revision) {
+    const forceReinstall = Boolean(
+      options?.force && current && bundle.manifest.revision === current.revision,
+    );
+    if (current && bundle.manifest.revision < current.revision) {
+      throw createError({ statusCode: 409, statusMessage: "远程字典 revision 低于当前版本，如需旧版本请使用回滚" });
+    }
+    if (current && bundle.manifest.revision === current.revision && !forceReinstall) {
       throw createError({ statusCode: 409, statusMessage: "远程字典没有更高的 revision" });
     }
     const changes = dictionaryChangeSummary(current ? snapshotDocuments(current) : null, bundle.documents!);
@@ -943,7 +977,8 @@ export async function updateRemoteIndicatorDictionary(user: RequestUser) {
       documents: bundle.documents!,
       manifest: bundle.manifest,
       sourceUrl: bundle.baseUrl.toString(),
-      actorUserId: user.id
+      actorUserId: user.id,
+      allowSameRevisionReplace: forceReinstall
     });
     return { ...result, signatureVerified: bundle.signatureVerified, changes };
   } catch (error) {

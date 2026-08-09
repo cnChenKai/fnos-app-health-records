@@ -1654,6 +1654,9 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .indicator-feedback-actions .disabled { pointer-events: none; opacity: .5; }
 .indicator-feedback-note { padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--fill-2); color: var(--muted); font-size: 11px; }
 .dictionary-change-summary { border-top: 1px solid var(--line); }
+.dictionary-drift-notice { margin: 0 16px 12px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; border-radius: 10px; background: var(--amber-soft); color: var(--amber); font-size: 12px; line-height: 1.5; }
+.dictionary-drift-notice span { flex: 1 1 220px; }
+.dictionary-drift-notice .soft-action-button { flex: 0 0 auto; }
 .dictionary-change-samples { padding: 0 16px 12px; display: grid; gap: 3px; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .dictionary-change-samples span { overflow-wrap: anywhere; }
 .maintenance-issue-rows { display: grid; }

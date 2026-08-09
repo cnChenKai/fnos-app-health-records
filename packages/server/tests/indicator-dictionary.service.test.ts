@@ -40,6 +40,18 @@ function hash(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function expectHttpError(statusCode: number, pattern: RegExp) {
+  return (error: unknown) => {
+    const candidate = error as { statusCode?: unknown; message?: unknown } | null;
+    return Boolean(
+      candidate &&
+      candidate.statusCode === statusCode &&
+      typeof candidate.message === "string" &&
+      pattern.test(candidate.message),
+    );
+  };
+}
+
 function remoteBundle(revision: number, includePendingAlias: boolean) {
   const taxonomy = {
     $schema: "../schemas/taxonomy.schema.json",
@@ -321,6 +333,84 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     const giteeCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(giteeCheck.sourceUrl, "https://gitee.com/timor-m/health-records-dictionary/raw/main/");
     assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "raw.giteeusercontent.com"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    delete process.env.INDICATOR_DICTIONARY_URL;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("flags same-revision remote content drift and repairs it via forced reinstall", async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-dictionary-drift-"));
+  const originalFetch = globalThis.fetch;
+  process.env.STORAGE_DIR = storageDir;
+  process.env.INDICATOR_DICTIONARY_URL = "https://dictionary.test/";
+  let bundle = remoteBundle(1, false);
+  let sourcesDown = false;
+  globalThis.fetch = (async (input) => {
+    const requestUrl = typeof input === "string"
+      ? input
+      : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (sourcesDown) return new Response("unavailable", { status: 503 });
+    if (url.pathname.endsWith("/manifest.json")) {
+      return new Response(jsonBytes(bundle.manifest), { status: 200 });
+    }
+    if (url.pathname.endsWith("/taxonomy.json")) {
+      return new Response(bundle.taxonomyBytes, { status: 200 });
+    }
+    if (url.pathname.endsWith("/indicators.json")) {
+      return new Response(bundle.indicatorsBytes, { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const db = getDatabase();
+    db.prepare(`
+      INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)
+    `).run(admin.id, admin.displayName);
+
+    await updateRemoteIndicatorDictionary(admin);
+
+    /* 未发版期远程在同一 revision 重新发布了不同内容：检查不应报错，而是返回漂移标志 */
+    const drifted = remoteBundle(1, true);
+    drifted.manifest = { ...drifted.manifest, revision: 1 };
+    bundle = drifted;
+    const check = await checkRemoteIndicatorDictionary(admin);
+    assert.equal(check.updateAvailable, false);
+    assert.equal(check.revisionContentChanged, true);
+
+    /* 未强制的同 revision 更新仍被拒绝 */
+    await assert.rejects(
+      updateRemoteIndicatorDictionary(admin),
+      expectHttpError(409, /没有更高的 revision/),
+    );
+
+    /* 强制重装：同 revision 旧快照被替换，字典内容以远程新内容为准 */
+    const reinstalled = await updateRemoteIndicatorDictionary(admin, { force: true });
+    assert.equal(reinstalled.revision, 1);
+    const snapshotCount = db.prepare(`
+      SELECT COUNT(*) AS count FROM indicator_dictionary_snapshots
+      WHERE layer = 'remote' AND revision = 1
+    `).get() as { count: number };
+    assert.equal(snapshotCount.count, 1);
+    const aliasRow = db.prepare(`
+      SELECT COUNT(*) AS count FROM indicator_aliases
+      WHERE alias_name = '待收录项目' AND dictionary_layer = 'remote'
+    `).get() as { count: number };
+    assert.equal(aliasRow.count, 1);
+    const driftCheck = await checkRemoteIndicatorDictionary(admin);
+    assert.equal(driftCheck.revisionContentChanged, false);
+
+    /* 远程源全部不可用：返回带逐源原因的 502，而不是裸 500 */
+    sourcesDown = true;
+    await assert.rejects(
+      checkRemoteIndicatorDictionary(admin),
+      expectHttpError(502, /所有远程指标字典源均不可用/),
+    );
   } finally {
     globalThis.fetch = originalFetch;
     closeDatabaseForTests();
