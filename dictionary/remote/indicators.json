@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 4,
+  "revision": 5,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -300,6 +300,32 @@
       "explanation": "甲状腺球蛋白相关抗体检测项目，应结合本次报告参考范围观察。"
     },
     {
+      "canonicalKey": "thyroid_thyroglobulin",
+      "displayName": "甲状腺球蛋白",
+      "categoryKey": "thyroid_function",
+      "order": 36,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "甲状腺球蛋白",
+        "血清甲状腺球蛋白",
+        "Thyroglobulin"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "甲状腺功能",
+        "甲功",
+        "甲状腺球蛋白"
+      ],
+      "explanation": "甲状腺球蛋白本体的测量值，与甲状腺球蛋白抗体是不同指标，应结合原报告参考范围观察。"
+    },
+    {
       "canonicalKey": "thyroid_tsh_receptor_antibody",
       "displayName": "促甲状腺激素受体抗体",
       "categoryKey": "thyroid_function",
@@ -327,6 +353,32 @@
         "甲状腺抗体"
       ],
       "explanation": "促甲状腺激素受体相关抗体检测项目，应结合本次报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "infectious_h_pylori_antibody",
+      "displayName": "幽门螺杆菌抗体",
+      "categoryKey": "infection_immunity",
+      "order": 73,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "幽门螺杆菌抗体",
+        "幽门螺杆菌抗体测定",
+        "幽门螺旋杆菌抗体",
+        "出门螺杆菌抗体测定",
+        "Hp抗体",
+        "H.pylori抗体"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "幽门螺杆菌",
+        "胃功能",
+        "感染免疫"
+      ],
+      "explanation": "血清幽门螺杆菌抗体结果，不能与 13C/14C 尿素呼气试验结果合并。"
     },
     {
       "canonicalKey": "gyn_endometrium_thickness",
@@ -1343,6 +1395,34 @@
       "explanation": "按高切条件报告的全血还原黏度，是有量纲测量值；不能与红细胞刚性指数或无量纲相对指数合并。"
     },
     {
+      "canonicalKey": "hemorheology_whole_blood_middle_shear_reduced_viscosity",
+      "displayName": "全血中切还原黏度",
+      "categoryKey": "laboratory_other",
+      "order": 38,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mPa·s",
+      "unitDimension": "other",
+      "aliases": [
+        "全血中切还原黏度",
+        "全血中切还原粘度"
+      ],
+      "allowedUnits": [
+        "mPa·s",
+        "mPa.s",
+        "MPa.s"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "按中切条件报告的全血还原黏度；剪切条件是指标身份的一部分，不与高切或低切结果合并。"
+    },
+    {
       "canonicalKey": "hemorheology_whole_blood_low_shear_reduced_viscosity",
       "displayName": "全血低切还原黏度",
       "categoryKey": "laboratory_other",
@@ -1411,7 +1491,9 @@
       "aliases": [
         "全血高切相对指数",
         "全血高切相对黏度",
-        "全血高切相对粘度"
+        "全血高切相对粘度",
+        "全血相对黏度高切",
+        "全血相对粘度高切"
       ],
       "allowedUnits": [],
       "sectionHints": [
@@ -1422,6 +1504,33 @@
         "血流变"
       ],
       "explanation": "血液流变检查中的无量纲相对指数，结果受检测方法和仪器影响，应结合原报告参考范围，并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_middle_shear_relative_index",
+      "displayName": "全血中切相对指数",
+      "categoryKey": "laboratory_other",
+      "order": 36,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "全血中切相对指数",
+        "全血中切相对黏度",
+        "全血中切相对粘度",
+        "全血相对黏度中切",
+        "全血相对粘度中切"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中的中切无量纲相对指数，不与高切或低切相对指数合并。"
     },
     {
       "canonicalKey": "hemorheology_whole_blood_low_shear_relative_index",
@@ -1548,6 +1657,30 @@
         "血流变"
       ],
       "explanation": "反映红细胞刚性特征的无量纲血液流变指标，受检测方法影响，应结合原报告参考范围并优先比较同方法结果。"
+    },
+    {
+      "canonicalKey": "hemorheology_erythrocyte_electrophoresis_index",
+      "displayName": "红细胞电泳指数",
+      "categoryKey": "laboratory_other",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "红细胞电泳指数",
+        "RBC电泳指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血液流变学",
+        "血流变"
+      ],
+      "explanation": "血液流变检查中的红细胞电泳相关无量纲指数，应结合原报告方法和参考范围观察。"
     }
   ],
   "extensions": [

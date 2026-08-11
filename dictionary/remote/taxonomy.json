@@ -2,7 +2,7 @@
   "$schema": "../schemas/taxonomy.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 4,
+  "revision": 5,
   "groups": [],
   "categories": []
 }

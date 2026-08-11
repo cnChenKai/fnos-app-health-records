@@ -76,9 +76,12 @@ function issueKey(value: string) {
 }
 
 const selectedIssueNames = computed(() => [...new Set(displayedIssues.value
-  .filter((issue) => selectedNames.value.includes(issueKey(issue.rawName)))
+  .filter((issue) => issue.status === "unknown" && selectedNames.value.includes(issueKey(issue.rawName)))
   .map((issue) => issue.rawName))]);
-const selectableNames = computed(() => [...new Set(displayedIssues.value.map((issue) => issueKey(issue.rawName)).filter(Boolean))]);
+const selectableNames = computed(() => [...new Set(displayedIssues.value
+  .filter((issue) => issue.status === "unknown")
+  .map((issue) => issueKey(issue.rawName))
+  .filter(Boolean))]);
 const allSelected = computed(() => selectableNames.value.length > 0
   && selectableNames.value.slice(0, maxFeedbackNames).every((key) => selectedNames.value.includes(key)));
 const feedbackUrl = computed(() => buildIndicatorDictionaryIssueUrl(selectedIssueNames.value));
@@ -329,7 +332,9 @@ async function loadIssues() {
     metrics.value = metricSnapshot;
     history.value = historyRows;
     aliasOverview.value = aliases;
-    const validKeys = new Set(issues.value.map((issue) => issueKey(issue.rawName)));
+    const validKeys = new Set(issues.value
+      .filter((issue) => issue.status === "unknown")
+      .map((issue) => issueKey(issue.rawName)));
     selectedNames.value = selectedNames.value.filter((key) => validKeys.has(key));
     for (const issue of issues.value) ensureEditor(issue);
   } catch (cause) {
@@ -441,16 +446,16 @@ onMounted(() => {
     </section>
     <EmptyState
       v-else-if="!issues.length"
-      title="暂无待治理指标"
-      description="当前没有未命中、低可信或保守排除且尚未人工处理的指标。"
+      title="暂无全局待治理指标"
+      description="当前没有需要跨报告统一处理的未命中、低可信或保守排除指标。"
     />
     <section v-else class="settings-band maintenance-issue-list">
       <header>
         <div class="indicator-issue-heading">
           <Sparkles :size="20" />
           <div>
-            <h3>待治理列表</h3>
-            <p>{{ displayedIssues.length }} 组指标需要审查，人工确认后可立即重新生成关联趋势。</p>
+            <h3>全局待治理列表</h3>
+            <p>{{ displayedIssues.length }} 组同类指标需要统一审查，确认后会重新生成所有关联报告的趋势。</p>
           </div>
         </div>
         <div class="indicator-feedback-actions">
@@ -480,14 +485,14 @@ onMounted(() => {
           </a>
         </div>
       </header>
-      <p class="indicator-feedback-note">反馈仅包含指标名称，不包含报告数据；无法访问 GitHub 时点击“复制”，粘贴到 QQ 交流群 {{ feedbackQqGroup }} 即可反馈。治理操作只作用于当前本地指标规则和趋势结果。</p>
+      <p class="indicator-feedback-note">仅“未命中字典”的项目可提交收录反馈；低可信候选和保守排除项需在本地核对，不会重复申请收录。反馈不包含报告数据；无法访问 GitHub 时点击“复制”，粘贴到 QQ 交流群 {{ feedbackQqGroup }} 即可。</p>
       <div class="maintenance-issue-rows">
         <article v-for="issue in displayedIssues" :key="issue.fingerprint" class="indicator-issue-row indicator-governance-row">
           <label class="indicator-issue-check" :aria-label="`选择 ${issue.rawName}`">
             <input
               type="checkbox"
               :checked="selectedNames.includes(issueKey(issue.rawName))"
-              :disabled="!selectedNames.includes(issueKey(issue.rawName)) && selectedNames.length >= maxFeedbackNames"
+              :disabled="issue.status !== 'unknown' || (!selectedNames.includes(issueKey(issue.rawName)) && selectedNames.length >= maxFeedbackNames)"
               @change="toggleIssue(issueKey(issue.rawName))"
             />
           </label>

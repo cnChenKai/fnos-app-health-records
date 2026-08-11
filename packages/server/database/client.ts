@@ -10,6 +10,7 @@ import {
   ensureIndicatorGovernanceSchema,
   ensureMemberBloodTypeColumns,
   ensureObservationDisplayFlagColumns,
+  ensureObservationFieldOverrideSchema,
   ensureOcrCoordSpaceColumns,
   ensureReportDuplicateGovernanceSchema,
   repairIncompatibleAiReportSections,
@@ -44,6 +45,7 @@ const countedTables = [
   "ai_extraction_attempts",
   "ai_extraction_candidates",
   "report_field_overrides",
+  "observation_field_overrides",
   "reminders",
   "app_notifications",
   "app_upgrade_history",
@@ -214,6 +216,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
+    ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
     repairReportDisplayMetadata(db);
@@ -270,6 +273,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
+    ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
     repairReportDisplayMetadata(db);

@@ -65,6 +65,7 @@ import {
 import {
   convertUnit,
   ensureBuiltinIndicatorCatalog,
+  isPolicyFilteredNormalization,
 } from "./indicator-normalization.service";
 import {
   getJobRunnerStatus,
@@ -1292,10 +1293,11 @@ export function classifyObservationDisplay(input: {
   numericValue?: number | null;
   unit?: string | null;
   resultText?: string | null;
+  manualReviewed?: boolean;
 }): Pick<Observation, "displayTier" | "displayCategory" | "displayReason"> {
   if (
     input.normalizationQuality === "excluded" ||
-    input.normalizationMatchedBy === "functional_device_filter"
+    isPolicyFilteredNormalization(input.normalizationMatchedBy)
   ) {
     return {
       displayTier: "governance_only",
@@ -1321,7 +1323,7 @@ export function classifyObservationDisplay(input: {
     /(?:缺少可核验的 OCR 证据|无法回指 OCR 证据|结构化数值与结果文本不一致|参考范围上下界反向)/.test(
       input.normalizationExcludedReason || "",
     );
-  if (!hasVerifiableEvidence || evidenceFailure) {
+  if ((!hasVerifiableEvidence && !input.manualReviewed) || evidenceFailure) {
     return {
       displayTier: "governance_only",
       displayCategory: "governance_noise",
@@ -1437,9 +1439,13 @@ export function classifyObservationDisplay(input: {
   return {
     displayTier: "secondary",
     displayCategory: "medical_candidate",
-    displayReason: input.canonicalName
-      ? "OCR 证据完整，但单位或语义尚未达到趋势发布标准"
-      : "OCR 证据完整，尚未匹配标准指标",
+    displayReason: input.manualReviewed
+      ? input.canonicalName
+        ? "已人工校对，但单位或语义尚未达到趋势发布标准"
+        : "已人工校对，尚未匹配标准指标"
+      : input.canonicalName
+        ? "OCR 证据完整，但单位或语义尚未达到趋势发布标准"
+        : "OCR 证据完整，尚未匹配标准指标",
   };
 }
 
@@ -1570,14 +1576,18 @@ export function getReportDetail(
       o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
       o.reference_text AS referenceText,
       o.abnormal_flag AS abnormalFlag, o.evidence_json AS evidenceJson,
-      n.canonical_name AS canonicalName, n.canonical_value AS canonicalValue,
+      n.canonical_key AS canonicalKey, n.canonical_name AS canonicalName, n.canonical_value AS canonicalValue,
       n.canonical_unit AS canonicalUnit, n.quality AS normalizationQuality,
       n.confidence AS normalizationConfidence, n.match_reason AS normalizationReason,
       n.excluded_reason AS normalizationExcludedReason, n.matched_by AS normalizationMatchedBy,
-      c.explanation AS canonicalExplanation, c.reference_range_json AS dictionaryReferenceJson
+      c.explanation AS canonicalExplanation, c.reference_range_json AS dictionaryReferenceJson,
+      manual_override.id IS NOT NULL AS manualReviewed,
+      COALESCE(manual_override.is_manual_created, 0) AS manualCreated,
+      manual_override.canonical_key AS manualCanonicalKey
     FROM observations o
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     LEFT JOIN indicator_catalog c ON c.id = n.indicator_id
+    LEFT JOIN observation_field_overrides manual_override ON manual_override.observation_id = o.id
     WHERE o.report_id = ? ORDER BY o.section_name, o.id LIMIT 200
   `,
     )
@@ -1603,6 +1613,7 @@ export function getReportDetail(
         numericValue: row.numericValue,
         unit: row.unit,
         resultText: row.resultText,
+        manualReviewed: Boolean(row.manualReviewed),
       });
       const reference = assessObservationReference({
         low: row.referenceLow,
@@ -1630,6 +1641,8 @@ export function getReportDetail(
       } = row;
       return {
         ...observation,
+        manualReviewed: Boolean(row.manualReviewed),
+        manualCreated: Boolean(row.manualCreated),
         referenceLow: reference.low,
         referenceHigh: reference.high,
         referenceText: reference.text,
@@ -4429,16 +4442,37 @@ function observationTableEvidence(value: string) {
     );
     if (!rowLineIds.length) continue;
     const sourceMap = (table as Record<string, unknown>).sourceMap;
-    const result =
+    const sourceMapRecord =
       sourceMap && typeof sourceMap === "object"
-        ? (sourceMap as Record<string, unknown>).result
+        ? (sourceMap as Record<string, unknown>)
+        : null;
+    const result =
+      sourceMapRecord && typeof sourceMapRecord.result === "object"
+        ? sourceMapRecord.result
         : null;
     const resultLineIds = evidenceLineIds(
       result && typeof result === "object"
         ? (result as Record<string, unknown>).sourceLineIds
         : null,
     );
-    return { pageNumber, rowLineIds, resultLineIds };
+    const scopedLineIds = sourceMapRecord
+      ? ["item", "result", "unit", "reference", "qualifier"].flatMap(
+          (key) => {
+            const entry = sourceMapRecord[key];
+            return entry && typeof entry === "object"
+              ? evidenceLineIds(
+                  (entry as Record<string, unknown>).sourceLineIds,
+                )
+              : [];
+          },
+        )
+      : [];
+    return {
+      pageNumber,
+      rowLineIds: [...new Set(scopedLineIds)],
+      resultLineIds,
+      fallbackRowLineIds: rowLineIds,
+    };
   }
   return null;
 }
@@ -4456,16 +4490,17 @@ function normalizeOcrMatchText(value: string | null | undefined) {
    不影响数值本身。 */
 function matchQuoteToOcrLines(
   quote: string | null,
+  itemName: string | null,
   resultText: string | null,
   numericValue: number | null,
   lines: Array<{ id: string; text: string }>,
 ) {
   if (!quote || !lines.length) return null;
-  const fragments = quote
+  const allFragments = quote
     .split(/[|｜]/)
     .map((fragment) => fragment.trim())
     .filter((fragment) => normalizeOcrMatchText(fragment).length >= 2);
-  if (!fragments.length) return null;
+  if (!allFragments.length) return null;
   const normalizedLines = lines
     .map((line) => ({
       id: line.id,
@@ -4478,6 +4513,37 @@ function matchQuoteToOcrLines(
       ? String(numericValue)
       : "")
   ).trim();
+  const itemCore = normalizeOcrMatchText(itemName);
+  const itemIndex = itemCore
+    ? allFragments.findIndex((fragment) => {
+        const normalized = normalizeOcrMatchText(fragment);
+        return normalized.includes(itemCore) || itemCore.includes(normalized);
+      })
+    : -1;
+  const resultIndex =
+    itemIndex >= 0 && resultCore
+      ? allFragments.findIndex(
+          (fragment, index) =>
+            index > itemIndex &&
+            normalizeOcrMatchText(fragment).includes(resultCore),
+        )
+      : -1;
+  let fragments = allFragments;
+  if (itemIndex >= 0) {
+    const focused = [allFragments[itemIndex]];
+    if (resultIndex >= 0) {
+      focused.push(allFragments[resultIndex]);
+      for (
+        let index = resultIndex + 1;
+        index < allFragments.length && index <= resultIndex + 2;
+        index += 1
+      ) {
+        if (/[㐀-鿿]{2,}/u.test(allFragments[index])) break;
+        focused.push(allFragments[index]);
+      }
+    }
+    fragments = focused;
+  }
   const rowLineIds = new Set<string>();
   const resultLineIds = new Set<string>();
   for (const fragment of fragments) {
@@ -4498,6 +4564,12 @@ function matchQuoteToOcrLines(
         );
     const isResultFragment =
       resultCore.length >= 2 && normalizedFragment.includes(resultCore);
+    const isItemFragment =
+      itemCore.length >= 2 &&
+      (normalizedFragment.includes(itemCore) ||
+        itemCore.includes(normalizedFragment));
+    if (candidates.length > 1 && !isItemFragment && !isResultFragment)
+      continue;
     for (const line of candidates) {
       rowLineIds.add(line.id);
       if (isResultFragment) resultLineIds.add(line.id);
@@ -5139,26 +5211,34 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   const lineEvidenceForRow = (
     row: (typeof enrichedRows)[number],
   ): { rowLineIds: string[]; resultLineIds: string[] } => {
-    if (row.evidenceTable) {
+    if (row.evidenceTable?.rowLineIds.length) {
       return {
         rowLineIds: row.evidenceTable.rowLineIds,
         resultLineIds: row.evidenceTable.resultLineIds,
       };
     }
-    if (!row.evidencePageNumber || !row.evidenceQuote) {
+    const evidencePageNumber =
+      row.evidenceTable?.pageNumber || row.evidencePageNumber;
+    if (!evidencePageNumber || !row.evidenceQuote) {
       return { rowLineIds: [], resultLineIds: [] };
     }
-    return (
+    const matched =
       matchQuoteToOcrLines(
         row.evidenceQuote,
+        row.itemName,
         row.resultText,
         row.parsedNumericValue,
         ocrLinesForTrendEvidence(
           ocrLineCache,
           row.reportId,
-          row.evidencePageNumber,
+          evidencePageNumber,
         ),
-      ) || { rowLineIds: [], resultLineIds: [] }
+      ) || null;
+    return (
+      matched || {
+        rowLineIds: row.evidenceTable?.fallbackRowLineIds || [],
+        resultLineIds: row.evidenceTable?.resultLineIds || [],
+      }
     );
   };
   const excludedByKey = new Map<

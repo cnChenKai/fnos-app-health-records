@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
+import type { RequestUser } from "../domain/request-user.ts";
 import {
   convertUnit,
   indicatorNameCandidates,
+  listIndicatorNormalizationIssues,
   normalizeReportObservations
 } from "../services/indicator-normalization.service.ts";
 import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
@@ -533,6 +535,96 @@ test("keeps side-qualified vascular indicators trend-ready when AI normalizes co
     }
     assert.equal(byId.get("vascular-hallucinated")?.quality, "low");
     assert.match(byId.get("vascular-hallucinated")?.excludedReason || "", /项目名称无法回指/);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("classifies reported dictionary candidates without resubmitting known or policy-filtered names", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-feedback-candidates-"));
+  process.env.STORAGE_DIR = storageDir;
+  const admin: RequestUser = {
+    id: "feedback-admin",
+    displayName: "反馈管理员",
+    provider: "development",
+    authenticated: true,
+    isGatewayAdmin: true
+  };
+  try {
+    const db = getDatabase();
+    installRemoteDictionarySnapshotForTests();
+    db.exec(`
+      INSERT INTO users (id, display_name, is_gateway_admin)
+      VALUES ('feedback-admin', '反馈管理员', 1);
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('feedback-member', '本人', 'self', 'feedback-admin');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES (
+        'feedback-report', 'feedback-member', 'feedback-admin', 'checkup',
+        '字典反馈回归', 'ready', '2026-08-11'
+      );
+    `);
+    const insert = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name,
+        result_text, numeric_value, unit
+      ) VALUES (?, 'feedback-report', ?, ?, NULL, ?, ?, ?)
+    `);
+    for (const row of [
+      ["feedback-rdw-cv", "血常规", "红细胞分布宽度(CV)", "12.5", 12.5, "%"],
+      ["feedback-ast", "肝功能", "血清天门冬氨酸氨基转移", "22", 22, "U/L"],
+      ["feedback-cholesterol", "血脂", "总胆固醇测定", "4.5", 4.5, "mmol/L"],
+      ["feedback-glucose", "空腹生化", "血清葡萄糖测定", "5.1", 5.1, "mmol/L"],
+      ["feedback-vision-left", "眼科视力", "矫正视力左", "1.0", 1, null],
+      ["feedback-map", "生命体征血压", "MAP", "92", 92, "mmHg"],
+      ["feedback-pulse-pressure", "生命体征血压", "脉压", "45", 45, "mmHg"],
+      ["feedback-thyroglobulin", "甲状腺功能", "甲状腺球蛋白", "8.2", 8.2, "ng/mL"],
+      ["feedback-h-pylori", "幽门螺杆菌抗体", "出门螺杆菌抗体测定", "阴性", null, null],
+      ["feedback-middle-reduced", "血流变", "全血中切还原粘度", "8.1", 8.1, "mPa.s"],
+      ["feedback-high-relative", "血流变", "全血相对粘度高切", "4.2", 4.2, null],
+      ["feedback-middle-relative", "血流变", "全血相对粘度中切", "5.8", 5.8, null],
+      ["feedback-electrophoresis", "血流变", "红细胞电泳指数", "4.6", 4.6, null],
+      ["feedback-shear-rate", "血流变", "切变率(1/S)50.00", "5.2", 5.2, null],
+      ["feedback-summary", "体检汇总", "小结", "未见明显异常", null, null],
+      ["feedback-device-code", "动脉血管功能检查", "UTN", "120", 120, null],
+      ["feedback-ambiguous-abi", "动脉血管功能检查", "AB11.01", "1.01", 1.01, null]
+    ] as const) insert.run(...row);
+
+    normalizeReportObservations("feedback-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS observationId, canonical_key AS canonicalKey,
+        matched_by AS matchedBy
+      FROM observation_normalizations
+      WHERE observation_id LIKE 'feedback-%'
+    `).all() as Array<{ observationId: string; canonicalKey: string | null; matchedBy: string }>;
+    const byId = new Map(rows.map((row) => [row.observationId, row]));
+
+    assert.equal(byId.get("feedback-rdw-cv")?.canonicalKey, "cbc_rdw_cv");
+    assert.equal(byId.get("feedback-ast")?.canonicalKey, "liver_ast");
+    assert.equal(byId.get("feedback-cholesterol")?.canonicalKey, "lipid_tc");
+    assert.equal(byId.get("feedback-glucose")?.canonicalKey, "glucose_fasting");
+    assert.equal(byId.get("feedback-vision-left")?.canonicalKey, "vision_corrected_left");
+    assert.equal(byId.get("feedback-map")?.canonicalKey, "vital_mean_arterial_pressure");
+    assert.equal(byId.get("feedback-pulse-pressure")?.canonicalKey, "vital_pulse_pressure");
+    assert.equal(byId.get("feedback-thyroglobulin")?.canonicalKey, "thyroid_thyroglobulin");
+    assert.equal(byId.get("feedback-h-pylori")?.canonicalKey, "infectious_h_pylori_antibody");
+    assert.equal(byId.get("feedback-middle-reduced")?.canonicalKey, "hemorheology_whole_blood_middle_shear_reduced_viscosity");
+    assert.equal(byId.get("feedback-high-relative")?.canonicalKey, "hemorheology_whole_blood_high_shear_relative_index");
+    assert.equal(byId.get("feedback-middle-relative")?.canonicalKey, "hemorheology_whole_blood_middle_shear_relative_index");
+    assert.equal(byId.get("feedback-electrophoresis")?.canonicalKey, "hemorheology_erythrocyte_electrophoresis_index");
+    for (const id of ["feedback-shear-rate", "feedback-summary", "feedback-device-code"]) {
+      assert.equal(byId.get(id)?.matchedBy, "observation_noise_filter");
+    }
+    assert.equal(byId.get("feedback-ambiguous-abi")?.canonicalKey, null);
+
+    const issueNames = new Set(listIndicatorNormalizationIssues(admin).map((issue) => issue.rawName));
+    assert.equal(issueNames.has("切变率(1/S)50.00"), false);
+    assert.equal(issueNames.has("小结"), false);
+    assert.equal(issueNames.has("UTN"), false);
+    assert.equal(issueNames.has("AB11.01"), true);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

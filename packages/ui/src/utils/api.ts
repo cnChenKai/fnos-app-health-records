@@ -4,6 +4,17 @@ import { describeTechnical } from "./error";
 const appBasePath = import.meta.env.BASE_URL.endsWith("/") ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
 const apiBase = new URL("api/", new URL(appBasePath, window.location.origin));
 
+export class ApiRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly meta?: Record<string, unknown>
+  ) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 export function apiUrl(path: string) {
   return new URL(path.replace(/^\//, ""), apiBase).toString();
 }
@@ -28,7 +39,7 @@ function parseApiPayload<T>(status: number, okFlag: boolean, text: string): T {
       || payload.statusText
       || payload.statusMessage
       || "请求失败";
-    throw new Error(okFlag ? message : `${message}（HTTP ${status}）`);
+    throw new ApiRequestError(okFlag ? message : `${message}（HTTP ${status}）`, status, payload.meta);
   }
   return payload.data;
 }

@@ -55,6 +55,8 @@ type UpdateCheck = {
   generatedAt: string;
   signatureVerified: boolean;
   sourceUrl: string;
+  sourceKind?: "network" | "bundled";
+  sourceFailures?: string[];
   changes: {
     indicators: { added: number; updated: number; removed: number };
     aliases: { added: number; removed: number };
@@ -84,7 +86,10 @@ function countFor(layer: "core" | "remote") {
 
 function sourceName(value: string) {
   try {
-    const host = new URL(value).host;
+    const url = new URL(value);
+    if (url.protocol === "app:") return "应用内置离线快照";
+    const host = url.host;
+    if (host === "gitee.com" && url.pathname.startsWith("/api/v5/repos/")) return "Gitee API 镜像";
     if (host === "gitee.com") return "Gitee 国内镜像";
     if (host.endsWith("github.io")) return "GitHub Pages";
     return host;
@@ -134,11 +139,13 @@ async function checkUpdate() {
   error.value = "";
   try {
     checkResult.value = await request<UpdateCheck>("maintenance/indicator-dictionary/check", { method: "POST" });
-    toast.show(checkResult.value.revisionContentChanged
-      ? `远程 revision ${checkResult.value.latestRevision} 内容与本地不一致`
-      : checkResult.value.updateAvailable
-        ? `发现远程字典 revision ${checkResult.value.latestRevision}`
-        : "远程字典已经是最新版本");
+    toast.show(checkResult.value.sourceKind === "bundled"
+      ? `公网源不可用，已核对应用内置 revision ${checkResult.value.latestRevision}`
+      : checkResult.value.revisionContentChanged
+        ? `远程 revision ${checkResult.value.latestRevision} 内容与本地不一致`
+        : checkResult.value.updateAvailable
+          ? `发现远程字典 revision ${checkResult.value.latestRevision}`
+          : "远程字典已经是最新版本");
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "远程字典检查失败";
   } finally {
@@ -158,7 +165,10 @@ function forceReinstall() {
       try {
         await request("maintenance/indicator-dictionary/update", {
           method: "POST",
-          body: JSON.stringify({ force: true })
+          body: JSON.stringify({
+            force: true,
+            useBundledFallback: checkResult.value?.sourceKind === "bundled",
+          })
         });
         checkResult.value = null;
         await loadStatus();
@@ -174,15 +184,21 @@ function forceReinstall() {
 
 function updateDictionary() {
   if (!checkResult.value?.updateAvailable) return;
+  const usingBundledFallback = checkResult.value.sourceKind === "bundled";
   confirmDialog.ask({
     title: "更新远程指标字典",
-    message: `确认安装 revision ${checkResult.value.latestRevision}？下载内容会先完成大小、哈希、结构和签名策略校验，失败不会改变当前字典。`,
+    message: usingBundledFallback
+      ? `公网字典源当前不可用。确认安装随应用发布且已通过结构校验的内置 revision ${checkResult.value.latestRevision}？失败不会改变当前字典。`
+      : `确认安装 revision ${checkResult.value.latestRevision}？下载内容会先完成大小、哈希、结构和签名策略校验，失败不会改变当前字典。`,
     confirmText: "验证并更新",
     run: async () => {
       updating.value = true;
       error.value = "";
       try {
-        await request("maintenance/indicator-dictionary/update", { method: "POST" });
+        await request("maintenance/indicator-dictionary/update", {
+          method: "POST",
+          body: JSON.stringify({ useBundledFallback: usingBundledFallback }),
+        });
         checkResult.value = null;
         await loadStatus();
         toast.show("远程指标字典已更新");
@@ -285,9 +301,19 @@ onMounted(() => {
       <p v-if="checkResult" class="preview-hint">
         远程 revision {{ checkResult.latestRevision }} ·
         {{ checkResult.updateAvailable ? "可更新" : "已是最新" }} ·
-        {{ checkResult.signatureVerified ? "签名已验证" : "未配置签名验证" }} ·
+        {{ checkResult.sourceKind === "bundled"
+          ? "应用内置快照"
+          : checkResult.signatureVerified ? "签名已验证" : "未配置签名验证" }} ·
         来源 {{ sourceName(checkResult.sourceUrl) }}
       </p>
+      <div v-if="checkResult?.sourceKind === 'bundled'" class="dictionary-drift-notice">
+        <CircleAlert :size="16" />
+        <span>
+          公网字典源当前不可用，已退回到随应用发布的离线快照。
+          该结果不能确认公网是否存在更高版本。
+          {{ checkResult.sourceFailures?.join("；") }}
+        </span>
+      </div>
       <div v-if="checkResult?.revisionContentChanged" class="dictionary-drift-notice">
         <CircleAlert :size="16" />
         <span>远程 revision {{ checkResult.latestRevision }} 的内容与本地不一致（未发版期间可能被重新发布过），可以远程内容为准强制重装。</span>

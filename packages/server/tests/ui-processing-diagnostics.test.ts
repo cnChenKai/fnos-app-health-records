@@ -64,6 +64,9 @@ test("diagnostic review items open a page-level original and OCR evidence compar
   assert.match(reportDetail, /:highlight-line-ids="diagnosticSourceLineIds"/);
   assert.match(ocrOverlay, /highlightLineIds\?: string\[\]/);
   assert.match(ocrOverlay, /is-highlighted/);
+  assert.match(ocrOverlay, /accentLineIds\?: string\[\]/);
+  assert.match(ocrOverlay, /accentedLineIds/);
+  assert.match(ocrOverlay, /is-accented/);
 });
 
 test("diagnostic review selects the smallest safe repair action and focuses queued processing", () => {

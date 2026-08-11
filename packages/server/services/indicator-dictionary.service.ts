@@ -88,6 +88,14 @@ type DictionaryDocuments = {
   taxonomy: TaxonomyDocument;
   indicators: IndicatorsDocument;
 };
+type RemoteDictionaryBundle = {
+  sourceUrl: string;
+  sourceKind: "network" | "bundled";
+  sourceFailures: string[];
+  manifest: DictionaryManifest;
+  signatureVerified: boolean;
+  documents: DictionaryDocuments | null;
+};
 export type IndicatorDictionaryChangeSummary = {
   indicators: { added: number; updated: number; removed: number };
   aliases: { added: number; removed: number };
@@ -109,6 +117,7 @@ type SnapshotRow = {
 
 const defaultRemoteBaseUrls = [
   "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
+  "https://gitee.com/api/v5/repos/timor-m/health-records-dictionary/contents/?ref=main",
   "https://timor-m.github.io/fnos-app-health-records/"
 ];
 const maxManifestBytes = 256 * 1024;
@@ -799,6 +808,25 @@ function remoteBaseUrls() {
   return [...urls.values()];
 }
 
+function hasConfiguredRemoteBaseUrls() {
+  return Boolean(
+    process.env.INDICATOR_DICTIONARY_URLS?.trim()
+    || process.env.INDICATOR_DICTIONARY_URL?.trim(),
+  );
+}
+
+function isGiteeContentsApi(url: URL) {
+  return url.hostname === "gitee.com"
+    && url.pathname.startsWith("/api/v5/repos/")
+    && url.pathname.includes("/contents/");
+}
+
+function responseMaximumBytes(url: URL, maximumBytes: number) {
+  return isGiteeContentsApi(url)
+    ? Math.min(maxDictionaryFileBytes * 2, Math.max(maximumBytes, Math.ceil(maximumBytes * 4 / 3) + 4096))
+    : maximumBytes;
+}
+
 async function fetchBytes(url: URL, maximumBytes: number) {
   let requestUrl = url;
   let response: Response | null = null;
@@ -829,10 +857,27 @@ async function fetchBytes(url: URL, maximumBytes: number) {
   if (!response) throw new Error("远程指标字典重定向次数过多");
   if (!response.ok) throw new Error(`远程指标字典请求失败（HTTP ${response.status}）`);
   const declaredLength = Number(response.headers.get("content-length") || 0);
-  if (declaredLength > maximumBytes) throw new Error("远程指标字典文件超过大小限制");
+  const apiResponse = isGiteeContentsApi(requestUrl);
+  const maximumResponseBytes = responseMaximumBytes(requestUrl, maximumBytes);
+  if (declaredLength > maximumResponseBytes) throw new Error("远程指标字典文件超过大小限制");
   const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maximumBytes) throw new Error("远程指标字典文件超过大小限制");
-  return bytes;
+  if (bytes.byteLength > maximumResponseBytes) throw new Error("远程指标字典文件超过大小限制");
+  if (!apiResponse) {
+    if (bytes.byteLength > maximumBytes) throw new Error("远程指标字典文件超过大小限制");
+    return bytes;
+  }
+  /* Contents API 返回文件元数据和 Base64 内容，解码后继续执行 manifest 哈希校验。 */
+  const payload = parseJson<{ type?: string; encoding?: string; content?: string }>(bytes, "Gitee Contents API 响应");
+  if (payload.type !== "file" || payload.encoding !== "base64" || typeof payload.content !== "string") {
+    throw new Error("Gitee Contents API 未返回有效文件内容");
+  }
+  const encoded = payload.content.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded) || encoded.length % 4 !== 0) {
+    throw new Error("Gitee Contents API 返回的文件内容不是有效 Base64");
+  }
+  const decoded = new Uint8Array(Buffer.from(encoded, "base64"));
+  if (decoded.byteLength > maximumBytes) throw new Error("远程指标字典文件超过大小限制");
+  return decoded;
 }
 
 function parseJson<T>(bytes: Uint8Array, label: string) {
@@ -848,6 +893,7 @@ function dictionaryFileUrl(baseUrl: URL, path: string) {
     throw new Error(`字典文件路径无效：${path}`);
   }
   const url = new URL(path, baseUrl);
+  for (const [key, value] of baseUrl.searchParams) url.searchParams.set(key, value);
   if (url.origin !== baseUrl.origin || !url.pathname.startsWith(baseUrl.pathname)) {
     throw new Error(`字典文件路径越界：${path}`);
   }
@@ -877,14 +923,26 @@ function verifyManifestSignature(manifest: DictionaryManifest) {
   return true;
 }
 
-async function fetchRemoteBundleFrom(baseUrl: URL, includeFiles: boolean) {
-  const manifestBytes = await fetchBytes(new URL("manifest.json", baseUrl), maxManifestBytes);
+async function fetchRemoteBundleFrom(
+  baseUrl: URL,
+  includeFiles: boolean,
+): Promise<RemoteDictionaryBundle> {
+  const manifestBytes = await fetchBytes(dictionaryFileUrl(baseUrl, "manifest.json"), maxManifestBytes);
   const manifest = parseJson<DictionaryManifest>(manifestBytes, "manifest.json");
   if (!validateManifestSchema(manifest)) {
     throw new Error(schemaError("manifest.json", validateManifestSchema.errors));
   }
   const signatureVerified = verifyManifestSignature(manifest);
-  if (!includeFiles) return { baseUrl, manifest, signatureVerified, documents: null };
+  if (!includeFiles) {
+    return {
+      sourceUrl: baseUrl.toString(),
+      sourceKind: "network",
+      sourceFailures: [],
+      manifest,
+      signatureVerified,
+      documents: null,
+    };
+  }
   const taxonomyBytes = await fetchBytes(
     dictionaryFileUrl(baseUrl, manifest.files.taxonomy.path),
     Math.min(maxDictionaryFileBytes, manifest.files.taxonomy.bytes)
@@ -908,18 +966,86 @@ async function fetchRemoteBundleFrom(baseUrl: URL, includeFiles: boolean) {
   if (documents.indicators.revision !== manifest.revision) {
     throw new Error("远程字典 revision 与 manifest 不一致");
   }
-  return { baseUrl, manifest, signatureVerified, documents };
+  return {
+    sourceUrl: baseUrl.toString(),
+    sourceKind: "network",
+    sourceFailures: [],
+    manifest,
+    signatureVerified,
+    documents,
+  };
 }
 
-async function fetchRemoteBundle(includeFiles: boolean) {
+function bundledRemoteBundle(sourceFailures: string[]): RemoteDictionaryBundle {
+  const documents: DictionaryDocuments = {
+    taxonomy: structuredClone(remoteTaxonomy) as unknown as TaxonomyDocument,
+    indicators: structuredClone(remoteIndicators) as unknown as IndicatorsDocument,
+  };
+  validateDocuments("remote", documents);
+  const taxonomyBytes = new TextEncoder().encode(JSON.stringify(documents.taxonomy));
+  const indicatorsBytes = new TextEncoder().encode(JSON.stringify(documents.indicators));
+  const manifest: DictionaryManifest = {
+    formatVersion: 1,
+    revision: documents.indicators.revision,
+    generatedAt: "1970-01-01T00:00:00.000Z",
+    files: {
+      taxonomy: {
+        path: "taxonomy.json",
+        sha256: sha256(taxonomyBytes),
+        bytes: taxonomyBytes.byteLength,
+      },
+      indicators: {
+        path: "indicators.json",
+        sha256: sha256(indicatorsBytes),
+        bytes: indicatorsBytes.byteLength,
+      },
+    },
+    signature: null,
+  };
+  return {
+    sourceUrl: "app://dictionary/remote",
+    sourceKind: "bundled",
+    sourceFailures,
+    manifest,
+    signatureVerified: false,
+    documents,
+  };
+}
+
+async function fetchRemoteBundle(
+  includeFiles: boolean,
+  options?: { useBundledFallback?: boolean },
+) {
+  if (options?.useBundledFallback) {
+    if (hasConfiguredRemoteBaseUrls()) {
+      throw createError({
+        statusCode: 409,
+        statusMessage: "自定义远程字典不能切换为应用内置快照",
+      });
+    }
+    return bundledRemoteBundle([]);
+  }
   const failures: string[] = [];
   for (const baseUrl of remoteBaseUrls()) {
     try {
-      return await fetchRemoteBundleFrom(baseUrl, includeFiles);
+      const bundle = await fetchRemoteBundleFrom(baseUrl, includeFiles);
+      if (!hasConfiguredRemoteBaseUrls() && includeFiles) {
+        const bundled = bundledRemoteBundle(failures);
+        if (bundled.manifest.revision > bundle.manifest.revision) {
+          return bundledRemoteBundle([
+            ...failures,
+            `${baseUrl.host}：远程 revision ${bundle.manifest.revision} 低于应用内置 revision ${bundled.manifest.revision}`,
+          ]);
+        }
+      }
+      return { ...bundle, sourceFailures: failures };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       failures.push(`${baseUrl.host}：${message}`);
     }
+  }
+  if (!hasConfiguredRemoteBaseUrls() && includeFiles) {
+    return bundledRemoteBundle(failures);
   }
   throw createError({
     statusCode: 502,
@@ -947,19 +1073,23 @@ export async function checkRemoteIndicatorDictionary(user: RequestUser) {
     revisionContentChanged,
     generatedAt: bundle.manifest.generatedAt,
     signatureVerified: bundle.signatureVerified,
-    sourceUrl: bundle.baseUrl.toString(),
+    sourceUrl: bundle.sourceUrl,
+    sourceKind: bundle.sourceKind,
+    sourceFailures: bundle.sourceFailures,
     changes: dictionaryChangeSummary(previous, bundle.documents!)
   };
 }
 
 export async function updateRemoteIndicatorDictionary(
   user: RequestUser,
-  options?: { force?: boolean },
+  options?: { force?: boolean; useBundledFallback?: boolean },
 ) {
   assertAdministrator(user);
   ensureCoreDictionaryMaterialized();
   try {
-    const bundle = await fetchRemoteBundle(true);
+    const bundle = await fetchRemoteBundle(true, {
+      useBundledFallback: options?.useBundledFallback,
+    });
     const current = activeSnapshot("remote");
     const forceReinstall = Boolean(
       options?.force && current && bundle.manifest.revision === current.revision,
@@ -976,11 +1106,17 @@ export async function updateRemoteIndicatorDictionary(
       layer: "remote",
       documents: bundle.documents!,
       manifest: bundle.manifest,
-      sourceUrl: bundle.baseUrl.toString(),
+      sourceUrl: bundle.sourceUrl,
       actorUserId: user.id,
       allowSameRevisionReplace: forceReinstall
     });
-    return { ...result, signatureVerified: bundle.signatureVerified, changes };
+    return {
+      ...result,
+      signatureVerified: bundle.signatureVerified,
+      sourceKind: bundle.sourceKind,
+      sourceFailures: bundle.sourceFailures,
+      changes,
+    };
   } catch (error) {
     recordRemoteDownloadFailure(user, error);
     throw error;

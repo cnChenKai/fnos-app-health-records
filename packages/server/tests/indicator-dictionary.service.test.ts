@@ -155,6 +155,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
   let bundle = remoteBundle(1, false);
   let corruptIndicatorsHash = false;
   let redirectGiteeRaw = false;
+  let failGiteeContentsApi = false;
   const failedHosts = new Set<string>();
   const requestedHosts: string[] = [];
   globalThis.fetch = (async (input) => {
@@ -163,7 +164,11 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
     requestedHosts.push(url.host);
-    if (failedHosts.has(url.host)) return new Response("unavailable", { status: 503 });
+    const isGiteeContentsApi = url.pathname.startsWith("/api/v5/repos/")
+      && url.pathname.includes("/contents/");
+    if (failedHosts.has(url.host) && (!isGiteeContentsApi || failGiteeContentsApi)) {
+      return new Response("unavailable", { status: 503 });
+    }
     if (redirectGiteeRaw && url.host === "gitee.com") {
       return new Response(null, {
         status: 302,
@@ -173,6 +178,25 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       });
     }
     const pathname = url.pathname;
+    if (isGiteeContentsApi) {
+      let content: Uint8Array;
+      if (pathname.endsWith("/manifest.json")) {
+        const manifest = structuredClone(bundle.manifest);
+        if (corruptIndicatorsHash) manifest.files.indicators.sha256 = "0".repeat(64);
+        content = jsonBytes(manifest);
+      } else if (pathname.endsWith("/taxonomy.json")) {
+        content = bundle.taxonomyBytes;
+      } else if (pathname.endsWith("/indicators.json")) {
+        content = bundle.indicatorsBytes;
+      } else {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(jsonBytes({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(content).toString("base64")
+      }), { status: 200 });
+    }
     if (pathname.endsWith("/manifest.json")) {
       const manifest = structuredClone(bundle.manifest);
       if (corruptIndicatorsHash) manifest.files.indicators.sha256 = "0".repeat(64);
@@ -319,10 +343,17 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     failedHosts.add("gitee.com");
     requestedHosts.length = 0;
     const fallbackCheck = await checkRemoteIndicatorDictionary(admin);
-    assert.equal(fallbackCheck.sourceUrl, "https://timor-m.github.io/fnos-app-health-records/");
-    assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "timor-m.github.io"]);
+    assert.equal(
+      fallbackCheck.sourceUrl,
+      "app://dictionary/remote",
+    );
+    assert.equal(fallbackCheck.sourceKind, "bundled");
+    assert.equal(fallbackCheck.latestRevision, 5);
+    assert.match(fallbackCheck.sourceFailures.at(-1) || "", /远程 revision 4.*内置 revision 5/);
+    assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "gitee.com"]);
     assert.deepEqual(getIndicatorDictionaryStatus(admin).remoteBaseUrls, [
       "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
+      "https://gitee.com/api/v5/repos/timor-m/health-records-dictionary/contents/?ref=main",
       "https://timor-m.github.io/fnos-app-health-records/"
     ]);
 
@@ -333,6 +364,26 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     const giteeCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(giteeCheck.sourceUrl, "https://gitee.com/timor-m/health-records-dictionary/raw/main/");
     assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "raw.giteeusercontent.com"]);
+
+    redirectGiteeRaw = false;
+    failedHosts.add("gitee.com");
+    failedHosts.add("timor-m.github.io");
+    failGiteeContentsApi = true;
+    requestedHosts.length = 0;
+    const bundledCheck = await checkRemoteIndicatorDictionary(admin);
+    assert.equal(bundledCheck.sourceUrl, "app://dictionary/remote");
+    assert.equal(bundledCheck.sourceKind, "bundled");
+    assert.equal(bundledCheck.latestRevision, 5);
+    assert.deepEqual(requestedHosts.slice(0, 3), ["gitee.com", "gitee.com", "timor-m.github.io"]);
+    assert.equal(bundledCheck.sourceFailures.length, 3);
+
+    requestedHosts.length = 0;
+    const bundledUpdate = await updateRemoteIndicatorDictionary(admin, {
+      useBundledFallback: true,
+    });
+    assert.equal(bundledUpdate.sourceKind, "bundled");
+    assert.equal(bundledUpdate.revision, 5);
+    assert.deepEqual(requestedHosts, []);
   } finally {
     globalThis.fetch = originalFetch;
     closeDatabaseForTests();

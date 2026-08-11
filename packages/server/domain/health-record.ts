@@ -51,6 +51,7 @@ export type Observation = {
   abnormalReason: string | null;
   evidence: EvidenceRef | null;
   canonicalName: string | null;
+  canonicalKey: string | null;
   canonicalValue: number | null;
   canonicalUnit: string | null;
   canonicalExplanation: string | null;
@@ -61,6 +62,9 @@ export type Observation = {
   displayTier: "primary" | "secondary" | "governance_only";
   displayCategory: "standardized" | "medical_candidate" | "technical_measurement" | "qualitative_finding" | "governance_noise";
   displayReason: string | null;
+  manualReviewed?: boolean;
+  manualCreated?: boolean;
+  manualCanonicalKey?: string | null;
 };
 
 export type MorphologyMeasurement = {

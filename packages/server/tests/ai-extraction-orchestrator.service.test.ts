@@ -634,6 +634,123 @@ test("repairs observation values, rejects date fragments, and withholds reversed
   assert.equal(sanitized[0].evidence.length, 1);
 });
 
+test("repairs damaged CBC OCR values and conservatively completes one missing differential percentage", () => {
+  const evidence = (quote: string) => [{ pageNumber: 1, quote }];
+  const base = {
+    sectionName: "血常规五分类检验报告单",
+    itemCode: null,
+    normalizedName: null,
+    referenceText: null,
+    abnormalFlag: null,
+    method: null,
+  };
+  const sanitized = sanitizeReportObservations([
+    {
+      ...base,
+      itemName: "淋巴细胞百分比(LYMPH%)",
+      resultText: "49.1",
+      numericValue: 49.1,
+      unit: null,
+      referenceLow: 20,
+      referenceHigh: 50,
+      evidence: evidence("淋巴细胞百分比(LYMPH%) | 49.1 | 20-50"),
+    },
+    {
+      ...base,
+      itemName: "单核细胞百分比(MONO%)",
+      resultText: "4.6",
+      numericValue: 4.6,
+      unit: null,
+      referenceLow: 3,
+      referenceHigh: 10,
+      evidence: evidence("单核细胞百分比(MONO%) | 4.6 | 3-10"),
+    },
+    {
+      ...base,
+      itemName: "嗜酸性粒细胞百分比(EO%)",
+      resultText: "6.2",
+      numericValue: 6.2,
+      unit: null,
+      referenceLow: 0.4,
+      referenceHigh: 8,
+      evidence: evidence("嗜酸性粒细胞百分比(EO%) | 6.2 | 0.4-8.0"),
+    },
+    {
+      ...base,
+      itemName: "啫碱性粒细胞百分比(BASO%)",
+      resultText: "8'0",
+      numericValue: 8,
+      unit: null,
+      referenceLow: 0,
+      referenceHigh: 1,
+      abnormalFlag: "high",
+      evidence: evidence("啫碱性粒细胞百分比(BASO%) | 8'0 | 0.0-1.0"),
+    },
+    {
+      ...base,
+      itemName: "血小板压积(PCT)",
+      resultText: "0.23",
+      numericValue: 0.23,
+      unit: null,
+      referenceLow: 0.19,
+      referenceHigh: 0.36,
+      evidence: evidence(
+        "中性粒细胞百分比(NEUT%) | 40-75 | 血小板压积(PCT) | 0.23 | 0.19-0.36",
+      ),
+    },
+    {
+      ...base,
+      itemName: "血红蛋白浓度(HGB)",
+      resultText: "165",
+      numericValue: 165,
+      unit: "9/L",
+      referenceLow: 130,
+      referenceHigh: 175,
+      evidence: evidence("血红蛋白浓度(HGB) | 165 | 9/L | 130-175"),
+    },
+    {
+      ...base,
+      itemName: "红细胞压积(HCT)",
+      resultText: "0.49",
+      numericValue: 0.49,
+      unit: null,
+      referenceLow: 0.4,
+      referenceHigh: 0.5,
+      evidence: evidence("红细胞压积(HCT) | 0.49 | 0.40-0.50"),
+    },
+    {
+      ...base,
+      itemName: "血小板体积分布宽度(PDVW)",
+      resultText: "↑76",
+      numericValue: 76,
+      unit: null,
+      referenceLow: 9.8,
+      referenceHigh: 15.2,
+      abnormalFlag: "high",
+      evidence: evidence("血小板体积分布宽度(PDVW) | ↑76 | 9.8-15.2"),
+    },
+  ]);
+  const byName = new Map(sanitized.map((item) => [item.itemName, item]));
+
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.resultText, "0.8");
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.numericValue, 0.8);
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.abnormalFlag, null);
+  assert.equal(byName.get("血红蛋白浓度(HGB)")?.unit, "g/L");
+  assert.equal(byName.get("红细胞压积(HCT)")?.unit, "L/L");
+  assert.equal(byName.has("血小板体积分布宽度(PDVW)"), false);
+  const neutrophil = byName.get("中性粒细胞百分比(NEUT%)");
+  assert.equal(neutrophil?.numericValue, 39.3);
+  assert.equal(neutrophil?.resultText, "39.3↓");
+  assert.equal(neutrophil?.unit, "%");
+  assert.equal(neutrophil?.referenceLow, 40);
+  assert.equal(neutrophil?.referenceHigh, 75);
+  assert.equal(neutrophil?.abnormalFlag, "low");
+  assert.equal(
+    neutrophil?.method,
+    "calculated:differential_percentage_complement",
+  );
+});
+
 test("repairs embedded numeric names and report-level qualitative headings safely", () => {
   const base = {
     itemCode: null,

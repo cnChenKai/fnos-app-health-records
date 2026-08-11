@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 16,
+  "revision": 17,
   "indicators": [
     {
       "canonicalKey": "cbc_wbc",
@@ -477,7 +477,9 @@
         "天门冬氨酸氨基转移酶",
         "门冬氨酸氨基转移酶",
         "血清天冬氨酸氨基转移酶",
-        "血清门冬氨酸氨基转移酶"
+        "血清门冬氨酸氨基转移酶",
+        "血清天门冬氨酸氨基转移",
+        "血清天门冬氨酸氨基转移酶"
       ],
       "allowedUnits": [
         "U/L",
@@ -644,7 +646,8 @@
         "CHO",
         "CHOL",
         "总胆固醇",
-        "胆固醇"
+        "胆固醇",
+        "总胆固醇测定"
       ],
       "allowedUnits": [
         "mmol/L",
@@ -752,7 +755,8 @@
         "GLU",
         "Glucose",
         "空腹血糖",
-        "血糖"
+        "血糖",
+        "血清葡萄糖测定"
       ],
       "allowedUnits": [
         "mmol/L",
@@ -804,7 +808,8 @@
       "aliases": [
         "TSH",
         "促甲状腺激素",
-        "促甲状腺素"
+        "促甲状腺素",
+        "血清促甲状腺激"
       ],
       "allowedUnits": [
         "mIU/L",
@@ -830,7 +835,8 @@
       "aliases": [
         "FT3",
         "游离T3",
-        "游离三碘甲状腺原氨酸"
+        "游离三碘甲状腺原氨酸",
+        "游离三碘甲状原"
       ],
       "allowedUnits": [
         "pmol/L",
@@ -1637,6 +1643,59 @@
       "explanation": "血压测量中的较低值，应结合收缩压和原报告参考范围观察。"
     },
     {
+      "canonicalKey": "vital_mean_arterial_pressure",
+      "displayName": "平均动脉压",
+      "categoryKey": "general_measurement",
+      "order": 48,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "MAP",
+        "平均动脉压",
+        "平均动脉血压"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "血压",
+        "内科"
+      ],
+      "explanation": "报告明确给出的平均动脉压测量值；若原报告使用 %MAP 等血管波形百分比，应作为不同指标处理。"
+    },
+    {
+      "canonicalKey": "vital_pulse_pressure",
+      "displayName": "脉压",
+      "categoryKey": "general_measurement",
+      "order": 49,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "PP",
+        "脉压",
+        "脉搏压",
+        "脉压差"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "血压",
+        "内科"
+      ],
+      "explanation": "报告明确给出的收缩压与舒张压差值，不由系统根据其他结果自行推算。"
+    },
+    {
       "canonicalKey": "vital_pulse",
       "displayName": "脉搏",
       "categoryKey": "general_measurement",
@@ -1741,7 +1800,8 @@
         "MCH",
         "平均红细胞血红蛋白量",
         "平均红细胞血红蛋白含量",
-        "平均血红蛋白量"
+        "平均血红蛋白量",
+        "红细胞平均血红蛋白含量"
       ],
       "allowedUnits": [
         "pg"
@@ -1765,7 +1825,8 @@
       "aliases": [
         "MCHC",
         "平均红细胞血红蛋白浓度",
-        "平均血红蛋白浓度"
+        "平均血红蛋白浓度",
+        "红细胞平均血红蛋白浓度"
       ],
       "allowedUnits": [
         "g/L",
@@ -1791,7 +1852,8 @@
         "RDW-CV",
         "RDWCV",
         "红细胞分布宽度变异系数",
-        "红细胞体积分布宽度CV"
+        "红细胞体积分布宽度CV",
+        "红细胞分布宽度(CV)"
       ],
       "allowedUnits": [
         "%"
@@ -1817,7 +1879,8 @@
         "RDWSD",
         "红细胞分布宽度-SD",
         "红细胞分布宽度标准差",
-        "红细胞体积分布宽度SD"
+        "红细胞体积分布宽度SD",
+        "红细胞分布宽度(SD)"
       ],
       "allowedUnits": [
         "fL"
@@ -3292,6 +3355,50 @@
         "视力"
       ],
       "explanation": "原报告记录的左眼裸眼视力。"
+    },
+    {
+      "canonicalKey": "vision_corrected_right",
+      "displayName": "右眼矫正视力",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 5,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "矫正视力右",
+        "右眼矫正视力",
+        "右矫正视力"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "眼科",
+        "视力"
+      ],
+      "explanation": "原报告记录的右眼矫正视力，与裸眼视力分开形成趋势。"
+    },
+    {
+      "canonicalKey": "vision_corrected_left",
+      "displayName": "左眼矫正视力",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 6,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "矫正视力左",
+        "左眼矫正视力",
+        "左矫正视力"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "眼科",
+        "视力"
+      ],
+      "explanation": "原报告记录的左眼矫正视力，与裸眼视力分开形成趋势。"
     },
     {
       "canonicalKey": "urine_vitamin_c",

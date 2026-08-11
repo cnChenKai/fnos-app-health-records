@@ -11,9 +11,10 @@ import {
   deriveObservationDisplayAbnormal,
   parseDictionaryReferenceRange
 } from "./observation-interpretation.service";
+import { assertMemberManage } from "./member.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p7-laterality-reorder-v1-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p8-observation-noise-v1-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -35,6 +36,10 @@ type ObservationRow = {
   referenceText: string | null;
   evidenceJson?: string;
   hasAiExtraction?: number;
+  manualReviewed?: number;
+  manualCanonicalKey?: string | null;
+  manualReviewedBy?: string | null;
+  manualReviewedAt?: string | null;
   reportType: string;
   hospitalName: string | null;
   performingDepartment: string | null;
@@ -594,11 +599,62 @@ function excludedFunctionalDeviceObservation(row: ObservationRow, reason: string
   };
 }
 
+export function isPolicyFilteredNormalization(matchedBy: string | null | undefined) {
+  return matchedBy === "functional_device_filter" || matchedBy === "observation_noise_filter";
+}
+
+/**
+ * AI/OCR 偶尔会把表头、章节标题和只有算法内部含义的短代码建成 observation。
+ * 它们保留在原始结果中供审计，但不进入趋势或指标字典收录申请。
+ */
+function observationNoiseExclusionReason(row: ObservationRow) {
+  const name = (row.itemName || "").normalize("NFKC").replace(/\s+/g, "").trim();
+  if (!name) return null;
+  if (/^切变率[（(]?1\/?S[）)]?\d+(?:\.\d+)?$/i.test(name)) {
+    return "血流变表格的切变率条件标签不是独立健康指标";
+  }
+  if (/^(?:小结|血流变|血液流变|甲状腺激素)$/.test(name)) {
+    return "报告章节标题或汇总标签不是独立健康指标";
+  }
+  const context = [row.sectionName, row.reportType, row.performingDepartment, row.reportingDepartment]
+    .filter(Boolean)
+    .join(" ");
+  if (/^(?:UTN|UTL|SAAP)$/i.test(name) && /动脉|血管|ABI|PWV|功能检查/i.test(context)) {
+    return "血管检查设备短代码缺少可解释且稳定的独立指标语义";
+  }
+  return null;
+}
+
+function excludedObservationNoise(row: ObservationRow, reason: string): NormalizationResult {
+  return {
+    observationId: row.id,
+    indicatorId: null,
+    canonicalKey: null,
+    canonicalName: null,
+    canonicalValue: null,
+    canonicalUnit: null,
+    canonicalCategory: null,
+    canonicalExplanation: null,
+    confidence: 1,
+    quality: "excluded",
+    matchedBy: "observation_noise_filter",
+    matchReason: reason,
+    excludedReason: reason,
+    sourceOrigin: "item_name",
+    sourceName: row.itemName,
+    aliasSource: null,
+    reviewStatus: "unreviewed",
+    reviewedBy: null,
+    reviewedAt: null
+  };
+}
+
 function observationEvidenceQualityIssue(row: ObservationRow) {
   // 内存待落库项与未经过 AI 持久化链路的历史/手工数据不套用本闸门。
   if (row.evidenceJson === undefined || !row.hasAiExtraction) return null;
+  const manuallyReviewed = Boolean(row.manualReviewed);
   const quotes = observationEvidenceQuotes(row);
-  if (!quotes.length) return "缺少可核验的 OCR 证据，禁止进入默认趋势";
+  if (!quotes.length && !manuallyReviewed) return "缺少可核验的 OCR 证据，禁止进入默认趋势";
   const compactQuotes = quotes.map(compactObservationEvidence);
   const nameSearchQuotes = quotes.flatMap((quote) => [
     compactObservationEvidence(quote),
@@ -613,7 +669,7 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   const nameBackReferenced = !nameCandidates.length || nameSearchQuotes.some((quote) =>
     nameCandidates.some((name) => quote.includes(name) || name.includes(quote))
   );
-  if (!nameBackReferenced) {
+  if (!manuallyReviewed && !nameBackReferenced) {
     // AI 常把原文口语化表述规范为标准名（如「左踝：1.08」→「左侧踝肱指数」），
     // 名称字面无法回指但数值锚点完整时，不否决整条证据链；
     // 仅当名称与数值都无法回指时才判定证据链断裂。
@@ -626,12 +682,12 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   if (numericValue !== null && resultValue !== null && !sameObservationEvidenceNumber(numericValue, resultValue)) {
     return "结构化数值与结果文本不一致，禁止进入默认趋势";
   }
-  if (numericValue !== null && !sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue))) {
+  if (!manuallyReviewed && numericValue !== null && !sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue))) {
     return "结果数值无法回指 OCR 证据，禁止进入默认趋势";
   }
 
   const rawUnit = row.unit?.trim() || null;
-  if (rawUnit) {
+  if (!manuallyReviewed && rawUnit) {
     const unitCandidates = [...new Set([rawUnit, normalizeUnit(rawUnit)].filter(Boolean))]
       .map(compactObservationEvidence);
     if (!compactQuotes.some((quote) => unitCandidates.some((unit) => quote.includes(unit)))) {
@@ -642,7 +698,7 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
     return "参考范围上下界反向，禁止进入默认趋势";
   }
   for (const [label, value] of [["下限", row.referenceLow], ["上限", row.referenceHigh]] as const) {
-    if (value != null && !sourceNumbers.some((source) => sameObservationEvidenceNumber(source, value))) {
+    if (!manuallyReviewed && value != null && !sourceNumbers.some((source) => sameObservationEvidenceNumber(source, value))) {
       return `参考范围${label}无法回指 OCR 证据，禁止进入默认趋势`;
     }
   }
@@ -891,6 +947,8 @@ function candidateAliases(row: ObservationRow): AliasCandidate[] {
 function normalizeObservationAutomatically(row: ObservationRow): NormalizationResult {
   const deviceExclusionReason = functionalDeviceObservationExclusionReason(row);
   if (deviceExclusionReason) return excludedFunctionalDeviceObservation(row, deviceExclusionReason);
+  const noiseExclusionReason = observationNoiseExclusionReason(row);
+  if (noiseExclusionReason) return excludedObservationNoise(row, noiseExclusionReason);
   const candidates = candidateAliases(row);
   if (!candidates.length) {
     return {
@@ -1241,6 +1299,36 @@ function manuallyConfirmedNormalization(
 
 function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
   const automatic = normalizeObservationAutomatically(row);
+  if (row.manualCanonicalKey) {
+    const indicator = getDatabase().prepare(`
+      SELECT id AS indicatorId, canonical_key AS canonicalKey, display_name AS displayName,
+        category, default_unit AS defaultUnit, value_type AS valueType,
+        trend_enabled AS trendEnabled, explanation, allowed_units_json AS allowedUnitsJson
+      FROM indicator_catalog WHERE canonical_key = ?
+    `).get(row.manualCanonicalKey) as CatalogIndicatorRow | undefined;
+    if (!indicator) {
+      return {
+        ...automatic,
+        quality: "low",
+        matchReason: `${automatic.matchReason}；报告中人工选择的本地标准指标已不存在`,
+        excludedReason: "人工选择的本地标准指标已不存在，需重新选择",
+        reviewStatus: "unreviewed",
+        reviewedBy: null,
+        reviewedAt: null
+      };
+    }
+    return manuallyConfirmedNormalization(row, {
+      action: "confirm",
+      indicatorId: indicator.indicatorId,
+      canonicalKey: indicator.canonicalKey,
+      saveAlias: 0,
+      aliasScope: null,
+      aliasId: null,
+      reason: "已在报告详情中选择本地标准指标",
+      createdBy: row.manualReviewedBy || null,
+      reviewedAt: row.manualReviewedAt || new Date().toISOString()
+    }, indicator);
+  }
   const decision = governanceDecisionForObservation(row);
   if (!decision) return automatic;
   if (decision.action === "exclude") {
@@ -1448,7 +1536,7 @@ function upsertNormalization(result: NormalizationResult) {
     normalizationVersion()
   );
   const governedOrPolicyResolved = result.reviewStatus !== "unreviewed"
-    || result.matchedBy === "functional_device_filter"
+    || isPolicyFilteredNormalization(result.matchedBy)
     || Boolean(result.canonicalKey && ["high", "medium"].includes(result.quality));
   updateUnmatchedNameOccurrence(
     result.observationId,
@@ -1567,7 +1655,7 @@ function synchronizeUnmatchedNamePool() {
       LEFT JOIN observation_normalizations n ON n.observation_id = o.id
       WHERE r.status = 'trashed'
         OR n.review_status IN ('confirmed', 'excluded')
-        OR n.matched_by = 'functional_device_filter'
+        OR n.matched_by IN ('functional_device_filter', 'observation_noise_filter')
         OR n.excluded_reason LIKE '%OCR 证据%'
         OR n.excluded_reason = '结构化数值与结果文本不一致，禁止进入默认趋势'
         OR n.excluded_reason = '参考范围上下界反向，禁止进入默认趋势'
@@ -1582,7 +1670,7 @@ function synchronizeUnmatchedNamePool() {
     WHERE r.status <> 'trashed'
       AND (n.observation_id IS NULL OR (
         n.review_status = 'unreviewed'
-        AND n.matched_by <> 'functional_device_filter'
+        AND n.matched_by NOT IN ('functional_device_filter', 'observation_noise_filter')
         AND COALESCE(n.excluded_reason, '') NOT LIKE '%OCR 证据%'
         AND COALESCE(n.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
         AND COALESCE(n.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
@@ -1608,6 +1696,10 @@ function observationRowsForReport(reportId: string) {
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
+      (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
+      (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
+      (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
@@ -1623,6 +1715,10 @@ function staleBuiltinNormalizationRows() {
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
+      (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
+      (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
+      (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment,
       n.canonical_key AS existingCanonicalKey, n.matched_by AS existingMatchedBy
@@ -1633,7 +1729,7 @@ function staleBuiltinNormalizationRows() {
       AND r.deleted_at IS NULL
       AND (
         n.observation_id IS NULL
-        OR (n.canonical_key IS NULL AND n.matched_by <> 'functional_device_filter')
+        OR (n.canonical_key IS NULL AND n.matched_by NOT IN ('functional_device_filter', 'observation_noise_filter'))
         OR n.version <> ?
       )
     ORDER BY o.report_id, o.id
@@ -1650,6 +1746,10 @@ function pendingObservationRowsForReport(reportId: string) {
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
+      (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
+      (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
+      (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
@@ -1658,7 +1758,7 @@ function pendingObservationRowsForReport(reportId: string) {
     WHERE o.report_id = ?
       AND (
         n.observation_id IS NULL
-        OR (n.canonical_key IS NULL AND n.matched_by <> 'functional_device_filter')
+        OR (n.canonical_key IS NULL AND n.matched_by NOT IN ('functional_device_filter', 'observation_noise_filter'))
       )
   `).all(reportId) as ObservationRow[];
 }
@@ -1683,7 +1783,7 @@ function collectNormalizationResult(rows: ObservationRow[]): IndicatorNormalizat
     const normalized = normalizeObservationWithReadyCatalog(row);
     upsertNormalization(normalized);
     result[normalized.quality] += 1;
-    if (!normalized.canonicalKey && normalized.matchedBy !== "functional_device_filter") result.unknown += 1;
+    if (!normalized.canonicalKey && !isPolicyFilteredNormalization(normalized.matchedBy)) result.unknown += 1;
     if (normalized.canonicalKey && ["high", "medium"].includes(normalized.quality)) result.normalized += 1;
   }
   return result;
@@ -1900,7 +2000,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
           OR (
             normalization.review_status = 'unreviewed'
             AND (normalization.canonical_key IS NULL OR normalization.quality IN ('low', 'excluded'))
-            AND normalization.matched_by <> 'functional_device_filter'
+            AND normalization.matched_by NOT IN ('functional_device_filter', 'observation_noise_filter')
             AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%OCR 证据%'
             AND COALESCE(normalization.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
             AND COALESCE(normalization.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
@@ -1955,6 +2055,10 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
           OR (
             normalization.review_status = 'unreviewed'
             AND (normalization.canonical_key IS NULL OR normalization.quality IN ('low', 'excluded'))
+            AND normalization.matched_by NOT IN ('functional_device_filter', 'observation_noise_filter')
+            AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%OCR 证据%'
+            AND COALESCE(normalization.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
+            AND COALESCE(normalization.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
           )
         THEN 1 ELSE 0 END) AS needsReview
     FROM reports report
@@ -2108,8 +2212,7 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
     .slice(0, 100);
 }
 
-export function searchIndicatorCatalog(user: RequestUser, query = ""): IndicatorCatalogOption[] {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查询标准指标" });
+function searchIndicatorCatalogOptions(query = ""): IndicatorCatalogOption[] {
   ensureBuiltinIndicatorCatalog();
   const normalizedQuery = query.normalize("NFKC").trim().slice(0, 80);
   const like = `%${normalizedQuery.replace(/[\\%_]/g, (value) => `\\${value}`)}%`;
@@ -2141,6 +2244,24 @@ export function searchIndicatorCatalog(user: RequestUser, query = ""): Indicator
   }));
 }
 
+export function searchIndicatorCatalog(user: RequestUser, query = ""): IndicatorCatalogOption[] {
+  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查询标准指标" });
+  return searchIndicatorCatalogOptions(query);
+}
+
+export function searchReportIndicatorCatalog(
+  user: RequestUser,
+  reportId: string,
+  query = "",
+): IndicatorCatalogOption[] {
+  const report = getDatabase().prepare(`
+    SELECT member_id AS memberId FROM reports WHERE id = ? AND status <> 'trashed'
+  `).get(reportId) as { memberId: string } | undefined;
+  if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+  assertMemberManage(user, report.memberId);
+  return searchIndicatorCatalogOptions(query);
+}
+
 function observationRowsForIds(observationIds: string[]) {
   if (!observationIds.length) return [];
   const placeholders = observationIds.map(() => "?").join(",");
@@ -2150,6 +2271,10 @@ function observationRowsForIds(observationIds: string[]) {
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
+      (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
+      (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
+      (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
@@ -2165,6 +2290,10 @@ function allActiveObservationRows() {
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
+      (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
+      (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
+      (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o

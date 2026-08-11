@@ -13,11 +13,13 @@ import json
 import math
 import os
 import platform
+import re
 import sys
 import time
 import traceback
 import tempfile
 import threading
+import unicodedata
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -759,10 +761,578 @@ def date_image_variants(image_path: Path, temp_dir: Path) -> list[tuple[str, Pat
     return variants
 
 
+def line_rect(line: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    box = line.get("box")
+    if not isinstance(box, (list, tuple)) or not box:
+        return None
+    try:
+        if isinstance(box[0], (list, tuple)):
+            points = [
+                (float(point[0]), float(point[1]))
+                for point in box
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
+            if not points:
+                return None
+            xs = [point[0] for point in points]
+            ys = [point[1] for point in points]
+            return min(xs), min(ys), max(xs), max(ys)
+        if len(box) >= 4:
+            x1, y1, x2, y2 = (float(value) for value in box[:4])
+            return min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)
+    except Exception:
+        return None
+    return None
+
+
+def normalized_ocr_text(value: Any) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).strip()
+
+
+TABLE_REFERENCE_PATTERN = re.compile(
+    r"^\s*([-+]?\d+(?:\.\d+)?)\s*(?:-|–|—|~|～|至)\s*([-+]?\d+(?:\.\d+)?)\s*$"
+)
+TABLE_RESULT_PATTERN = re.compile(
+    r"^\s*[↑↓▲▼⬆⬇]?(?:<=|>=|<|>|≤|≥)?\s*[-+]?\d+(?:\.\d+)?\s*(?:[%‰↑↓▲▼⬆⬇]|偏高|偏低|高|低)?\s*$",
+    re.IGNORECASE,
+)
+CORRUPTED_DECIMAL_PATTERN = re.compile(r"^\s*\d+[`'’]\d+\s*[↑↓▲▼⬆⬇]?\s*$")
+SUSPICIOUS_UNIT_PATTERN = re.compile(r"^(?:9|q)\s*/\s*[lL]$", re.IGNORECASE)
+
+
+def table_reference(text: str) -> tuple[float, float] | None:
+    match = TABLE_REFERENCE_PATTERN.match(normalized_ocr_text(text))
+    if not match:
+        return None
+    low, high = float(match.group(1)), float(match.group(2))
+    return (min(low, high), max(low, high))
+
+
+def table_result_value(text: str) -> float | None:
+    normalized = normalized_ocr_text(text)
+    if not TABLE_RESULT_PATTERN.match(normalized):
+        return None
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", normalized)
+    if not match:
+        return None
+    try:
+        value = float(match.group(0))
+        return value if math.isfinite(value) else None
+    except Exception:
+        return None
+
+
+def table_row_lines(
+    lines: list[dict[str, Any]],
+    name_rect: tuple[float, float, float, float],
+    reference_rect: tuple[float, float, float, float],
+) -> list[dict[str, Any]]:
+    row_top = min(name_rect[1], reference_rect[1])
+    row_bottom = max(name_rect[3], reference_rect[3])
+    row_height = max(8.0, row_bottom - row_top)
+    row_center = (row_top + row_bottom) / 2
+    left = name_rect[0] - row_height * 0.4
+    right = reference_rect[2] + row_height * 0.4
+    matches: list[dict[str, Any]] = []
+    for line in lines:
+        rect = line_rect(line)
+        if not rect:
+            continue
+        center_x = (rect[0] + rect[2]) / 2
+        center_y = (rect[1] + rect[3]) / 2
+        if left <= center_x <= right and abs(center_y - row_center) <= row_height * 0.65:
+            matches.append(line)
+    return matches
+
+
+def table_result_candidates(
+    row_lines: list[dict[str, Any]],
+    name_rect: tuple[float, float, float, float],
+    reference_rect: tuple[float, float, float, float],
+) -> list[dict[str, Any]]:
+    minimum_x = name_rect[0] + (name_rect[2] - name_rect[0]) * 0.72
+    candidates: list[dict[str, Any]] = []
+    for line in row_lines:
+        rect = line_rect(line)
+        if not rect:
+            continue
+        center_x = (rect[0] + rect[2]) / 2
+        text = normalized_ocr_text(line.get("text"))
+        if (
+            minimum_x < center_x < reference_rect[0]
+            and (
+                table_result_value(text) is not None
+                or CORRUPTED_DECIMAL_PATTERN.match(text)
+            )
+            and table_reference(text) is None
+        ):
+            candidates.append(line)
+    return sorted(candidates, key=lambda line: line_rect(line)[0] if line_rect(line) else 0)
+
+
+def suspicious_table_rows(
+    lines: list[dict[str, Any]], image_width: int, image_height: int
+) -> list[dict[str, Any]]:
+    """Find table rows whose result or unit needs a small, local OCR retry."""
+    references: list[tuple[dict[str, Any], tuple[float, float]]] = []
+    for line in lines:
+        reference = table_reference(str(line.get("text", "")))
+        if reference:
+            references.append((line, reference))
+
+    rows: list[dict[str, Any]] = []
+    for reference_line, reference in references:
+        reference_rect = line_rect(reference_line)
+        if not reference_rect:
+            continue
+        reference_center_y = (reference_rect[1] + reference_rect[3]) / 2
+        reference_height = max(8.0, reference_rect[3] - reference_rect[1])
+        names: list[tuple[dict[str, Any], tuple[float, float, float, float]]] = []
+        for line in lines:
+            rect = line_rect(line)
+            text = normalized_ocr_text(line.get("text"))
+            if (
+                not rect
+                or not re.search(r"[\u4e00-\u9fff]", text)
+                or len(text) < 4
+                or text.startswith("【")
+                or text in {"项目名称", "参考区间", "参考范围"}
+            ):
+                continue
+            center_y = (rect[1] + rect[3]) / 2
+            if (
+                rect[0] < reference_rect[0]
+                and reference_rect[0] - rect[0] <= image_width * 0.5
+                and abs(center_y - reference_center_y) <= reference_height * 0.75
+            ):
+                names.append((line, rect))
+        if not names:
+            continue
+        name_line, name_rect = max(names, key=lambda entry: entry[1][0])
+        row_lines = table_row_lines(lines, name_rect, reference_rect)
+        result_candidates = table_result_candidates(row_lines, name_rect, reference_rect)
+        result_line = result_candidates[-1] if result_candidates else None
+        result_text = normalized_ocr_text(result_line.get("text")) if result_line else ""
+        result_value = table_result_value(result_text)
+        result_confidence = float(result_line.get("confidence", 0)) if result_line else 0
+        low, high = reference
+        marker_high = any(marker in result_text for marker in ("↑", "▲", "⬆"))
+        marker_low = any(marker in result_text for marker in ("↓", "▼", "⬇"))
+        corrupted_result = (
+            result_line is None
+            or result_confidence < 0.90
+            or bool(CORRUPTED_DECIMAL_PATTERN.match(result_text))
+            or (result_text[:1] in "↑↓▲▼⬆⬇" and result_value is not None)
+            or (result_value is not None and high > 0 and result_value > high * 3)
+            or (result_value is not None and marker_high and result_value <= high)
+            or (result_value is not None and marker_low and result_value >= low)
+        )
+
+        result_rect = line_rect(result_line) if result_line else None
+        unit_lines: list[dict[str, Any]] = []
+        for line in row_lines:
+            rect = line_rect(line)
+            if not rect:
+                continue
+            center_x = (rect[0] + rect[2]) / 2
+            minimum_unit_x = result_rect[2] if result_rect else name_rect[2]
+            text = normalized_ocr_text(line.get("text"))
+            if (
+                minimum_unit_x <= center_x < reference_rect[0]
+                and line is not result_line
+                and re.search(r"[%‰A-Za-z/*^]", text)
+                and not text.startswith("【")
+            ):
+                unit_lines.append(line)
+        suspicious_units = [
+            line
+            for line in unit_lines
+            if float(line.get("confidence", 0)) < 0.80
+            or SUSPICIOUS_UNIT_PATTERN.match(normalized_ocr_text(line.get("text")))
+        ]
+        if not corrupted_result and not suspicious_units:
+            continue
+
+        row_top = min(name_rect[1], reference_rect[1])
+        row_bottom = max(name_rect[3], reference_rect[3])
+        row_height = max(10.0, row_bottom - row_top)
+        result_centers: list[float] = []
+        for other_reference_line, _ in references:
+            other_reference_rect = line_rect(other_reference_line)
+            if (
+                not other_reference_rect
+                or abs(other_reference_rect[0] - reference_rect[0]) > image_width * 0.04
+            ):
+                continue
+            other_center_y = (other_reference_rect[1] + other_reference_rect[3]) / 2
+            nearby_lines = [
+                line
+                for line in lines
+                if (rect := line_rect(line))
+                and abs(((rect[1] + rect[3]) / 2) - other_center_y) <= reference_height * 0.75
+            ]
+            numeric_lines = [
+                line
+                for line in nearby_lines
+                if (rect := line_rect(line))
+                and rect[0] < other_reference_rect[0]
+                and other_reference_rect[0] - rect[0] < image_width * 0.18
+                and table_result_value(normalized_ocr_text(line.get("text"))) is not None
+                and table_reference(normalized_ocr_text(line.get("text"))) is None
+            ]
+            if numeric_lines:
+                nearest = max(numeric_lines, key=lambda line: line_rect(line)[0])
+                nearest_rect = line_rect(nearest)
+                result_centers.append((nearest_rect[0] + nearest_rect[2]) / 2)
+        if result_rect:
+            expected_result_center = (result_rect[0] + result_rect[2]) / 2
+        elif result_centers:
+            ordered_centers = sorted(result_centers)
+            expected_result_center = ordered_centers[len(ordered_centers) // 2]
+        else:
+            expected_result_center = reference_rect[0] - image_width * 0.11
+        crop_left = expected_result_center - row_height * 2.4
+        crop_right = expected_result_center + row_height * 2.4
+        if suspicious_units:
+            crop_right = max(crop_right, reference_rect[0] - row_height * 0.25)
+        rows.append(
+            {
+                "name": name_line,
+                "nameRect": name_rect,
+                "reference": reference,
+                "referenceRect": reference_rect,
+                "result": result_line,
+                "resultSuspicious": corrupted_result,
+                "units": suspicious_units,
+                "crop": (
+                    max(0, int(math.floor(crop_left))),
+                    max(0, int(math.floor(row_top - row_height * 0.25))),
+                    min(image_width, int(math.ceil(crop_right))),
+                    min(image_height, int(math.ceil(row_bottom + row_height * 0.25))),
+                ),
+                "tightCrop": (
+                    max(0, int(math.floor(crop_left))),
+                    max(0, int(math.ceil(row_top - row_height * 0.12))),
+                    min(image_width, int(math.ceil(crop_right))),
+                    min(image_height, int(math.ceil(row_bottom + row_height * 0.12))),
+                ),
+            }
+        )
+    return rows[:12]
+
+
+def transform_retry_lines(
+    lines: list[dict[str, Any]], crop: tuple[int, int, int, int], scale: float, variant: str
+) -> list[dict[str, Any]]:
+    left, top, _, _ = crop
+    transformed: list[dict[str, Any]] = []
+    for line in lines:
+        box = line.get("box")
+        new_box = box
+        try:
+            if isinstance(box, (list, tuple)) and box and isinstance(box[0], (list, tuple)):
+                new_box = [
+                    [round(float(point[0]) / scale + left, 2), round(float(point[1]) / scale + top, 2)]
+                    for point in box
+                    if isinstance(point, (list, tuple)) and len(point) >= 2
+                ]
+        except Exception:
+            new_box = box
+        transformed.append({**line, "box": new_box, "variant": variant})
+    return transformed
+
+
+def retry_result_score(line: dict[str, Any], reference: tuple[float, float]) -> float:
+    text = normalized_ocr_text(line.get("text"))
+    value = table_result_value(text)
+    if value is None:
+        return -100
+    low, high = reference
+    score = float(line.get("confidence", 0)) * 3
+    if "." in text:
+        score += 0.8
+    if low <= value <= high:
+        score += 3
+    elif high > 0 and value <= high * 3:
+        score += 1
+    else:
+        score -= 4
+    if any(marker in text for marker in ("↑", "▲", "⬆")):
+        score += 2 if value > high else -3
+    if any(marker in text for marker in ("↓", "▼", "⬇")):
+        score += 2 if value < low else -3
+    return score
+
+
+def combine_retry_result_markers(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    markers = []
+    for line in lines:
+        text = normalized_ocr_text(line.get("text"))
+        rect = line_rect(line)
+        if rect and text in {"↑", "↓", "▲", "▼", "⬆", "⬇"}:
+            markers.append((line, rect, text))
+    combined = list(lines)
+    for left in lines:
+        left_text = normalized_ocr_text(left.get("text"))
+        left_rect = line_rect(left)
+        if not left_rect or not re.search(r"\d", left_text):
+            continue
+        for right in lines:
+            if left is right or left.get("variant") != right.get("variant"):
+                continue
+            right_text = normalized_ocr_text(right.get("text"))
+            right_rect = line_rect(right)
+            if not right_rect or not re.search(r"\d", right_text):
+                continue
+            gap = right_rect[0] - left_rect[2]
+            if gap < -max(30, (left_rect[2] - left_rect[0]) * 0.4) or gap > 24:
+                continue
+            if abs(((right_rect[1] + right_rect[3]) / 2) - ((left_rect[1] + left_rect[3]) / 2)) > 16:
+                continue
+            joined = f"{left_text}{right_text}"
+            if left_text.endswith(".") and right_text.startswith("."):
+                joined = f"{left_text}{right_text[1:]}"
+            if table_result_value(joined) is None:
+                continue
+            combined.append(
+                {
+                    **left,
+                    "text": joined,
+                    "confidence": min(
+                        float(left.get("confidence", 0)),
+                        float(right.get("confidence", 0)),
+                    ),
+                    "box": [
+                        [min(left_rect[0], right_rect[0]), min(left_rect[1], right_rect[1])],
+                        [max(left_rect[2], right_rect[2]), min(left_rect[1], right_rect[1])],
+                        [max(left_rect[2], right_rect[2]), max(left_rect[3], right_rect[3])],
+                        [min(left_rect[0], right_rect[0]), max(left_rect[3], right_rect[3])],
+                    ],
+                }
+            )
+    for index, line in enumerate(lines):
+        text = normalized_ocr_text(line.get("text"))
+        rect = line_rect(line)
+        if not rect or table_result_value(text) is None or any(
+            marker in text for marker in "↑↓▲▼⬆⬇"
+        ):
+            continue
+        center_y = (rect[1] + rect[3]) / 2
+        nearby = [
+            entry
+            for entry in markers
+            if entry[0].get("variant") == line.get("variant")
+            and -max(18, (rect[2] - rect[0]) * 0.35)
+            <= entry[1][0] - rect[2]
+            <= max(18, rect[3] - rect[1])
+            and abs(((entry[1][1] + entry[1][3]) / 2) - center_y)
+            <= max(12, rect[3] - rect[1])
+        ]
+        if not nearby:
+            continue
+        marker_line, marker_rect, marker_text = min(nearby, key=lambda entry: entry[1][0])
+        combined[index] = {
+            **line,
+            "text": f"{text}{marker_text}",
+            "confidence": min(
+                float(line.get("confidence", 0)),
+                float(marker_line.get("confidence", 0)),
+            ),
+            "box": [
+                [min(rect[0], marker_rect[0]), min(rect[1], marker_rect[1])],
+                [max(rect[2], marker_rect[2]), min(rect[1], marker_rect[1])],
+                [max(rect[2], marker_rect[2]), max(rect[3], marker_rect[3])],
+                [min(rect[0], marker_rect[0]), max(rect[3], marker_rect[3])],
+            ],
+        }
+    return combined
+
+
+def retry_suspicious_table_rows(
+    engine: Any, image_path: Path, primary_lines: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    try:
+        import cv2
+
+        image = cv2.imread(str(image_path))
+        if image is None:
+            return primary_lines, []
+        height, width = image.shape[:2]
+        rows = suspicious_table_rows(primary_lines, width, height)
+        if not rows:
+            return primary_lines, []
+
+        merged = list(primary_lines)
+        attempts: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory(prefix="health-records-ocr-table-") as temp_name:
+            temp_dir = Path(temp_name)
+            for row_index, row in enumerate(rows):
+                name_text = normalized_ocr_text(row["name"].get("text"))
+                contextual_unit = None
+                if re.search(r"(?:血红蛋白浓度|MCHC)", name_text, re.IGNORECASE):
+                    contextual_unit = "g/L"
+                elif re.search(r"(?:血红蛋白含量|\bMCH\b)", name_text, re.IGNORECASE):
+                    contextual_unit = "pg"
+                if not row["resultSuspicious"] and row["units"] and contextual_unit:
+                    for suspicious_unit in row["units"]:
+                        if suspicious_unit in merged:
+                            merged[merged.index(suspicious_unit)] = {
+                                **suspicious_unit,
+                                "text": contextual_unit,
+                                "variant": "table_context_repair",
+                            }
+                    continue
+
+                left, top, right, bottom = row["crop"]
+                crop_image = image[top:bottom, left:right]
+                if crop_image.size == 0:
+                    continue
+                enlarged = cv2.resize(crop_image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+                red = enlarged[:, :, 2]
+                red_contrast = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(red)
+                tight_left, tight_top, tight_right, tight_bottom = row["tightCrop"]
+                tight_image = image[tight_top:tight_bottom, tight_left:tight_right]
+                tight_enlarged = cv2.resize(
+                    tight_image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC
+                )
+                gray = cv2.cvtColor(tight_enlarged, cv2.COLOR_BGR2GRAY)
+                variants = (
+                    ("table_upscale", enlarged, row["crop"]),
+                    ("table_gray", gray, row["tightCrop"]),
+                )
+                retry_lines: list[dict[str, Any]] = []
+                def run_variant(label: str, variant_image: Any, variant_crop: Any) -> None:
+                    variant_path = temp_dir / f"row-{row_index + 1}-{label}.png"
+                    if not cv2.imwrite(str(variant_path), variant_image):
+                        return
+                    started = time.perf_counter()
+                    result, engine_elapsed = engine(str(variant_path))
+                    normalized = normalize_result(result, variant=label)
+                    retry_lines.extend(transform_retry_lines(normalized, variant_crop, 3, label))
+                    attempts.append(
+                        {
+                            "row": row_index + 1,
+                            "variant": label,
+                            "engineElapsed": engine_elapsed,
+                            "elapsedMs": round((time.perf_counter() - started) * 1000),
+                        }
+                    )
+
+                for label, variant_image, variant_crop in variants:
+                    run_variant(label, variant_image, variant_crop)
+
+                preliminary_lines = combine_retry_result_markers(
+                    table_row_lines(retry_lines, row["nameRect"], row["referenceRect"])
+                )
+                preliminary_results = table_result_candidates(
+                    preliminary_lines, row["nameRect"], row["referenceRect"]
+                )
+                needs_red_fallback = row["resultSuspicious"] and (
+                    not preliminary_results
+                    or max(
+                        retry_result_score(line, row["reference"])
+                        for line in preliminary_results
+                    )
+                    < 1
+                )
+                if needs_red_fallback:
+                    run_variant("table_red_contrast", red_contrast, row["crop"])
+
+                retry_row_lines = combine_retry_result_markers(
+                    table_row_lines(retry_lines, row["nameRect"], row["referenceRect"])
+                )
+                retry_results = table_result_candidates(
+                    retry_row_lines, row["nameRect"], row["referenceRect"]
+                )
+                if row["resultSuspicious"] and retry_results:
+                    best_result = max(
+                        retry_results,
+                        key=lambda line: retry_result_score(line, row["reference"]),
+                    )
+                    if retry_result_score(best_result, row["reference"]) >= 1:
+                        best_text = normalized_ocr_text(best_result.get("text"))
+                        best_value = table_result_value(best_text)
+                        low, high = row["reference"]
+                        if best_value is not None and not any(
+                            marker in best_text for marker in "↑↓▲▼⬆⬇"
+                        ):
+                            if best_value < low:
+                                best_result = {**best_result, "text": f"{best_text}↓"}
+                            elif best_value > high:
+                                best_result = {**best_result, "text": f"{best_text}↑"}
+                        if row["result"] in merged:
+                            merged[merged.index(row["result"])] = best_result
+                        else:
+                            merged.append(best_result)
+
+                for suspicious_unit in row["units"]:
+                    unit_rect = line_rect(suspicious_unit)
+                    if not unit_rect:
+                        continue
+                    unit_center_x = (unit_rect[0] + unit_rect[2]) / 2
+                    candidates = []
+                    for line in retry_row_lines:
+                        rect = line_rect(line)
+                        text = normalized_ocr_text(line.get("text"))
+                        if not rect or not re.search(r"[%‰A-Za-z/*^]", text):
+                            continue
+                        center_x = (rect[0] + rect[2]) / 2
+                        if abs(center_x - unit_center_x) <= max(24, unit_rect[2] - unit_rect[0]):
+                            candidates.append(line)
+                    if candidates:
+                        best_unit = max(
+                            candidates,
+                            key=lambda line: float(line.get("confidence", 0))
+                            - (
+                                2
+                                if SUSPICIOUS_UNIT_PATTERN.match(
+                                    normalized_ocr_text(line.get("text"))
+                                )
+                                else 0
+                            ),
+                        )
+                        best_unit_text = normalized_ocr_text(best_unit.get("text"))
+                        if contextual_unit == "g/L":
+                            best_unit = {
+                                **best_unit,
+                                "text": "g/L",
+                                "variant": "table_context_repair",
+                            }
+                        elif contextual_unit == "pg":
+                            best_unit = {
+                                **best_unit,
+                                "text": "pg",
+                                "variant": "table_context_repair",
+                            }
+                        if suspicious_unit in merged:
+                            merged[merged.index(suspicious_unit)] = best_unit
+
+        merged.sort(
+            key=lambda line: (
+                round(((line_rect(line) or (0, 0, 0, 0))[1]) / 8),
+                (line_rect(line) or (0, 0, 0, 0))[0],
+            )
+        )
+        return [
+            {**line, "id": f"line_{index + 1}"} for index, line in enumerate(merged)
+        ], attempts
+    except Exception as error:
+        print(f"OCR table retry skipped: {error}", file=sys.stderr, flush=True)
+        return primary_lines, []
+
+
 def recognize_image(engine: Any, image_path: Path, image_role: str | None) -> tuple[list[dict[str, Any]], Any]:
     if image_role != "date":
         result, engine_elapsed = engine(str(image_path))
-        return normalize_result(result), engine_elapsed
+        primary_lines = normalize_result(result)
+        lines, table_attempts = retry_suspicious_table_rows(engine, image_path, primary_lines)
+        if not table_attempts:
+            return lines, engine_elapsed
+        return lines, {
+            "source": "primary_plus_table_retry",
+            "primary": engine_elapsed,
+            "tableRetries": table_attempts,
+        }
 
     all_lines: list[dict[str, Any]] = []
     elapsed_parts: list[dict[str, Any]] = []

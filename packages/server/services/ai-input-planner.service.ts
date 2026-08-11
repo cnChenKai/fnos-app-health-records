@@ -141,6 +141,7 @@ export type PlannedOcrLine = {
   reportSectionName?: string | null;
   tableHeaderText?: string | null;
   tableHeaderSourceLineIds?: string[];
+  expectedLocalObservationCount?: number;
 };
 
 export function localObservationsForLine(
@@ -148,6 +149,15 @@ export function localObservationsForLine(
 ) {
   if (line.localObservations?.length) return line.localObservations;
   return line.localObservation ? [line.localObservation] : [];
+}
+
+function lineNeedsAiScalarExtraction(line: PlannedOcrLine) {
+  const localCount = localObservationsForLine(line).length;
+  return (
+    line.candidateKind === "scalar" &&
+    (localCount === 0 ||
+      (line.expectedLocalObservationCount || 0) > localCount)
+  );
 }
 
 export type RebuiltOcrPage = {
@@ -301,6 +311,8 @@ const tableOfContentsRowPattern =
   /^\s*\d{1,2}\s*[|｜]\s*[^|｜]{2,80}\s*[|｜]\s*\d{1,3}\s*$/;
 const nonResultTechnicalPattern =
   /(?:^|[|｜])\s*(?:增益|走速|纸速|试剂名称|试剂纯度|纯度)\s*[:：]|^\*?\s*baPWV主要检测|^反映脑血管或心脏|^(?:异常区域|正常区域)(?:\s*[|｜]\s*(?:异常区域|正常区域))?$/i;
+const mutualRecognitionMarkerPattern =
+  /^[【[]\s*(?:深圳)?(?:HR|R)\s*[】\]]$/i;
 const interpretationOnlyPattern = /(?:正常范围|未见异常)[。.]?$/;
 const narrativeSectionHeadingPattern =
   /^(?:检查所见|检查结论|影像所见|影像结论|诊断意见|总检结论|体检综述|阳性发现|异常汇总|异常结果与健康建议|本次体检的异常结果汇总及建议|建议|主诉|现病史|既往史|门诊诊断|处理意见|处置|入院诊断|出院诊断|住院经过|手术经过|出院用药|出院医嘱|病理诊断|肉眼所见|镜下所见|免疫组化|病理分级|病理分期)(?:[：:]|\s|$)/;
@@ -1575,11 +1587,20 @@ function mergeVisualRow(
   aliases: PreparedDictionaryAliases,
   unitPattern: RegExp,
 ): PlannedOcrLine {
-  const ordered = [...lines].sort(
+  const visuallyOrdered = [...lines].sort(
     (left, right) =>
       (boxRect(left.box)?.left ?? left.index) -
       (boxRect(right.box)?.left ?? right.index),
   );
+  /* 检验报告会在项目与结果之间印“【深圳HR】”等结果互认标记。它是装饰列，
+     不是表头定义的数据列；若保留，结果会从第 2 格错移到第 3 格，整行因此退出
+     指标候选。只在同一视觉行还有其它内容时剥离，页脚里的互认说明仍会保留。 */
+  const withoutRecognitionMarkers = visuallyOrdered.filter(
+    (line) => !mutualRecognitionMarkerPattern.test(line.text.trim()),
+  );
+  const ordered = withoutRecognitionMarkers.length
+    ? withoutRecognitionMarkers
+    : visuallyOrdered;
   const rects = ordered
     .map((line) => boxRect(line.box))
     .filter((rect): rect is BoxRect => Boolean(rect));
@@ -3846,6 +3867,193 @@ function parseQuantitativeUltrasoundBoneCoreObservations(
   return observations;
 }
 
+type RepeatedMeasurementHeaderGroup = {
+  nameHeaderIndex: number;
+  resultHeaderIndex: number;
+  unitHeaderIndex: number | null;
+  referenceHeaderIndex: number | null;
+};
+
+function repeatedMeasurementHeaderGroups(tableHeader: string[] | null) {
+  if (!tableHeader) return [];
+  const nameIndexes = tableHeader.flatMap((cell, index) =>
+    /(?:项目|名称|参数)/.test(cell) &&
+    !/(?:结果|单位|参考|预测|预计|实测|测量)/.test(cell)
+      ? [index]
+      : [],
+  );
+  if (nameIndexes.length < 2) return [];
+  return nameIndexes.flatMap((nameHeaderIndex, groupIndex) => {
+    const end = nameIndexes[groupIndex + 1] ?? tableHeader.length;
+    const indexes = Array.from(
+      { length: end - nameHeaderIndex },
+      (_, index) => nameHeaderIndex + index,
+    );
+    const resultHeaderIndex = indexes.find((index) =>
+      /(?:本次结果|检查结果|检验结果|测定值|实测值?|测量值|结果)/.test(
+        tableHeader[index],
+      ),
+    );
+    if (resultHeaderIndex === undefined) return [];
+    return [
+      {
+        nameHeaderIndex,
+        resultHeaderIndex,
+        unitHeaderIndex:
+          indexes.find((index) => /单位/.test(tableHeader[index])) ?? null,
+        referenceHeaderIndex:
+          indexes.find(
+            (index) => referenceColumnRole(tableHeader[index]) === "explicit",
+          ) ?? null,
+      } satisfies RepeatedMeasurementHeaderGroup,
+    ];
+  });
+}
+
+function alignedRowCellIndexes(
+  line: PlannedOcrLine,
+  tableHeader: string[],
+  tableHeaderCells: PlannedOcrCell[],
+) {
+  const rowCells = splitTableCells(line.text);
+  const headerCenters = tableHeaderCells.map((cell) => {
+    const rect = boxRect(cell.box);
+    return rect ? (rect.left + rect.right) / 2 : null;
+  });
+  const rowCenters = line.sourceCells.map((cell) => {
+    const rect = boxRect(cell.box);
+    return rect ? (rect.left + rect.right) / 2 : null;
+  });
+  if (
+    headerCenters.length === tableHeader.length &&
+    rowCenters.length === rowCells.length &&
+    headerCenters.every((center) => center !== null) &&
+    rowCenters.every((center) => center !== null)
+  ) {
+    const result = new Map<number, number>();
+    for (let rowIndex = 0; rowIndex < rowCenters.length; rowIndex += 1) {
+      const center = rowCenters[rowIndex] as number;
+      let nearestHeaderIndex = 0;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (
+        let headerIndex = 0;
+        headerIndex < headerCenters.length;
+        headerIndex += 1
+      ) {
+        const distance = Math.abs(
+          center - (headerCenters[headerIndex] as number),
+        );
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestHeaderIndex = headerIndex;
+        }
+      }
+      if (result.has(nearestHeaderIndex)) return null;
+      result.set(nearestHeaderIndex, rowIndex);
+    }
+    return result;
+  }
+  if (rowCells.length !== tableHeader.length) return null;
+  return new Map(tableHeader.map((_, index) => [index, index]));
+}
+
+function credibleRepeatedTableUnit(value: string, unitPattern: RegExp) {
+  const normalized = value.normalize("NFKC").replace(/\s+/g, "").trim();
+  /* g/L 的 g 被 OCR 成 9 后会形成 9/L；它不是可信单位，宁可留空也不能入库。 */
+  if (/^9\/[lL]$/.test(normalized)) return null;
+  return (
+    knownUnitFromResult(normalized, unitPattern) ||
+    conservativeUnknownUnit(normalized)
+  );
+}
+
+function parseRepeatedMeasurementPanelObservations(
+  line: PlannedOcrLine,
+  pageNumber: number,
+  section: string | null,
+  tableHeader: string[] | null,
+  tableHeaderCells: PlannedOcrCell[] | null,
+  disambiguationSection: string | null,
+  aliases: PreparedDictionaryAliases,
+  unitPattern: RegExp,
+  patientSex?: PatientSex | null,
+) {
+  const groups = repeatedMeasurementHeaderGroups(tableHeader);
+  if (!tableHeader || !tableHeaderCells || groups.length < 2) return [];
+  const rowIndexByHeader = alignedRowCellIndexes(
+    line,
+    tableHeader,
+    tableHeaderCells,
+  );
+  if (!rowIndexByHeader) return [];
+  const cells = splitTableCells(line.text);
+  return groups.flatMap((group): LocalObservationFact[] => {
+    const itemIndex = rowIndexByHeader.get(group.nameHeaderIndex);
+    const resultIndex = rowIndexByHeader.get(group.resultHeaderIndex);
+    if (itemIndex === undefined || resultIndex === undefined) return [];
+    const itemName = cells[itemIndex]?.trim() || "";
+    const resultText = cells[resultIndex]?.trim() || "";
+    const dictionary = exactLocalDictionary(
+      itemName,
+      aliases,
+      disambiguationSection,
+    );
+    if (!dictionary || !localValueParts(resultText, unitPattern)) return [];
+
+    const unitIndex =
+      group.unitHeaderIndex === null
+        ? undefined
+        : rowIndexByHeader.get(group.unitHeaderIndex);
+    const unit =
+      unitIndex === undefined
+        ? null
+        : credibleRepeatedTableUnit(cells[unitIndex] || "", unitPattern);
+    const referenceIndex =
+      group.referenceHeaderIndex === null
+        ? undefined
+        : rowIndexByHeader.get(group.referenceHeaderIndex);
+    const reference =
+      referenceIndex === undefined
+        ? undefined
+        : assessObservationReference(
+            parseReferenceCell(
+              cells[referenceIndex] || "",
+              unitPattern,
+              patientSex,
+            ),
+          );
+    const fact = explicitMultiValueObservation({
+      line,
+      pageNumber,
+      section,
+      itemName,
+      dictionary,
+      resultText,
+      itemIndex,
+      itemHeaderIndex: group.nameHeaderIndex,
+      resultIndex,
+      resultHeaderIndex: group.resultHeaderIndex,
+      unit,
+      ...(unit
+        ? {
+            unitIndex,
+            unitHeaderIndex: group.unitHeaderIndex ?? undefined,
+          }
+        : {}),
+      reference,
+      ...(reference?.text
+        ? {
+            referenceIndex,
+            referenceHeaderIndex: group.referenceHeaderIndex ?? undefined,
+          }
+        : {}),
+      tableHeaderCells,
+      unitPattern,
+    });
+    return fact ? [fact] : [];
+  });
+}
+
 function parseExplicitMultiValueObservations(
   line: PlannedOcrLine,
   pageNumber: number,
@@ -3863,6 +4071,19 @@ function parseExplicitMultiValueObservations(
   )
     return [];
   const cells = splitTableCells(line.text).map((cell) => cell.trim());
+
+  const repeatedPanel = parseRepeatedMeasurementPanelObservations(
+    line,
+    pageNumber,
+    section,
+    tableHeader,
+    tableHeaderCells,
+    disambiguationSection,
+    aliases,
+    unitPattern,
+    patientSex,
+  );
+  if (repeatedPanel.length) return repeatedPanel;
 
   /* 每格都是“明确项目名: 完整值”时可安全拆分；任何一格不完整即整体回退 AI。 */
   if (cells.length >= 2) {
@@ -4582,6 +4803,10 @@ function annotatePageLines(
       unitPattern,
       patientSex,
     );
+    const expectedLocalObservationCount =
+      candidateKind === "scalar"
+        ? repeatedMeasurementHeaderGroups(tableHeader).length
+        : 0;
     return {
       ...withRole,
       sectionName,
@@ -4592,6 +4817,9 @@ function annotatePageLines(
         : [],
       localObservation: localObservations[0] || null,
       localObservations,
+      ...(expectedLocalObservationCount >= 2
+        ? { expectedLocalObservationCount }
+        : {}),
     };
   });
   const enriched = deduplicateBodyCompositionCoreEvidence(
@@ -4682,8 +4910,7 @@ function unitFromRanges(
         route === "morphology"
           ? line.candidateKind === "morphology"
           : route === "scalar"
-            ? line.candidateKind === "scalar" &&
-              localObservationsForLine(line).length === 0
+            ? lineNeedsAiScalarExtraction(line)
             : false,
       );
       // 整页叙事只适用于页面类型与文档主类型一致的病历类页面；
@@ -4802,7 +5029,7 @@ function unitFromRanges(
       ? selectedLines.filter(
           (line) =>
             line.candidateKind === extractionMode &&
-            (route !== "scalar" || localObservationsForLine(line).length === 0),
+            (route !== "scalar" || lineNeedsAiScalarExtraction(line)),
         ).length
       : 0;
   const morphologyCandidateCount =
@@ -4822,8 +5049,7 @@ function unitFromRanges(
                 line.index >= range.lineStart &&
                 line.index <= range.lineEnd &&
                 line.candidateKind === extractionMode &&
-                (route !== "scalar" ||
-                  localObservationsForLine(line).length === 0),
+                (route !== "scalar" || lineNeedsAiScalarExtraction(line)),
             )
             .map((line) => ({
               pageNumber: range.pageNumber,
@@ -5540,8 +5766,7 @@ function packScalarUnits(
         (line) =>
           line.index >= range.lineStart &&
           line.index <= range.lineEnd &&
-          line.candidateKind === "scalar" &&
-          localObservationsForLine(line).length === 0,
+          lineNeedsAiScalarExtraction(line),
       );
     });
   const units: AiExtractionUnit[] = [];
@@ -5795,9 +6020,7 @@ function documentProfileUnit(
       candidateFacts.push(
         ...lines
           .filter(
-            (line) =>
-              line.candidateKind === "scalar" &&
-              localObservationsForLine(line).length === 0,
+            (line) => lineNeedsAiScalarExtraction(line),
           )
           .map((line) => ({
             pageNumber: page.pageNumber,

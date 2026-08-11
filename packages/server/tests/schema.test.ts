@@ -31,7 +31,7 @@ test("initializes the health records schema with WAL", () => {
       "report_diagnoses", "report_medications", "report_procedures",
       "vaccination_records", "billing_summaries", "billing_items", "report_structured_sections",
       "app_upgrade_history", "indicator_catalog", "indicator_aliases", "observation_normalizations",
-      "ai_audit_events", "report_field_overrides", "file_gc_queue", "maintenance_tasks",
+      "ai_audit_events", "report_field_overrides", "observation_field_overrides", "file_gc_queue", "maintenance_tasks",
       "user_trend_pins", "indicator_dictionary_snapshots", "indicator_dictionary_state",
       "indicator_dictionary_updates", "indicator_taxonomy_groups", "indicator_taxonomy_subgroups",
       "indicator_taxonomy_categories", "indicator_unmatched_names", "indicator_unmatched_occurrences",
@@ -119,6 +119,10 @@ test("migrates an existing v1 database to PDF source page columns", () => {
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'report_field_overrides'
     `).get() as { name: string } | undefined;
     assert.equal(overridesTable?.name, "report_field_overrides");
+    const observationOverrideColumns = getDatabase().prepare(`
+      SELECT name FROM pragma_table_info('observation_field_overrides')
+    `).all() as Array<{ name: string }>;
+    assert.equal(observationOverrideColumns.some((column) => column.name === "canonical_key"), true);
     const fileGcTable = getDatabase().prepare(`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'file_gc_queue'
     `).get() as { name: string } | undefined;

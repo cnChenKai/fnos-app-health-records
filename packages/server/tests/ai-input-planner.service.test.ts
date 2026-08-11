@@ -2406,6 +2406,145 @@ test("maps reconstructed table cells to exact OCR source lines and drops chart-a
   );
 });
 
+test("extracts both repeated CBC panels by coordinates and sends partial rows to AI", () => {
+  const columns = [0, 220, 320, 440, 620, 840, 940, 1060];
+  const rawLines: Array<{
+    id: string;
+    text: string;
+    confidence: number;
+    box: number[];
+  }> = [];
+  const addRow = (
+    row: number,
+    cells: Array<{ id: string; text: string; column?: number; x?: number }>,
+  ) => {
+    for (const cell of cells) {
+      const left = cell.x ?? columns[cell.column ?? 0];
+      rawLines.push({
+        id: cell.id,
+        text: cell.text,
+        confidence: 0.99,
+        box: [left, row * 28, left + 80, row * 28 + 16],
+      });
+    }
+  };
+
+  addRow(0, [{ id: "cbc-title", text: "血常规五分类检验报告单" }]);
+  addRow(
+    1,
+    ["项目", "结果", "单位", "参考范围", "项目", "结果", "单位", "参考范围"].map(
+      (text, column) => ({ id: `header-${column + 1}`, text, column }),
+    ),
+  );
+  addRow(2, [
+    { id: "wbc-item", text: "白细胞数目(WBC)", column: 0 },
+    { id: "wbc-marker", text: "【深圳HR】", x: 120 },
+    { id: "wbc-result", text: "5.0", column: 1 },
+    { id: "wbc-unit", text: "10^9/L", column: 2 },
+    { id: "wbc-reference", text: "3.5-9.5", column: 3 },
+    { id: "baso-item", text: "嗜碱性粒细胞百分比(BASO%)", column: 4 },
+    { id: "baso-damaged-result", text: "8'0", column: 5 },
+    { id: "baso-reference", text: "0.0-1.0", column: 7 },
+  ]);
+  addRow(3, [
+    { id: "rbc-item", text: "红细胞数目(RBC)", column: 0 },
+    { id: "rbc-result", text: "5.56", column: 1 },
+    { id: "rbc-unit", text: "10^12/L", column: 2 },
+    { id: "rbc-reference", text: "4.3-5.8", column: 3 },
+    { id: "neut-count-item", text: "中性粒细胞绝对值(NEUT#)", column: 4 },
+    { id: "neut-count-result", text: "1.96", column: 5 },
+    { id: "neut-count-unit", text: "10^9/L", column: 6 },
+    { id: "neut-count-reference", text: "1.8-6.3", column: 7 },
+  ]);
+  addRow(4, [
+    { id: "neut-percent-item", text: "中性粒细胞百分比(NEUT%)", column: 0 },
+    { id: "neut-percent-reference", text: "40-75", column: 3 },
+    { id: "pct-item", text: "血小板压积(PCT)", column: 4 },
+    { id: "pct-result", text: "0.23", column: 5 },
+    { id: "pct-reference", text: "0.19-0.36", column: 7 },
+  ]);
+  addRow(5, [
+    { id: "lymph-percent-item", text: "淋巴细胞百分比(LYMPH%)", column: 0 },
+    { id: "lymph-percent-result", text: "49.1", column: 1 },
+    { id: "lymph-percent-reference", text: "20-50", column: 3 },
+    { id: "pdw-item", text: "血小板体积分布宽度(PDVW)", column: 4 },
+    { id: "pdw-damaged-result", text: "↑76", column: 5 },
+    { id: "pdw-reference", text: "9.8-15.2", column: 7 },
+  ]);
+  addRow(6, [
+    { id: "mchc-item", text: "平均红细胞血红蛋白浓度(MCHC)", column: 0 },
+    { id: "mchc-result", text: "342", column: 1 },
+    { id: "mchc-damaged-unit", text: "9/L", column: 2 },
+    { id: "mchc-reference", text: "316-354", column: 3 },
+  ]);
+
+  const rebuilt = rebuildOcrPages([
+    {
+      pageId: "repeated-cbc-page",
+      pageNumber: 1,
+      linesJson: JSON.stringify(rawLines),
+    },
+  ]);
+  const reportPage = rebuilt[0];
+  const facts = reportPage.lines.flatMap((line) => line.localObservations);
+  const byName = new Map(facts.map((fact) => [fact.itemName, fact]));
+  const plan = planRebuiltOcrPages("repeated-cbc-report", rebuilt);
+  const scalar =
+    plan.units.find((unit) => unit.route === "scalar") || plan.units[0];
+  const wbcLine = reportPage.lines.find((line) =>
+    line.sourceLineIds.includes("wbc-item"),
+  );
+  const rbcLine = reportPage.lines.find((line) =>
+    line.sourceLineIds.includes("rbc-item"),
+  );
+
+  assert.ok(wbcLine);
+  assert.doesNotMatch(wbcLine.text, /深圳HR/);
+  assert.equal(wbcLine.sourceLineIds.includes("wbc-marker"), false);
+  assert.equal(
+    wbcLine.expectedLocalObservationCount,
+    2,
+    JSON.stringify({
+      text: wbcLine.text,
+      candidate: wbcLine.candidate,
+      candidateKind: wbcLine.candidateKind,
+      role: wbcLine.role,
+      boundary: wbcLine.boundary,
+      tableHeaderText: wbcLine.tableHeaderText,
+      localObservationCount: wbcLine.localObservations.length,
+    }),
+  );
+  assert.deepEqual(
+    [
+      byName.get("白细胞数目(WBC)")?.numericValue,
+      byName.get("红细胞数目(RBC)")?.numericValue,
+      byName.get("中性粒细胞绝对值(NEUT#)")?.numericValue,
+      byName.get("血小板压积(PCT)")?.numericValue,
+      byName.get("淋巴细胞百分比(LYMPH%)")?.numericValue,
+    ],
+    [5, 5.56, 1.96, 0.23, 49.1],
+  );
+  assert.equal(rbcLine?.localObservations.length, 2);
+  assert.equal(byName.has("血小板体积分布宽度(PDVW)"), false);
+  assert.equal(byName.get("平均红细胞血红蛋白浓度(MCHC)")?.unit, null);
+  assert.deepEqual(byName.get("白细胞数目(WBC)")?.sourceMap.result.sourceLineIds, [
+    "wbc-result",
+  ]);
+  assert.deepEqual(
+    byName.get("中性粒细胞绝对值(NEUT#)")?.sourceMap.result.headerSourceLineIds,
+    ["header-6"],
+  );
+  assert.ok(scalar);
+  assert.equal(scalar.candidateRowCount, 4);
+  const aiCandidateText = scalar.candidateFacts
+    .map((fact) => fact.sourceText)
+    .join("\n");
+  assert.match(aiCandidateText, /嗜碱性粒细胞百分比/);
+  assert.match(aiCandidateText, /中性粒细胞百分比/);
+  assert.match(aiCandidateText, /血小板体积分布宽度/);
+  assert.doesNotMatch(aiCandidateText, /红细胞数目\(RBC\)/);
+});
+
 test("inherits the actual previous-page table-header source ids", () => {
   const rebuilt = rebuildOcrPages([
     page(1, [

@@ -2,7 +2,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
-  FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText,
+  FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText, Search,
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
@@ -26,7 +26,7 @@ import {
 import type {
   AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageDetail, OcrPageText, ProcessingJob, ProcessingJobEvent,
   ProcessingDiagnosticReviewItem, ProcessingJobEventDetail,
-  ReportDetail, ReportPage, ReportSummary
+  IndicatorCatalogOption, ReportDetail, ReportPage, ReportSummary
 } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
 import { useConfirm } from "../composables/useConfirm";
@@ -80,6 +80,7 @@ const ocrDetailLoading = ref(false);
 const ocrDetailError = ref("");
 const showOcrOverlay = ref(false);
 const editOriginalImage = ref<HTMLImageElement | null>(null);
+const observationOriginalImage = ref<HTMLImageElement | null>(null);
 // 记录已完成加载的图片页 id：翻页后图片未就绪前不渲染 OCR 标记，避免标记先出现、
 // 图片后撑开造成的抖动。
 const loadedOriginalImagePageId = ref("");
@@ -99,6 +100,22 @@ const clinicalFactEditor = ref<{
 } | null>(null);
 const structuredSectionEditor = ref<ReportDetail["structuredSections"][number] | null | "create">(null);
 const allObservationsOpen = ref(false);
+const observationEditorOpen = ref(false);
+const editingObservationId = ref<string | null>(null);
+const selectedObservationId = ref<string | null>(null);
+const observationSourcePageIndex = ref(0);
+const loadedObservationOriginalPageId = ref("");
+const savingObservation = ref(false);
+const observationEditorError = ref("");
+const observationCatalogQuery = ref("");
+const observationCatalogOptions = ref<IndicatorCatalogOption[]>([]);
+const observationCatalogLoading = ref(false);
+const observationForm = ref({
+  sectionName: "", itemCode: "", itemName: "", resultText: "", numericValue: null as number | null,
+  unit: "", referenceLow: null as number | null, referenceHigh: null as number | null,
+  referenceText: "", abnormalFlag: "" as "" | "high" | "low" | "abnormal" | "normal",
+  canonicalKey: ""
+});
 const editOriginalIndex = ref(0);
 const savingReport = ref(false);
 const savingPages = ref(false);
@@ -260,6 +277,15 @@ const medicalCandidateObservations = computed(() => secondaryObservations.value.
 const qualitativeObservations = computed(() => secondaryObservations.value.filter((item) => item.displayCategory === "qualitative_finding"));
 const technicalObservations = computed(() => secondaryObservations.value.filter((item) => item.displayCategory === "technical_measurement"));
 const governanceObservations = computed(() => detail.value?.observations.filter((item) => item.displayTier === "governance_only") || []);
+const pendingReviewObservations = computed(() => [...secondaryObservations.value, ...governanceObservations.value]);
+const selectedObservation = computed(() => detail.value?.observations.find((item) => item.id === selectedObservationId.value) || null);
+const observationSourcePage = computed(() => detail.value?.pages[observationSourcePageIndex.value] || null);
+const observationEvidenceLineIds = computed(() => {
+  const observation = selectedObservation.value;
+  const page = observationSourcePage.value;
+  if (!observation || !page || observation.evidence?.pageId !== page.id) return [];
+  return observation.evidence.lineIds;
+});
 const prioritizedSecondaryObservations = computed(() => [
   ...medicalCandidateObservations.value,
   ...qualitativeObservations.value,
@@ -575,8 +601,109 @@ function closePdfOriginalViewer() {
 useScrollLock(computed(() =>
   pdfViewerOpen.value || editOpen.value || Boolean(morphologyEditItem.value)
   || Boolean(clinicalFactEditor.value) || ocrSheetOpen.value || eventSheetOpen.value
-  || Boolean(structuredSectionEditor.value) || allObservationsOpen.value
+  || Boolean(structuredSectionEditor.value) || allObservationsOpen.value || observationEditorOpen.value
 ));
+
+const observationFlagOptions = [
+  { value: "", label: "未标记" },
+  { value: "normal", label: "正常" },
+  { value: "high", label: "偏高" },
+  { value: "low", label: "偏低" },
+  { value: "abnormal", label: "异常" }
+];
+const observationCatalogSelectOptions = computed(() => [
+  { value: "", label: "不指定标准指标" },
+  ...observationCatalogOptions.value.map((item) => ({
+    value: item.canonicalKey,
+    label: `${item.displayName} · ${item.category}${item.defaultUnit ? ` · ${item.defaultUnit}` : ""}`
+  }))
+]);
+
+async function searchObservationCatalog() {
+  observationCatalogLoading.value = true;
+  observationEditorError.value = "";
+  try {
+    const options = await request<IndicatorCatalogOption[]>(
+      `reports/${encodeURIComponent(props.reportId)}/indicator-catalog?q=${encodeURIComponent(observationCatalogQuery.value.trim())}`
+    );
+    observationCatalogOptions.value = [...new Map(
+      [...observationCatalogOptions.value, ...options].map((item) => [item.canonicalKey, item])
+    ).values()];
+  } catch (cause) {
+    observationEditorError.value = cause instanceof Error ? cause.message : "本地指标字典查询失败";
+  } finally {
+    observationCatalogLoading.value = false;
+  }
+}
+
+function openObservationEditor(item?: ReportDetail["observations"][number]) {
+  selectedObservationId.value = item?.id || null;
+  const evidencePageIndex = item?.evidence?.pageId
+    ? detail.value?.pages.findIndex((page) => page.id === item.evidence?.pageId) ?? -1
+    : -1;
+  observationSourcePageIndex.value = evidencePageIndex >= 0 ? evidencePageIndex : 0;
+  editingObservationId.value = item?.id || null;
+  observationEditorError.value = "";
+  observationCatalogQuery.value = item?.itemName || "";
+  observationCatalogOptions.value = item?.canonicalKey && item.canonicalName ? [{
+    canonicalKey: item.canonicalKey,
+    displayName: item.canonicalName,
+    category: "当前指标",
+    defaultUnit: item.canonicalUnit,
+    aliases: []
+  }] : [];
+  observationForm.value = {
+    sectionName: item?.sectionName || "",
+    itemCode: item?.itemCode || "",
+    itemName: item?.itemName || "",
+    resultText: item?.resultText || "",
+    numericValue: item?.numericValue ?? null,
+    unit: item?.unit || "",
+    referenceLow: item?.referenceLow ?? null,
+    referenceHigh: item?.referenceHigh ?? null,
+    referenceText: item?.referenceText || "",
+    abnormalFlag: item?.abnormalFlag || "",
+    canonicalKey: item?.manualCanonicalKey || item?.canonicalKey || ""
+  };
+  observationEditorOpen.value = true;
+  if (item?.itemName) void searchObservationCatalog();
+}
+
+function closeObservationEditor() {
+  observationEditorOpen.value = false;
+  editingObservationId.value = null;
+}
+
+function closeAllObservations() {
+  allObservationsOpen.value = false;
+  closeObservationEditor();
+  selectedObservationId.value = null;
+}
+
+async function saveObservation() {
+  if (!observationForm.value.itemName.trim()) {
+    observationEditorError.value = "请填写指标名称";
+    return;
+  }
+  savingObservation.value = true;
+  observationEditorError.value = "";
+  try {
+    const path = editingObservationId.value
+      ? `reports/${encodeURIComponent(props.reportId)}/observations/${encodeURIComponent(editingObservationId.value)}`
+      : `reports/${encodeURIComponent(props.reportId)}/observations`;
+    detail.value = await request<ReportDetail>(path, {
+      method: editingObservationId.value ? "PUT" : "POST",
+      body: JSON.stringify(observationForm.value)
+    });
+    observationEditorOpen.value = false;
+    emit("updated");
+    toast.show(editingObservationId.value ? "指标校对已保存" : "指标已添加");
+  } catch (cause) {
+    observationEditorError.value = cause instanceof Error ? cause.message : "指标保存失败";
+  } finally {
+    savingObservation.value = false;
+  }
+}
 
 function observationAbnormalDisplay(item: ReportDetail["observations"][number]) {
   return describeObservationAbnormal(item);
@@ -989,6 +1116,10 @@ async function loadOcrDetail(pageId: string) {
   }
 }
 
+watch([observationSourcePage, allObservationsOpen], ([page, open]) => {
+  if (open && page) void loadOcrDetail(page.id);
+});
+
 function reviewIssueLabel(issueType: ProcessingDiagnosticReviewItem["issueType"]) {
   return {
     ocr_content: "OCR 内容问题",
@@ -1017,6 +1148,10 @@ function setOcrCompareImage(element: unknown) {
 
 function onOriginalImageLoad(pageId: string) {
   loadedOriginalImagePageId.value = pageId;
+}
+
+function onObservationOriginalImageLoad(pageId: string) {
+  loadedObservationOriginalPageId.value = pageId;
 }
 
 function onOcrCompareImageLoad(pageId: string) {
@@ -1740,9 +1875,10 @@ onActivated(() => {
         </section>
         <section v-if="detail?.observations.length" class="observation-panel">
           <header>
-            <strong>{{ primaryObservations.length ? "标准化指标" : "已核验指标" }}</strong>
+            <strong>指标总览</strong>
             <span>
-              {{ primaryObservations.length ? primaryObservations.length : secondaryObservations.length }} 项
+              {{ detail.observations.length }} 项已识别 · {{ primaryObservations.length }} 项可用于趋势
+              <template v-if="pendingReviewObservations.length"> · {{ pendingReviewObservations.length }} 项待核对</template>
               <template v-if="abnormalObservations.length"> · {{ abnormalObservations.length }} 项异常</template>
               <template v-if="conflictingObservations.length"> · {{ conflictingObservations.length }} 项待核验</template>
             </span>
@@ -1757,13 +1893,13 @@ onActivated(() => {
               <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
             </article>
           </div>
-          <div v-if="readableObservations.length > visibleObservations.length || governanceObservations.length" class="observation-panel-footer">
+          <div class="observation-panel-footer">
             <span>
               <template v-if="readableObservations.length > visibleObservations.length">已显示前 {{ visibleObservations.length }} 项</template>
-              <template v-else>指标已按可信度分层</template>
+              <template v-else>可查看并人工校对全部指标</template>
             </span>
             <button type="button" @click="allObservationsOpen = true">
-              查看全部<template v-if="secondaryObservations.length"> · {{ secondaryObservations.length }} 项待标准化</template>
+              查看全部<template v-if="pendingReviewObservations.length"> · {{ pendingReviewObservations.length }} 项待核对</template>
               <ChevronRight :size="16" />
             </button>
           </div>
@@ -1953,81 +2089,148 @@ onActivated(() => {
   </div>
 
   <Teleport to="body">
-    <div v-if="allObservationsOpen && detail" class="modal-backdrop observation-all-backdrop" @click.self="allObservationsOpen = false">
+    <div v-if="allObservationsOpen && detail" class="modal-backdrop observation-all-backdrop" @click.self="closeAllObservations">
       <section class="modal-panel observation-all-modal" role="dialog" aria-modal="true" aria-label="全部结构化指标">
         <header>
-          <div>
+            <div>
             <ScrollText :size="20" />
             <div class="observation-all-title">
               <h3>全部结构化指标</h3>
-              <p>{{ readableObservations.length }} 项可查看<template v-if="governanceObservations.length"> · {{ governanceObservations.length }} 项待治理</template></p>
+              <p>{{ detail.observations.length }} 项已识别 · {{ primaryObservations.length }} 项可用于趋势<template v-if="pendingReviewObservations.length"> · {{ pendingReviewObservations.length }} 项待核对</template></p>
             </div>
           </div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="allObservationsOpen = false"><X :size="18" /></button>
+          <div class="observation-all-actions">
+            <button class="soft-action-button observation-add-button" type="button" @click="openObservationEditor()"><Plus :size="15" />补充</button>
+            <button class="plain-icon-button" type="button" title="关闭" @click="closeAllObservations"><X :size="18" /></button>
+          </div>
         </header>
         <div class="observation-all-body">
+          <div class="observation-all-layout">
+            <aside class="observation-all-list">
           <section v-if="primaryObservations.length" class="observation-tier-section">
             <header><strong>标准化指标</strong><span>{{ primaryObservations.length }} 项，可参与趋势门禁判断</span></header>
             <div class="observation-list">
-              <article v-for="item in primaryObservations" :key="item.id">
+              <article v-for="item in primaryObservations" :key="item.id" :class="{ 'is-selected': selectedObservationId === item.id }">
                 <strong>{{ item.itemName }}</strong>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <button class="observation-edit-button" type="button" title="编辑指标" @click="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
                 <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
                 <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
                 <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
               </article>
             </div>
           </section>
-          <section v-if="medicalCandidateObservations.length" class="observation-tier-section">
-            <header><strong>待补标准指标</strong><span>{{ medicalCandidateObservations.length }} 项，已核验但暂不进入趋势</span></header>
+          <section v-if="pendingReviewObservations.length" class="observation-tier-section">
+            <header><strong>待核对指标</strong><span>{{ pendingReviewObservations.length }} 项，已识别但暂不进入趋势</span></header>
             <div class="observation-list">
-              <article v-for="item in medicalCandidateObservations" :key="item.id">
+              <article v-for="item in pendingReviewObservations" :key="item.id" :class="{ 'is-selected': selectedObservationId === item.id }">
                 <strong>{{ item.itemName }}</strong>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <button class="observation-edit-button" type="button" title="编辑指标" @click="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
                 <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-                <small class="observation-display-reason">{{ item.displayReason }}</small>
+                <small v-if="item.displayReason" class="observation-display-reason">{{ item.displayReason }}</small>
                 <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
               </article>
             </div>
           </section>
-          <section v-if="qualitativeObservations.length" class="observation-tier-section">
-            <header><strong>定性检查记录</strong><span>{{ qualitativeObservations.length }} 项，保留原报告语义</span></header>
-            <div class="observation-list">
-              <article v-for="item in qualitativeObservations" :key="item.id">
-                <strong>{{ item.itemName }}</strong>
-                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
-                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-                <small class="observation-display-reason">{{ item.displayReason }}</small>
-              </article>
-            </div>
-          </section>
-          <section v-if="technicalObservations.length" class="observation-tier-section">
-            <header><strong>专业技术参数</strong><span>{{ technicalObservations.length }} 项，默认不进入家庭趋势</span></header>
-            <div class="observation-list">
-              <article v-for="item in technicalObservations" :key="item.id">
-                <strong>{{ item.itemName }}</strong>
-                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-                <small class="observation-display-reason">{{ item.displayReason }}</small>
-              </article>
-            </div>
-          </section>
-          <details v-if="governanceObservations.length" class="observation-governance-section">
-            <summary>待治理项（{{ governanceObservations.length }}）</summary>
-            <p>设备过程参数或证据不足项默认不混入家庭健康指标。</p>
-            <div class="observation-list">
-              <article v-for="item in governanceObservations" :key="item.id">
-                <strong>{{ item.itemName }}</strong>
-                <p>{{ observationValueLine(item) }}</p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span></div>
-                <small class="observation-display-reason">{{ item.displayReason }}</small>
-              </article>
-            </div>
-          </details>
+            </aside>
+            <section class="observation-source-panel">
+              <header>
+                <div><h4>原件参考</h4><p>{{ selectedObservation ? "已定位该指标的原件证据" : "选择指标后定位相关原件" }}</p></div>
+                <button v-if="observationSourcePage" class="plain-icon-button" type="button" title="打开原件" @click="openOriginalViewer(observationSourcePageIndex)"><Maximize2 :size="16" /></button>
+              </header>
+              <div v-if="observationSourcePage" class="observation-source-stage">
+                <div class="observation-source-image-wrapper">
+                  <img
+                    ref="observationOriginalImage"
+                    :src="viewerFullUrl(observationSourcePage)"
+                    :alt="`第 ${observationSourcePage.pageNumber} 页原件`"
+                    :style="originalImageAspectStyle(observationSourcePage)"
+                    decoding="async"
+                    @load="onObservationOriginalImageLoad(observationSourcePage.id)"
+                  />
+                  <OcrTextOverlay
+                    v-if="ocrDetailPage?.pageId === observationSourcePage.id && loadedObservationOriginalPageId === observationSourcePage.id && observationEvidenceLineIds.length"
+                    :image="observationOriginalImage"
+                    :lines="ocrDetailPage.lines"
+                    :coord-width="ocrDetailPage.coordWidth"
+                    :coord-height="ocrDetailPage.coordHeight"
+                    :highlight-line-ids="observationEvidenceLineIds"
+                    :interactive="false"
+                  />
+                </div>
+                <span>第 {{ observationSourcePage.pageNumber }} 页</span>
+                <small v-if="selectedObservation && !selectedObservation.evidence" class="observation-source-hint">这条指标暂无可定位的原件证据</small>
+                <small v-else-if="ocrDetailLoading" class="observation-source-hint">正在读取证据位置...</small>
+                <small v-else-if="selectedObservation && !observationEvidenceLineIds.length" class="observation-source-hint">已定位页面，但暂无可高亮的 OCR 行</small>
+              </div>
+              <p v-else class="preview-hint">暂无可用原件。</p>
+              <div v-if="detail.pages.length > 1" class="observation-source-nav">
+                <button type="button" title="上一页" :disabled="observationSourcePageIndex === 0" @click="observationSourcePageIndex -= 1"><ChevronLeft :size="16" /></button>
+                <span>第 {{ observationSourcePage?.pageNumber || 0 }} 页 / 共 {{ detail.pages.length }} 页</span>
+                <button type="button" title="下一页" :disabled="observationSourcePageIndex >= detail.pages.length - 1" @click="observationSourcePageIndex += 1"><ChevronRight :size="16" /></button>
+              </div>
+            </section>
+            <section class="observation-edit-panel">
+              <header>
+                <div><h4>{{ editingObservationId ? "编辑指标" : "补充指标" }}</h4><p>{{ editingObservationId ? "已提取内容已自动带入" : "填写后加入当前报告" }}</p></div>
+                <button v-if="observationEditorOpen" class="plain-icon-button" type="button" title="取消编辑" @click="closeObservationEditor"><X :size="16" /></button>
+              </header>
+              <div v-if="!observationEditorOpen" class="observation-edit-empty">
+                <Pencil :size="22" />
+                <p>从中间选择指标开始校对</p>
+              </div>
+              <form v-else class="settings-form observation-editor-form" @submit.prevent="saveObservation">
+                <div class="observation-catalog-picker">
+                  <span>本地标准指标</span>
+                  <div class="observation-catalog-search">
+                    <input
+                      v-model="observationCatalogQuery"
+                      type="search"
+                      aria-label="搜索本地标准指标"
+                      placeholder="输入指标名称或编码"
+                      @keyup.enter.prevent="searchObservationCatalog"
+                    />
+                    <button
+                      class="soft-action-button"
+                      type="button"
+                      :disabled="observationCatalogLoading"
+                      @click="searchObservationCatalog"
+                    >
+                      <LoaderCircle v-if="observationCatalogLoading" class="spin-icon" :size="15" />
+                      <Search v-else :size="15" />查询
+                    </button>
+                  </div>
+                  <FormSelect
+                    v-model="observationForm.canonicalKey"
+                    :options="observationCatalogSelectOptions"
+                    aria-label="选择本地标准指标"
+                  />
+                </div>
+                <div class="form-grid">
+                  <label><span>指标名称</span><input v-model="observationForm.itemName" required /></label>
+                  <label><span>指标代码</span><input v-model="observationForm.itemCode" /></label>
+                  <label><span>分组/章节</span><input v-model="observationForm.sectionName" /></label>
+                  <label><span>结果原文</span><input v-model="observationForm.resultText" /></label>
+                  <label><span>数值结果</span><input v-model.number="observationForm.numericValue" type="number" step="any" /></label>
+                  <label><span>单位</span><input v-model="observationForm.unit" /></label>
+                  <label><span>参考下限</span><input v-model.number="observationForm.referenceLow" type="number" step="any" /></label>
+                  <label><span>参考上限</span><input v-model.number="observationForm.referenceHigh" type="number" step="any" /></label>
+                  <label><span>异常标记</span><FormSelect v-model="observationForm.abnormalFlag" :options="observationFlagOptions" aria-label="异常标记" /></label>
+                  <label><span>参考范围原文</span><input v-model="observationForm.referenceText" /></label>
+                </div>
+                <p v-if="observationEditorError" class="inline-panel-error">{{ observationEditorError }}</p>
+                <div class="form-actions">
+                  <button type="button" @click="closeObservationEditor">取消</button>
+                  <button class="primary-button" type="submit" :disabled="savingObservation">
+                    <LoaderCircle v-if="savingObservation" class="spin-icon" :size="16" />保存指标
+                  </button>
+                </div>
+              </form>
+            </section>
+          </div>
         </div>
       </section>
     </div>

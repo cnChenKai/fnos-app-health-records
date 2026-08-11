@@ -112,7 +112,8 @@ https://gitee.com/timor-m/health-records-dictionary/raw/main/
 应用未配置自定义地址时按以下顺序下载：
 
 1. Gitee Raw 国内镜像。
-2. GitHub Pages 备用源。
+2. Gitee Contents API 备用镜像（Raw 被网络策略拦截时使用）。
+3. GitHub Pages 备用源。
 
 GitHub Pages 备用基础地址为：
 
@@ -121,6 +122,10 @@ https://timor-m.github.io/fnos-app-health-records/
 ```
 
 当前来源发生网络错误、超时、HTTP 错误或完整性校验失败时，才会尝试下一来源。
+默认的 Gitee Raw、Gitee Contents API 和 GitHub Pages 均不可用时，应用会明确显示公网失败原因，并退回到
+随当前应用版本发布的远程字典离线快照。离线快照可以安装，但只能代表当前应用已
+内置的 revision，不能用于判断公网是否已经发布更高版本。配置自定义来源时不会
+启用此回退，避免把私有字典静默替换为公共内置快照。
 `INDICATOR_DICTIONARY_URL` 可覆盖为单一私有来源；
 `INDICATOR_DICTIONARY_URLS` 可使用换行、逗号或分号配置自定义多源顺序。
 

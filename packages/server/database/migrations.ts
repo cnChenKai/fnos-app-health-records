@@ -472,6 +472,32 @@ export function ensureIndicatorGovernanceSchema(db: DatabaseSync) {
   db.exec(indicatorGovernanceHistorySchemaSql);
 }
 
+export function ensureObservationFieldOverrideSchema(db: DatabaseSync) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS observation_field_overrides (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      observation_id TEXT,
+      fields_json TEXT NOT NULL,
+      canonical_key TEXT,
+      is_manual_created INTEGER NOT NULL DEFAULT 0 CHECK (is_manual_created IN (0, 1)),
+      updated_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(report_id, source_key)
+    );
+    CREATE INDEX IF NOT EXISTS observation_field_overrides_observation_idx
+      ON observation_field_overrides(observation_id);
+    CREATE INDEX IF NOT EXISTS observation_field_overrides_report_idx
+      ON observation_field_overrides(report_id, updated_at DESC);
+  `);
+  const columns = tableColumnNames(db, "observation_field_overrides");
+  if (!columns.has("canonical_key")) {
+    db.exec("ALTER TABLE observation_field_overrides ADD COLUMN canonical_key TEXT");
+  }
+}
+
 
 export function ensureReportDuplicateGovernanceSchema(db: DatabaseSync) {
   db.exec(reportDuplicateGovernanceSchemaSql);

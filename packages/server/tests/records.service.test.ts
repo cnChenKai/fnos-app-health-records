@@ -55,6 +55,11 @@ import {
 } from "../services/report-duplicate-governance.service.ts";
 import { createUpload } from "../services/upload.service.ts";
 import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
+import {
+  applyObservationFieldOverrides,
+  createManualObservation,
+  updateManualObservation
+} from "../services/observation-field-overrides.service.ts";
 
 const manager: RequestUser = {
   id: "records-manager",
@@ -85,6 +90,15 @@ test("classifies report observations into standardized, candidate, technical, qu
     normalizationMatchedBy: "builtin_alias",
     canonicalName: "标准指标",
     evidence
+  }), { displayTier: "primary", displayCategory: "standardized", displayReason: null });
+
+  assert.deepEqual(classifyObservationDisplay({
+    normalizationQuality: "high",
+    normalizationExcludedReason: null,
+    normalizationMatchedBy: "builtin_alias",
+    canonicalName: "人工确认指标",
+    evidence: [],
+    manualReviewed: true
   }), { displayTier: "primary", displayCategory: "standardized", displayReason: null });
 
   const unknown = classifyObservationDisplay({
@@ -474,6 +488,68 @@ test("manual report field edits are tracked as field overrides", () => {
       ["hospitalName", "人工医院"],
       ["impression", "人工结论"]
     ]);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("manual observation edits are prefilled, normalized and retained across extraction rebuilds", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-observation-overrides-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    const upload = createUpload(manager, "records-member", [{ originalName: "manual-observation.png", data: pngBytes() }]);
+    db.prepare("UPDATE reports SET report_type = 'laboratory', status = 'ready' WHERE id = ?").run(upload.reportId);
+
+    createManualObservation(manager, upload.reportId, {
+      sectionName: "血常规", itemCode: "WBC", itemName: "白细胞计数",
+      resultText: "5.2", numericValue: 5.2, unit: "10^9/L",
+      referenceLow: 3.5, referenceHigh: 9.5, referenceText: "3.5-9.5",
+      abnormalFlag: "normal"
+    });
+    let detail = getReportDetail(manager, upload.reportId);
+    const manual = detail.observations.find((item) => item.itemCode === "WBC");
+    assert.ok(manual);
+    assert.equal(manual.manualReviewed, true);
+    assert.equal(manual.manualCreated, true);
+    assert.equal(manual.numericValue, 5.2);
+
+    updateManualObservation(manager, upload.reportId, manual.id, {
+      sectionName: "血常规", itemCode: "WBC", itemName: "白细胞计数",
+      resultText: "5.7", numericValue: 5.7, unit: "10^9/L",
+      referenceLow: 3.5, referenceHigh: 9.5, referenceText: "3.5-9.5",
+      abnormalFlag: "normal", canonicalKey: "cbc_wbc"
+    });
+    detail = getReportDetail(manager, upload.reportId);
+    const corrected = detail.observations.find((item) => item.id === manual.id);
+    assert.equal(corrected?.numericValue, 5.7);
+    assert.equal(corrected?.canonicalKey, "cbc_wbc");
+    assert.equal(corrected?.manualCanonicalKey, "cbc_wbc");
+    assert.equal(corrected?.normalizationQuality, "high");
+
+    const rebuilt = applyObservationFieldOverrides(upload.reportId, []);
+    assert.equal(rebuilt.length, 1);
+    assert.equal(rebuilt[0]?.observation.numericValue, 5.7);
+    assert.equal(rebuilt[0]?.manualCreated, true);
+
+    const audit = db.prepare(`
+      SELECT detail_json AS detailJson FROM audit_logs
+      WHERE action = 'observation.manual_update' AND target_id = ?
+    `).get(manual.id) as { detailJson: string };
+    assert.deepEqual(JSON.parse(audit.detailJson).fields, ["resultText", "numericValue", "canonicalKey"]);
+    assert.equal(audit.detailJson.includes("5.7"), false);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -1789,6 +1865,172 @@ test("returns concrete trend values from reviewed and archived reports", () => {
       true,
       "low/excluded 的字典命中仍应留在治理池，避免被误认为可进入正式趋势"
     );
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("limits trend OCR evidence to the selected panel and result cell", () => {
+  const storageDir = mkdtempSync(
+    join(tmpdir(), "health-records-trend-panel-evidence-"),
+  );
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare(
+      "INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)",
+    ).run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+    const upload = createUpload(manager, "records-member", [
+      { originalName: "two-panel.png", data: pngBytes() },
+    ]);
+    db.prepare(`
+      UPDATE reports SET title = '双栏血常规', report_type = 'laboratory',
+        status = 'ready', report_issued_at = '2026-08-10'
+      WHERE id = ?
+    `).run(upload.reportId);
+    const pageRow = db
+      .prepare("SELECT id FROM report_pages WHERE report_id = ?")
+      .get(upload.reportId) as { id: string };
+    const ocrJob = db
+      .prepare(
+        "SELECT id FROM processing_jobs WHERE report_id = ? AND job_type = 'ocr'",
+      )
+      .get(upload.reportId) as { id: string };
+    db.prepare(
+      "UPDATE processing_jobs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(ocrJob.id);
+    const ocrLines = [
+      ["left-name", "白细胞数(WBC)"],
+      ["left-result", "5.0"],
+      ["left-unit", "10^9/L"],
+      ["left-reference", "3.5-9.5"],
+      ["right-name", "红细胞体积分布宽度(RDW-SD)"],
+      ["right-result", "37.2↓"],
+      ["right-unit", "fL"],
+      ["right-reference", "39.9-52.2"],
+    ].map(([id, text], index) => ({
+      id,
+      text,
+      confidence: 0.99,
+      box: [index * 100, 20, index * 100 + 80, 40],
+    }));
+    db.prepare(`
+      INSERT INTO ocr_results (
+        id, job_id, page_id, engine, model_version, lines_json,
+        quality_score, quality_level, text_length, coord_width, coord_height
+      ) VALUES ('panel-ocr', ?, ?, 'test', 'test', ?, 100, 'good', 80, 800, 100)
+    `).run(ocrJob.id, pageRow.id, JSON.stringify(ocrLines));
+    const quote =
+      "白细胞数(WBC) | 5.0 | 10^9/L | 3.5-9.5 | 红细胞体积分布宽度(RDW-SD) | 37.2↓ | fL | 39.9-52.2";
+    const insertObservation = db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text,
+        numeric_value, unit, reference_low, reference_high, abnormal_flag, evidence_json
+      ) VALUES (?, ?, '血常规', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertObservation.run(
+      "panel-wbc",
+      upload.reportId,
+      "白细胞数(WBC)",
+      "白细胞计数",
+      "5.0",
+      5,
+      "10^9/L",
+      3.5,
+      9.5,
+      null,
+      JSON.stringify([
+        {
+          pageNumber: 1,
+          quote,
+          table: {
+            rowSourceLineIds: ocrLines.map((line) => line.id),
+            sourceMap: {
+              item: { sourceLineIds: ["left-name"] },
+              result: { sourceLineIds: ["left-result"] },
+              unit: { sourceLineIds: ["left-unit"] },
+              reference: { sourceLineIds: ["left-reference"] },
+            },
+          },
+        },
+      ]),
+    );
+    insertObservation.run(
+      "panel-rdw",
+      upload.reportId,
+      "红细胞体积分布宽度(RDW-SD)",
+      "红细胞分布宽度标准差",
+      "37.2↓",
+      37.2,
+      "fL",
+      39.9,
+      52.2,
+      "low",
+      JSON.stringify([
+        {
+          pageNumber: 1,
+          quote,
+          table: { rowSourceLineIds: ocrLines.map((line) => line.id) },
+        },
+      ]),
+    );
+    const insertNormalization = db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, canonical_key, canonical_name, canonical_value,
+        canonical_unit, canonical_category, confidence, quality, matched_by,
+        match_reason, version, source_origin
+      ) VALUES (?, ?, ?, ?, ?, '血常规', 1, 'high', 'test', 'test', 'test', 'item_name')
+    `);
+    insertNormalization.run(
+      "panel-wbc",
+      "cbc_wbc",
+      "白细胞计数",
+      5,
+      "10^9/L",
+    );
+    insertNormalization.run(
+      "panel-rdw",
+      "cbc_rdw_sd",
+      "红细胞分布宽度标准差",
+      37.2,
+      "fL",
+    );
+
+    const trends = listTrendSeries(manager, "records-member") as Array<{
+      name: string;
+      points: Array<{
+        sourceLineIds: string[];
+        resultLineIds: string[];
+      }>;
+    }>;
+    const wbc = trends.find((trend) => trend.name === "白细胞计数")?.points[0];
+    const rdw = trends.find(
+      (trend) => trend.name === "红细胞分布宽度标准差",
+    )?.points[0];
+    assert.deepEqual(wbc?.sourceLineIds, [
+      "left-name",
+      "left-result",
+      "left-unit",
+      "left-reference",
+    ]);
+    assert.deepEqual(wbc?.resultLineIds, ["left-result"]);
+    assert.deepEqual(rdw?.sourceLineIds, [
+      "right-name",
+      "right-result",
+      "right-unit",
+      "right-reference",
+    ]);
+    assert.deepEqual(rdw?.resultLineIds, ["right-result"]);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

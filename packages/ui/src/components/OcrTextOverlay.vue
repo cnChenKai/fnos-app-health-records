@@ -31,6 +31,7 @@ const sortedLines = computed(() =>
     })
 );
 const highlightedLineIds = computed(() => new Set(props.highlightLineIds || []));
+const accentedLineIds = computed(() => new Set(props.accentLineIds || []));
 
 /* 高亮行按纵向重叠聚成"表格行"：同一行里的指标名、结果值、参考值等单元格
    合并成一个矩形框整体标记，避免每个单元格各自盖一块颜色挡住原文。 */
@@ -178,6 +179,7 @@ watch(() => props.image, (newImage, oldImage) => {
       class="ocr-text-line"
       :class="{
         'is-highlighted': highlightedLineIds.has(line.id),
+        'is-accented': accentedLineIds.has(line.id),
         'is-copied': copiedLineId === line.id,
         'is-static': interactive === false
       }"
@@ -262,6 +264,13 @@ watch(() => props.image, (newImage, oldImage) => {
      只保留行框标记。 */
   background-color: transparent;
   box-shadow: none;
+}
+
+/* 趋势溯源中结果格使用更明确的内框；半栏外框负责说明指标范围，结果内框负责
+   指出实际进入趋势的数值，避免双栏报告中用户无法判断选中了哪一个结果。 */
+.ocr-text-line.is-accented {
+  background-color: rgba(245, 158, 11, 0.2);
+  box-shadow: inset 0 0 0 1.5px rgba(217, 119, 6, 0.95);
 }
 
 .ocr-text-line::selection {

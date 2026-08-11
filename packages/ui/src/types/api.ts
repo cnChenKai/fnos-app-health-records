@@ -1,6 +1,7 @@
 export type ApiResponse<T> = {
   ok: boolean;
   data: T;
+  meta?: Record<string, unknown>;
   statusMessage?: string;
   statusText?: string;
   message?: string;
@@ -478,6 +479,13 @@ export type OcrPageDetail = {
   lines: OcrLineDetail[];
 };
 
+export type ObservationEvidence = {
+  pageId: string;
+  lineIds: string[];
+  sourceText: string;
+  confidence: number | null;
+};
+
 export type Observation = {
   id: string;
   reportId: string;
@@ -500,7 +508,9 @@ export type Observation = {
   abnormalStatus: "reported" | "computed" | "conflict" | "unresolved";
   abnormalConflict: boolean;
   abnormalReason: string | null;
+  evidence: ObservationEvidence | null;
   canonicalName: string | null;
+  canonicalKey: string | null;
   canonicalValue: number | null;
   canonicalUnit: string | null;
   canonicalExplanation: string | null;
@@ -511,6 +521,9 @@ export type Observation = {
   displayTier: "primary" | "secondary" | "governance_only";
   displayCategory: "standardized" | "medical_candidate" | "technical_measurement" | "qualitative_finding" | "governance_noise";
   displayReason: string | null;
+  manualReviewed?: boolean;
+  manualCreated?: boolean;
+  manualCanonicalKey?: string | null;
 };
 
 export type MorphologyFinding = {

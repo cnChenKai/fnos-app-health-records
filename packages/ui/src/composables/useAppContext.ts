@@ -1,10 +1,12 @@
 import { computed, readonly, ref, shallowRef, watch, type Ref } from "vue";
-import { request } from "../utils/api";
+import { ApiRequestError, request } from "../utils/api";
 import { readStorage, removeStorage, writeStorage } from "../utils/storage";
 import type { AppNotification, HealthMember, Reminder, Session } from "../types/api";
 
 const loading = ref(true);
 const error = ref("");
+const repairError = ref("");
+const repairingSchema = ref(false);
 const session = ref<Session | null>(null);
 const members = ref<HealthMember[]>([]);
 const selectedMemberId = ref(readStorage("health-records:selected-member") || "");
@@ -21,6 +23,21 @@ const topbarSearch = shallowRef<TopbarSearchConfig | null>(null);
 const pendingReminderCount = ref(0);
 /* 数据变更信号：上传完成、后台任务跑完等场景递增，各页面据此静默刷新缓存数据 */
 const dataVersion = ref(0);
+type SchemaMaintenance = {
+  databaseVersion: number;
+  supportedVersion: number;
+};
+const schemaMaintenance = ref<SchemaMaintenance | null>(null);
+
+function maintenanceFromError(cause: unknown): SchemaMaintenance | null {
+  if (!(cause instanceof ApiRequestError) || cause.status !== 503) return null;
+  const maintenance = cause.meta?.maintenance;
+  if (!maintenance || typeof maintenance !== "object") return null;
+  const databaseVersion = Reflect.get(maintenance, "databaseVersion");
+  const supportedVersion = Reflect.get(maintenance, "supportedVersion");
+  if (!Number.isInteger(databaseVersion) || !Number.isInteger(supportedVersion)) return null;
+  return { databaseVersion: Number(databaseVersion), supportedVersion: Number(supportedVersion) };
+}
 function notifyDataChanged() {
   dataVersion.value += 1;
 }
@@ -60,6 +77,7 @@ async function refreshMembers() {
 async function load() {
   loading.value = true;
   error.value = "";
+  schemaMaintenance.value = null;
   try {
     session.value = await request<Session>("session");
     if (session.value.authenticated) {
@@ -69,9 +87,26 @@ async function load() {
       selectedMemberId.value = "";
     }
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "加载失败";
+    schemaMaintenance.value = maintenanceFromError(cause);
+    if (!schemaMaintenance.value) {
+      error.value = cause instanceof Error ? cause.message : "加载失败";
+    }
   } finally {
     loading.value = false;
+  }
+}
+
+async function repairUnreleasedSchema() {
+  if (!schemaMaintenance.value || repairingSchema.value) return;
+  repairingSchema.value = true;
+  repairError.value = "";
+  try {
+    await request("maintenance/repair-unreleased-schema", { method: "POST" });
+    await load();
+  } catch (cause) {
+    repairError.value = cause instanceof Error ? cause.message : "数据库适配失败";
+  } finally {
+    repairingSchema.value = false;
   }
 }
 
@@ -79,6 +114,9 @@ export function useAppContext() {
   return {
     loading: readonly(loading),
     error: readonly(error),
+    repairError: readonly(repairError),
+    repairingSchema: readonly(repairingSchema),
+    schemaMaintenance: readonly(schemaMaintenance),
     session: readonly(session),
     members: readonly(members),
     selectedMemberId,
@@ -111,6 +149,7 @@ export function useAppContext() {
     },
     refreshMembers,
     refreshReminderCount,
+    repairUnreleasedSchema,
     load
   };
 }
