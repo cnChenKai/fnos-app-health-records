@@ -29,3 +29,29 @@ export async function downloadFile(path: string, fallbackName: string) {
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
+
+/* 大文件交给浏览器下载器边接收边落盘，避免 response.blob() 在内嵌 WebView 中
+   长时间占用内存。HEAD 只校验权限和文件状态，不读取备份正文。 */
+export async function downloadStreamedFile(path: string, fallbackName: string) {
+  const url = apiUrl(path);
+  let response: Response;
+  try {
+    response = await fetch(url, { method: "HEAD", cache: "no-store" });
+  } catch (cause) {
+    throw new Error(`无法连接服务器，请检查网络或 fnOS 网关状态后重试（${describeTechnical(cause)}）`);
+  }
+  if (!response.ok) {
+    throw new Error(`备份文件下载准备失败（HTTP ${response.status}）`);
+  }
+
+  const disposition = response.headers.get("content-disposition") || "";
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(disposition);
+  const filename = match?.[1] ? decodeURIComponent(match[1].replace(/"/g, "")) : fallbackName;
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+}

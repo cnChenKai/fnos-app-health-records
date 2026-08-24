@@ -33,6 +33,18 @@ test("observation review workspace keeps source context beside the editor", () =
   assert.doesNotMatch(reportDetail, /observation-editor-backdrop|observation-editor-modal/);
 });
 
+test("touch observation editing opens above the review workspace", () => {
+  assert.match(reportDetail, /class="observation-edit-panel" :class="\{ 'is-open': observationEditorOpen \}"/);
+  assert.match(styles, /\.observation-edit-panel\.is-open \{[^}]*position:\s*fixed;[^}]*z-index:\s*130;/);
+  assert.match(styles, /\.form-select-layer \{[^}]*z-index:\s*140;/);
+});
+
+test("touch observation review hides the desktop source comparison column", () => {
+  assert.match(styles, /\.observation-all-layout \{[^}]*grid-template-areas:\s*"list";/);
+  assert.match(styles, /\.observation-source-panel \{\s*display:\s*none;/);
+  assert.match(styles, /\.observation-all-list \{[^}]*max-height:\s*none;/);
+});
+
 test("teleported content type selector stays above nested report editors", () => {
   const selectLayer = styles.match(/\.form-select-layer \{[^}]*z-index:\s*(\d+);[^}]*\}/)?.[1];
   const editorLayer = styles.match(/\.structured-section-editor-backdrop[^}]*z-index:\s*(\d+);[^}]*\}/)?.[1];

@@ -4,7 +4,7 @@ import { ArchiveRestore, DatabaseBackup, Download, LoaderCircle, ShieldCheck, Tr
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import MarqueeText from "../../components/MarqueeText.vue";
 import { request, requestUpload } from "../../utils/api";
-import { downloadFile } from "../../utils/download";
+import { downloadFile, downloadStreamedFile } from "../../utils/download";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
@@ -22,6 +22,7 @@ const creatingBackup = ref(false);
 const restoringId = ref("");
 const deletingId = ref("");
 const checkingId = ref("");
+const downloadingId = ref("");
 const uploadingRestore = ref(false);
 const validationById = ref<Record<string, BackupValidationResult>>({});
 
@@ -77,10 +78,15 @@ async function createBackupNow() {
 }
 
 async function downloadBackup(backup: BackupSummary) {
+  if (downloadingId.value) return;
+  downloadingId.value = backup.id;
   try {
-    await downloadFile(`backups/${encodeURIComponent(backup.id)}/download`, backup.filename);
+    await downloadStreamedFile(`backups/${encodeURIComponent(backup.id)}/download`, backup.filename);
+    toast.show("已开始下载，可在浏览器下载列表查看进度");
   } catch (cause) {
     toast.show(cause instanceof Error ? cause.message : "备份下载失败", 3600);
+  } finally {
+    downloadingId.value = "";
   }
 }
 
@@ -285,7 +291,11 @@ onMounted(() => {
               <ShieldCheck v-else :size="15" />
               {{ checkingId === backup.id ? "校验中" : "校验" }}
             </button>
-            <button type="button" @click="downloadBackup(backup)"><Download :size="15" />下载</button>
+            <button type="button" :disabled="Boolean(downloadingId)" @click="downloadBackup(backup)">
+              <LoaderCircle v-if="downloadingId === backup.id" class="spin-icon" :size="15" />
+              <Download v-else :size="15" />
+              {{ downloadingId === backup.id ? "准备中" : "下载" }}
+            </button>
             <button
               class="danger-text-button"
               type="button"

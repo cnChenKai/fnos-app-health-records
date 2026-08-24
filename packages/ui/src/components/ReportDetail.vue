@@ -2173,7 +2173,7 @@ onActivated(() => {
                 <button type="button" title="下一页" :disabled="observationSourcePageIndex >= detail.pages.length - 1" @click="observationSourcePageIndex += 1"><ChevronRight :size="16" /></button>
               </div>
             </section>
-            <section class="observation-edit-panel">
+            <section class="observation-edit-panel" :class="{ 'is-open': observationEditorOpen }">
               <header>
                 <div><h4>{{ editingObservationId ? "编辑指标" : "补充指标" }}</h4><p>{{ editingObservationId ? "已提取内容已自动带入" : "填写后加入当前报告" }}</p></div>
                 <button v-if="observationEditorOpen" class="plain-icon-button" type="button" title="取消编辑" @click="closeObservationEditor"><X :size="16" /></button>
