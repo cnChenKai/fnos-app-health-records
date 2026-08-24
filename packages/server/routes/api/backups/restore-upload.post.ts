@@ -1,7 +1,7 @@
 import {
-  assertBodySize,
   createError,
   defineEventHandler,
+  getHeader,
   readMultipartFormData
 } from "h3";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -14,7 +14,13 @@ import { getRequestUser } from "../../../utils/request-user";
 const maxUploadedBackupBytes = 1024 * 1024 * 1024;
 
 export default defineEventHandler(async (event) => {
-  await assertBodySize(event, maxUploadedBackupBytes);
+  const contentLength = Number(getHeader(event, "content-length") || 0);
+  if (contentLength > maxUploadedBackupBytes) {
+    throw createError({
+      statusCode: 413,
+      statusMessage: `备份文件大小超过限制（最大 ${Math.round(maxUploadedBackupBytes / 1024 / 1024)}MB）`
+    });
+  }
   const parts = await readMultipartFormData(event);
   const backup = parts.find((part) => (part.name === "backup" || part.name === "file") && part.filename);
   if (!backup?.filename) throw createError({ statusCode: 400, statusMessage: "请选择备份文件" });

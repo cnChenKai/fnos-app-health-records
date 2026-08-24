@@ -1,7 +1,7 @@
 import {
-  assertBodySize,
   createError,
   defineEventHandler,
+  getHeader,
   readMultipartFormData,
   setResponseStatus
 } from "h3";
@@ -17,7 +17,16 @@ function textPart(parts: Awaited<ReturnType<typeof readMultipartFormData>>, name
 }
 
 export default defineEventHandler(async (event) => {
-  await assertBodySize(event, maxRequestBytes);
+  // NOTE: 不使用 h3 的 assertBodySize — 它会通过 req.clone() 读取整个请求体来测量大小，
+  // 而 srvx 的 clone() 实现与原始请求共享 body stream，导致后续 readMultipartFormData
+  // 报 "Body has already been read" 错误。改为仅检查 Content-Length header。
+  const contentLength = Number(getHeader(event, "content-length") || 0);
+  if (contentLength > maxRequestBytes) {
+    throw createError({
+      statusCode: 413,
+      statusMessage: `请求体大小超过限制（最大 ${Math.round(maxRequestBytes / 1024 / 1024)}MB）`
+    });
+  }
   const parts = await readMultipartFormData(event);
   const memberId = textPart(parts, "memberId").trim();
   if (!memberId) throw createError({ statusCode: 400, statusMessage: "请选择报告所属成员" });
