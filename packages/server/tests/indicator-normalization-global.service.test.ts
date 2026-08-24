@@ -15,6 +15,7 @@ import { installRemoteDictionarySnapshotForTests } from "../services/indicator-d
 
 test("splits report codes from names without removing medical qualifiers", () => {
   assert.ok(indicatorNameCandidates("白细胞数目 WBC").includes("白细胞数目"));
+  assert.ok(indicatorNameCandidates("白细胞(WhiteCell)").includes("whitecell"));
   assert.ok(indicatorNameCandidates("WBC-白细胞计数").includes("白细胞计数"));
   assert.ok(indicatorNameCandidates("中性粒细胞比率 NEUT%").includes("中性粒细胞比率"));
   assert.notDeepEqual(
@@ -25,6 +26,7 @@ test("splits report codes from names without removing medical qualifiers", () =>
     indicatorNameCandidates("全血粘度（高切）"),
     indicatorNameCandidates("全血粘度（低切）")
   );
+  assert.ok(indicatorNameCandidates("全血粘度(5/s)").includes("全血粘度(5/s)"));
   assert.notDeepEqual(
     indicatorNameCandidates("空腹血糖"),
     indicatorNameCandidates("餐后血糖")
@@ -33,6 +35,12 @@ test("splits report codes from names without removing medical qualifiers", () =>
     indicatorNameCandidates("FEV1.0%(G)"),
     indicatorNameCandidates("FEV1.0%(T)")
   );
+});
+
+test("removes OCR report ordinals before dictionary matching", () => {
+  assert.ok(indicatorNameCandidates("3.谷草/谷丙").includes("谷草/谷丙"));
+  assert.ok(indicatorNameCandidates("19.红细胞分布宽度(SD)").includes("红细胞分布宽度"));
+  assert.ok(indicatorNameCandidates("23、TSH").includes("tsh"));
 });
 
 test("normalizes English indicator separators consistently", () => {

@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 5,
+  "revision": 9,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -1681,6 +1681,508 @@
         "血流变"
       ],
       "explanation": "血液流变检查中的红细胞电泳相关无量纲指数，应结合原报告方法和参考范围观察。"
+    },
+    {
+      "canonicalKey": "laboratory_rheumatoid_factor",
+      "displayName": "类风湿因子",
+      "categoryKey": "laboratory_other",
+      "order": 48,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "IU/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "类风湿因子",
+        "类风湿因子(RF)",
+        "RF"
+      ],
+      "allowedUnits": [
+        "IU/mL",
+        "U/mL",
+        "kIU/L"
+      ],
+      "sectionHints": [
+        "免疫",
+        "风湿免疫",
+        "生化",
+        "检验"
+      ],
+      "explanation": "类风湿因子检测结果，参考范围和检测方法可能因实验室而异，应结合原报告观察。"
+    },
+    {
+      "canonicalKey": "laboratory_homocysteine",
+      "displayName": "同型半胱氨酸",
+      "categoryKey": "laboratory_other",
+      "order": 49,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "同型半胱氨酸",
+        "同半胱氨酸",
+        "Hcy",
+        "Hcy测定"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L"
+      ],
+      "sectionHints": [
+        "免疫",
+        "生化",
+        "心脑血管风险",
+        "检验"
+      ],
+      "explanation": "同型半胱氨酸检测结果，通常结合原报告参考范围和其他心脑血管风险因素观察。"
+    },
+    {
+      "canonicalKey": "renal_urea_creatinine_ratio",
+      "displayName": "尿素/肌酐比值",
+      "categoryKey": "renal_function",
+      "order": 25,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "尿素/肌酐",
+        "尿素/肌酐比值",
+        "尿素肌酐比值",
+        "BUN/Cr"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "肾功能",
+        "肾功",
+        "生化"
+      ],
+      "explanation": "尿素与肌酐的比值，需结合尿素、肌酐绝对值、单位和原报告参考范围综合理解。"
+    },
+    {
+      "canonicalKey": "cbc_nucleated_rbc_count",
+      "displayName": "有核红细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "有核红细胞绝对值",
+        "有核红细胞绝对数",
+        "有核红细胞数",
+        "NRBC#",
+        "NRBC绝对值"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
+      ],
+      "explanation": "有核红细胞绝对数量，需结合血常规检测方法和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "inflammation_full_range_crp",
+      "displayName": "全程C反应蛋白",
+      "categoryKey": "laboratory_other",
+      "order": 50,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "全程CRP",
+        "全程C反应蛋白",
+        "全程C-反应蛋白",
+        "全量程CRP",
+        "全量程C反应蛋白"
+      ],
+      "allowedUnits": [
+        "mg/L"
+      ],
+      "sectionHints": [
+        "全程CRP",
+        "C反应蛋白",
+        "炎症",
+        "检验"
+      ],
+      "explanation": "全量程C反应蛋白检测结果，检测范围和参考区间可能因方法而异，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_nt_probnp",
+      "displayName": "N末端B型利钠肽原",
+      "categoryKey": "laboratory_other",
+      "order": 51,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "pg/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "NT-proBNP",
+        "NTproBNP",
+        "N末端B型利钠肽原",
+        "N末端脑钠肽前体",
+        "氨基末端脑钠肽前体"
+      ],
+      "allowedUnits": [
+        "pg/mL",
+        "ng/L"
+      ],
+      "sectionHints": [
+        "心功能",
+        "心衰标志物",
+        "心肌标志物",
+        "检验"
+      ],
+      "explanation": "N末端B型利钠肽原检测结果，参考范围受年龄、肾功能和检测方法影响，应结合原报告观察。"
+    },
+    {
+      "canonicalKey": "coagulation_aptt",
+      "displayName": "活化部分凝血活酶时间",
+      "categoryKey": "coagulation",
+      "order": 1,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "s",
+      "unitDimension": "time",
+      "aliases": [
+        "APTT",
+        "活化部分凝血活酶时间",
+        "活化部分凝血酶时间"
+      ],
+      "allowedUnits": [
+        "s",
+        "sec",
+        "秒"
+      ],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "explanation": "活化部分凝血活酶时间，应结合原报告参考范围及抗凝治疗情况观察。"
+    },
+    {
+      "canonicalKey": "coagulation_pt",
+      "displayName": "凝血酶原时间",
+      "categoryKey": "coagulation",
+      "order": 2,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "s",
+      "unitDimension": "time",
+      "aliases": [
+        "PT",
+        "凝血酶原时间",
+        "血浆凝血酶原时间"
+      ],
+      "allowedUnits": [
+        "s",
+        "sec",
+        "秒"
+      ],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "explanation": "凝血酶原时间，应结合原报告参考范围及抗凝治疗情况观察。"
+    },
+    {
+      "canonicalKey": "coagulation_inr",
+      "displayName": "国际标准化比值",
+      "categoryKey": "coagulation",
+      "order": 3,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "INR",
+        "国际标准化比值",
+        "国际标准化比率"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "explanation": "凝血酶原时间国际标准化比值，应结合原报告参考范围及抗凝治疗目标观察。"
+    },
+    {
+      "canonicalKey": "coagulation_tt",
+      "displayName": "凝血酶时间",
+      "categoryKey": "coagulation",
+      "order": 4,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "s",
+      "unitDimension": "time",
+      "aliases": [
+        "TT",
+        "凝血酶时间",
+        "血浆凝血酶时间"
+      ],
+      "allowedUnits": [
+        "s",
+        "sec",
+        "秒"
+      ],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "explanation": "凝血酶时间，应结合原报告参考范围和影响凝血过程的用药情况观察。"
+    },
+    {
+      "canonicalKey": "coagulation_fibrinogen",
+      "displayName": "纤维蛋白原",
+      "categoryKey": "coagulation",
+      "order": 5,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "FIB",
+        "纤维蛋白原",
+        "血浆纤维蛋白原"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "explanation": "纤维蛋白原检测结果，应结合原报告参考范围及炎症、肝功能和凝血状态综合观察。"
+    },
+    {
+      "canonicalKey": "laboratory_cholinesterase",
+      "displayName": "胆碱酯酶",
+      "categoryKey": "laboratory_other",
+      "order": 52,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "胆碱酯酶",
+        "胆碱酯酶(CHE)",
+        "CHE"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化",
+        "检验"
+      ],
+      "explanation": "血清胆碱酯酶检测结果，参考范围和临床含义受检测方法、肝功能及其他因素影响，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "urine_color",
+      "displayName": "尿液颜色",
+      "categoryKey": "urinalysis",
+      "order": 77,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "尿液颜色",
+        "尿色",
+        "尿液颜色(UCO)",
+        "UCO"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液",
+        "尿液外观"
+      ],
+      "explanation": "原报告记录的尿液颜色，属于尿液外观描述，不默认进入数值趋势。"
+    },
+    {
+      "canonicalKey": "urine_clarity",
+      "displayName": "尿液透明度",
+      "categoryKey": "urinalysis",
+      "order": 78,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "尿透明度",
+        "尿液透明度",
+        "尿液清晰度"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿液",
+        "尿液外观"
+      ],
+      "explanation": "原报告记录的尿液透明度或外观，属于描述性结果，不默认进入数值趋势。"
+    },
+    {
+      "canonicalKey": "inflammation_high_sensitivity_crp",
+      "displayName": "超敏C反应蛋白",
+      "categoryKey": "laboratory_other",
+      "order": 53,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "超敏C反应蛋白",
+        "高敏C反应蛋白",
+        "hs-CRP",
+        "hsCRP"
+      ],
+      "allowedUnits": [
+        "mg/L"
+      ],
+      "sectionHints": [
+        "炎症",
+        "心脑血管风险",
+        "生化",
+        "检验"
+      ],
+      "explanation": "超敏C反应蛋白检测结果，检测方法和参考区间可能与全程C反应蛋白不同，应按同一检测口径观察。"
+    },
+    {
+      "canonicalKey": "ecg_rv5_sv1_sum",
+      "displayName": "RV5+SV1振幅",
+      "categoryKey": "functional_measurement",
+      "order": 50,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mV",
+      "unitDimension": "other",
+      "aliases": [
+        "RV5+SV1",
+        "RV5+SV1振幅",
+        "RV5+SV1电压"
+      ],
+      "allowedUnits": [
+        "mV",
+        "mv"
+      ],
+      "sectionHints": [
+        "心电图",
+        "心电检查",
+        "静态心电"
+      ],
+      "explanation": "心电图 RV5 与 SV1 振幅之和，应结合导联质量和原报告判读结论观察。"
+    },
+    {
+      "canonicalKey": "infectious_hpv16",
+      "displayName": "人乳头瘤病毒16型",
+      "categoryKey": "infection_immunity",
+      "order": 74,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HPV-16型",
+        "HPV16型",
+        "HPV 16型",
+        "人乳头瘤病毒16型"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "HPV",
+        "人乳头瘤病毒",
+        "宫颈筛查",
+        "妇科"
+      ],
+      "explanation": "人乳头瘤病毒16型检测结果，属于分型筛查结果，应结合同次HPV检测和原报告判读。"
+    },
+    {
+      "canonicalKey": "infectious_hpv18",
+      "displayName": "人乳头瘤病毒18型",
+      "categoryKey": "infection_immunity",
+      "order": 75,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "HPV-18型",
+        "HPV18型",
+        "HPV 18型",
+        "人乳头瘤病毒18型"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "HPV",
+        "人乳头瘤病毒",
+        "宫颈筛查",
+        "妇科"
+      ],
+      "explanation": "人乳头瘤病毒18型检测结果，属于分型筛查结果，应结合同次HPV检测和原报告判读。"
+    },
+    {
+      "canonicalKey": "microscopy_yeast_like_fungi",
+      "displayName": "类酵母菌",
+      "categoryKey": "laboratory_other",
+      "order": 54,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "类酵母菌",
+        "酵母样菌",
+        "酵母样真菌"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "镜检",
+        "分泌物",
+        "妇科",
+        "微生物"
+      ],
+      "explanation": "显微镜检查中的类酵母菌描述，属于定性结果，应结合标本来源和原报告判读。"
     }
   ],
   "extensions": [
@@ -1706,6 +2208,121 @@
         "尿沉渣",
         "尿镜检",
         "尿液"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_afp",
+      "aliases": [
+        "甲胎蛋白(定量)"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_mch",
+      "aliases": [
+        "平均血红蛋白含量"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
+    },
+    {
+      "canonicalKey": "liver_ggt",
+      "aliases": [
+        "γ-谷氨酰基转肽酶",
+        "-谷氨酰基转肽酶(Y-GT)",
+        "谷氨酰基转肽酶(Y-GT)",
+        "Y-GT"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_eosinophil_percentage",
+      "aliases": [
+        "嗜酸细胞百分比"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_eosinophil_count",
+      "aliases": [
+        "嗜酸细胞绝对数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_basophil_percentage",
+      "aliases": [
+        "嗜碱细胞百分比"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_basophil_count",
+      "aliases": [
+        "嗜碱细胞绝对数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ]
+    },
+    {
+      "canonicalKey": "hemorheology_whole_blood_viscosity_low_shear_5",
+      "aliases": [
+        "全血粘度(5/s)"
+      ],
+      "sectionHints": [
+        "血粘度",
+        "血黏度",
+        "血液流变",
+        "血流变"
+      ]
+    },
+    {
+      "canonicalKey": "vision_corrected_right",
+      "aliases": [
+        "右眼矫正"
+      ],
+      "sectionHints": [
+        "视力",
+        "眼科"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_wbc",
+      "aliases": [
+        "WhiteCell"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
       ]
     }
   ],

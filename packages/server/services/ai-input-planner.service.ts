@@ -5303,12 +5303,19 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   if (
     cells.length >= 2 &&
     /[\p{L}\u3400-\u9fff]{1,}/u.test(firstCell) &&
-    /^(?:[-+±]+|[-+]?\d+(?:\.\d+)?(?:\s|$)|阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(
+    /^(?:[-+±]+|(?:<|<=|≤|>|>=|≥)?\s*[-+]?\d+(?:\.\d+)?(?:\s|$)|阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(
       cells[1],
     )
   )
     return true;
-  if (unitPattern.test(text) && /\d/.test(text)) return true;
+  // 单位必须紧跟测量数值；否则单字母单位 s 会误中 C-TIRADS 等报告代码。
+  if (
+    new RegExp(
+      `[-+]?\\d+(?:\\.\\d+)?\\s*(?:${unitPattern.source})(?=$|[^A-Za-z])`,
+      "i",
+    ).test(text)
+  )
+    return true;
   if (/[↑↓▲▼]/.test(text) && /\d/.test(text)) return true;
   if (
     /(?:检验)?结果\s*[:：]\s*(?:阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(

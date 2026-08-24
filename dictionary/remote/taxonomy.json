@@ -2,7 +2,27 @@
   "$schema": "../schemas/taxonomy.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 5,
+  "revision": 9,
   "groups": [],
-  "categories": []
+  "categories": [
+    {
+      "key": "coagulation",
+      "name": "凝血功能",
+      "groupKey": "laboratory",
+      "subgroupKey": "laboratory_other",
+      "order": 95,
+      "aliases": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ],
+      "sectionHints": [
+        "凝血功能",
+        "凝血",
+        "凝血四项",
+        "凝血五项"
+      ]
+    }
+  ]
 }

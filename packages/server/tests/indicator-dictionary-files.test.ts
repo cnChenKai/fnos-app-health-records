@@ -121,7 +121,14 @@ test("publishes confirmed specialty aliases through the remote dictionary", () =
     "hemorheology_erythrocyte_deformability_index_tk",
     "tcd_basilar_artery_mean_flow_velocity",
     "tcd_basilar_artery_pulsatility_index",
-    "gyn_endometrium_thickness"
+    "gyn_endometrium_thickness",
+    "inflammation_full_range_crp",
+    "cardiac_nt_probnp",
+    "coagulation_aptt",
+    "coagulation_pt",
+    "coagulation_inr",
+    "coagulation_tt",
+    "coagulation_fibrinogen"
   ]) {
     assert.equal(keys.has(key), true, `missing remote indicator ${key}`);
   }

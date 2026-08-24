@@ -2827,6 +2827,18 @@ test("keeps independent ultrasound conclusions separate from following negative 
   );
 });
 
+test("requires a short time unit to follow its numeric result", () => {
+  const rebuilt = rebuildOcrPages([
+    page(1, [
+      "APTT | 30.2 | s | 25.0-35.0",
+      "双叶甲状腺未见明显异常，C-TIRADS 1类",
+    ]),
+  ]);
+  assert.equal(rebuilt[0].lines[0].candidateKind, "scalar");
+  assert.equal(rebuilt[0].lines[0].dictionaryFacts[0]?.canonicalKey, "coagulation_aptt");
+  assert.equal(rebuilt[0].lines[1].candidateKind, null);
+});
+
 test("closes real page 4 scalars and keeps page 18 ultrasound evidence clean", () => {
   const golden = JSON.parse(
     readFileSync(

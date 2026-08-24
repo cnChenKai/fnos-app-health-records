@@ -282,16 +282,18 @@ function compactIndicatorKey(value: string | null | undefined) {
   return (value || "")
     .normalize("NFKC")
     .replace(/[(]\s*([GT])\s*[)]/gi, "§$1§")
+    .replace(/[（(]\s*(\d+)\s*\/\s*s\s*[）)]/gi, "§$1/s§")
     .toLocaleLowerCase("zh-CN")
     .replace(/[（(].*?[）)]/g, "")
     .replace(/§([gt])§/g, "($1)")
+    .replace(/§(\d+\/s)§/gi, "($1)")
     .replace(/\s+/g, "")
     .replace(/[：:，,。.;；、_\-]/g, "")
     .replace(/[＋]/g, "+")
     .trim();
 }
 
-const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率|^[GT]$|^Ig[GMAED]$/i;
+const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率|^\d+\s*\/\s*s$|^[GT]$|^Ig[GMAED]$/i;
 const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
 
 /**
@@ -306,6 +308,9 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     const compact = compactIndicatorKey(candidate);
     if (compact) candidates.add(compact);
   };
+  // 部分报告会把表格序号 OCR 到指标名称前，序号不是指标语义的一部分。
+  const withoutLeadingOrdinal = raw.replace(/^\d{1,3}\s*[.、)）:：]\s*/, "");
+  if (withoutLeadingOrdinal !== raw) add(withoutLeadingOrdinal);
   const brackets = [...raw.matchAll(/[（(]([^（）()]*)[）)]/g)];
   const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || ""));
   if (protectedBracket) candidates.add(compactQualifiedIndicatorKey(raw));
