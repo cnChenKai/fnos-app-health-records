@@ -79,7 +79,7 @@ AI 审计页面向管理员，展示 AI 调用次数、成功失败、耗时、T
 - Nitro 3、Node.js 22
 - Node.js 内置 SQLite、WAL、版本化迁移
 - RapidOCR/OpenVINO、PyMuPDF
-- OpenAI-compatible 文本与视觉模型接口，内置 DeepSeek、Kimi、GLM、Qwen、OpenAI 和豆包配置模板
+- OpenAI-compatible 文本与视觉模型接口，内置 DeepSeek、Kimi、GLM、Qwen、OpenAI、豆包和 Ollama 配置模板
 
 AI 调用按运行时、任务路由和领域实现分层；Provider 凭据统一保存，各 AI 场景可继承默认模型或独立绑定 Provider/模型。扩展约束见 [AI 能力架构](./docs/AI_ARCHITECTURE.md)。
 - fnOS Unix Socket 统一网关与系统账号身份

@@ -5,7 +5,7 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "ollama";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;
@@ -13,6 +13,7 @@ type AiProviderOption = {
   defaultTextModel: string;
   defaultVisionModel: string;
   modelHint?: string;
+  apiKeyRequired?: boolean;
 };
 type AiProviderSettings = {
   visionEnabled: boolean;
@@ -168,7 +169,7 @@ onMounted(() => { void loadSettings(); });
         <label class="toggle-row"><div><strong>视觉增强</strong><span>复杂表格可发送处理后的页面副本</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" /></label>
         <label><span>API 地址</span><input v-model.trim="ai.baseUrl" :placeholder="currentProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
         <div class="form-grid"><label><span>文本模型</span><input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" /><small v-if="currentProvider?.modelHint" class="field-hint">{{ currentProvider.modelHint }}</small></label><label><span>视觉模型</span><input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '按需填写支持图片的模型'" /></label></div>
-        <label><span>API Key</span><input v-model="ai.apiKey" type="password" autocomplete="new-password" :placeholder="ai.apiKeyConfigured ? `已配置 ${ai.apiKeyMasked}` : '输入 API Key'" /></label>
+        <label><span>API Key <small v-if="currentProvider?.apiKeyRequired === false">（可选）</small></span><input v-model="ai.apiKey" type="password" autocomplete="new-password" :placeholder="currentProvider?.apiKeyRequired === false ? 'Ollama 默认无需填写' : ai.apiKeyConfigured ? `已配置 ${ai.apiKeyMasked}` : '输入 API Key'" /></label>
         <section v-if="implementedTasks.length" class="ai-task-bindings">
           <header><strong>场景模型</strong><span>默认继承上方模型，也可为单个场景独立指定</span></header>
           <article v-for="task in implementedTasks" :key="task.key">

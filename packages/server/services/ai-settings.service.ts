@@ -7,6 +7,7 @@ import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
 import {
   aiProviderCatalog,
+  aiProviderHasRequiredApiKey,
   normalizeAiProvider,
   resolveAiTemperature,
   type AiProviderKey
@@ -160,6 +161,7 @@ function parseStoredSettings(): ParsedAiSettings {
 function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
   try {
     const parsed = new URL(value);
+    if (provider === "ollama" && parsed.pathname.replace(/\/+$/, "") === "") parsed.pathname = "/v1";
     if (
       provider === "kimi"
       && parsed.hostname === "api.kimi.com"
@@ -340,10 +342,12 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const current = resolveProvider(provider, parsed);
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
-  if (!apiKey || !textModel) {
+  if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !textModel) {
     throw createError({
       statusCode: 400,
-      statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`
+      statusMessage: aiProviderCatalog[provider].apiKeyRequired === false
+        ? `请先配置 ${aiProviderCatalog[provider].label} 文本模型`
+        : `请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`
     });
   }
   const baseUrl = normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl));

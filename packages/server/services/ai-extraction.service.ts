@@ -2,7 +2,7 @@ import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import { getAiTaskSettings } from "./ai-settings.service";
 import { backfillMemberBloodTypeFromReport } from "./member.service";
-import { resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
+import { aiProviderHasRequiredApiKey, resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
 import { executeAiTask } from "./ai-task.service";
 import {
   normalizeObservation,
@@ -1179,7 +1179,8 @@ export function isAiExtractionConfigured() {
   const settings = getAiTaskSettings("report_extraction", true);
   return (
     settings.enabled &&
-    Boolean(settings.apiKey && settings.model && settings.baseUrl)
+    Boolean(settings.model && settings.baseUrl) &&
+    (!aiProviderHasRequiredApiKey(settings.provider) || Boolean(settings.apiKey))
   );
 }
 
@@ -1587,7 +1588,8 @@ function parseJsonContent(content: string) {
 
 export const requestAiExtraction: AiExecutor = async (input) => {
   const settings = getAiTaskSettings("report_extraction", true);
-  if (!settings.enabled || !settings.apiKey || !settings.model) {
+  if (!settings.enabled || !settings.model || !settings.baseUrl ||
+      (aiProviderHasRequiredApiKey(settings.provider) && !settings.apiKey)) {
     throw Object.assign(new Error("AI 解析尚未完整配置"), {
       code: "AI_NOT_CONFIGURED",
     });

@@ -1,4 +1,4 @@
-export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao";
+export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "ollama";
 
 export type AiProviderOption = {
   label: string;
@@ -6,6 +6,7 @@ export type AiProviderOption = {
   defaultTextModel: string;
   defaultVisionModel: string;
   defaultMaxOutputTokens: number;
+  apiKeyRequired?: boolean;
   modelHint?: string;
 };
 
@@ -52,6 +53,14 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
     defaultVisionModel: "doubao-seed-1-6-vision-250815",
     defaultMaxOutputTokens: 32_768,
     modelHint: "火山方舟如要求使用推理接入点，请填写控制台中的 ep-... 接入点 ID"
+  },
+  ollama: {
+    label: "Ollama",
+    defaultBaseUrl: "http://127.0.0.1:11434/v1",
+    defaultTextModel: "",
+    defaultVisionModel: "",
+    defaultMaxOutputTokens: 8_192,
+    modelHint: "填写本机已安装的 Ollama 模型名称，例如 qwen2.5:7b、qwen2.5vl:7b；Ollama 默认不需要 API Key"
   }
 };
 
@@ -67,6 +76,10 @@ export function resolveAiMaxOutputTokens(provider: AiProviderKey) {
     return Math.max(1_024, Math.min(384_000, Math.floor(configured)));
   }
   return aiProviderCatalog[provider].defaultMaxOutputTokens;
+}
+
+export function aiProviderHasRequiredApiKey(provider: AiProviderKey) {
+  return aiProviderCatalog[provider].apiKeyRequired !== false;
 }
 
 export function resolveAiTemperature(

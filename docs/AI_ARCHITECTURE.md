@@ -96,7 +96,7 @@ OCR 重建后的每一行会先标记为元数据、表头、章节标题、定�
 
 Provider 配置和场景绑定存储在现有 `app_settings` 的 `ai.provider` JSON 中：
 
-- API 地址、API Key、默认文本模型和视觉模型按 Provider 独立保存。
+- API 地址、API Key、默认文本模型和视觉模型按 Provider 独立保存；Ollama 默认使用本地 OpenAI-compatible 地址且不要求 API Key。
 - API Key 继续使用应用私有密钥加密，场景绑定不会复制密钥。
 - 场景只保存可选的 `provider` 和 `model`。
 - 切换默认 Provider 或场景模型不会删除其他 Provider 的配置。

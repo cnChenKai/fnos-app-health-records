@@ -5,7 +5,7 @@ import {
   type AiRuntimeResponse
 } from "./ai-runtime.service";
 import { aiTaskDefinition, type AiTaskKey } from "./ai-task-registry";
-import { resolveAiTemperature } from "./ai-provider";
+import { aiProviderHasRequiredApiKey, resolveAiTemperature } from "./ai-provider";
 
 export async function executeAiTask(
   taskKey: AiTaskKey,
@@ -19,7 +19,8 @@ export async function executeAiTask(
     });
   }
   const settings = getAiTaskSettings(taskKey, true);
-  if (!settings.enabled || !settings.apiKey || !settings.model) {
+  if (!settings.enabled || !settings.model || !settings.baseUrl ||
+      (aiProviderHasRequiredApiKey(settings.provider) && !settings.apiKey)) {
     throw Object.assign(new Error(`AI 场景“${definition.label}”尚未完整配置`), {
       code: "AI_NOT_CONFIGURED",
       taskKey
