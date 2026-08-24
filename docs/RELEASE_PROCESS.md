@@ -12,6 +12,8 @@
 | 应用版本 | `0.2.2` | `package.json` |
 | fnOS manifest 版本 | `0.2.2` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
 | fnOS sub_version | `0.2.2.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | `0.2.2`、`v0.2.2` | GitHub Tag 工作流从 `package.json` 生成 |
+| Docker 镜像仓库 | `ghcr.io/timor-m/fnos-app-health-records` | GitHub Container Registry |
 | 数据库 schema | `v16` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
@@ -226,12 +228,15 @@ npm run release:notes
 
 该命令会读取 `CHANGELOG.md` 当前版本段落、`template.config.json` 的发布摘要/亮点和数据库迁移注册表，生成与 GitHub Release 一致的 Markdown。若当前 `package.json` 版本没有对应的 changelog 段落，命令会失败，避免发布页缺少本版本变更说明。
 
-自动化校验：
+自动化校验与发布：
 
 - GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`。
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
 - Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、应用版本、应用 ID、目标 schema 和数据库升级说明。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。
+- `vX.Y.Z` Tag 先构建 fnOS `.fpk`，再通过 Buildx 发布 `linux/amd64`、`linux/arm64` 的 GHCR 多架构镜像，最后创建同时包含 `.fpk`、镜像地址和 digest 的 GitHub Release。
+- Docker 镜像标签包含精确版本 `X.Y.Z`、`vX.Y.Z`、`X.Y` 和短提交 SHA；稳定版本额外更新 `latest`。镜像版本与 `.fpk` 版本都只取自同一个 `package.json`。
+- 镜像发布启用 OCI 源码、版本、许可证标签、SBOM 和 GitHub Actions provenance。发布前应确认仓库 Packages 权限允许 Actions 写入 GHCR。
 
 本地完整发布：
 
@@ -252,6 +257,16 @@ fnOS 真机验证：
 - 卸载选择“保留数据”时数据保留。
 - 卸载选择“删除数据”时数据清理。
 - “我的 -> 备份与恢复”可创建、下载、校验、上传外部备份恢复和删除完整应用备份；恢复前会自动生成安全备份，恢复后提示刷新或重新打开应用。
+
+Docker 发布验证：
+
+- 空数据卷可通过 Docker Secret 初始化本地管理员并登录。
+- 容器进程使用非 root 用户，`/data` 卷可写，重启和重建容器后数据与 OCR 环境保留。
+- 匿名请求和伪造 `X-Trim-*` 请求不能获得成员或管理员权限，登录限流、CSRF、退出和会话过期行为正常。
+- `/healthz` 健康检查正常，根路径 UI、上传、备份下载与恢复可直接访问。
+- 固定版本升级后数据库迁移正常；回滚测试使用独立卷或升级前备份，不直接覆盖生产卷。
+- 在 `linux/amd64`、`linux/arm64` 真机分别完成 OCR 安装和最小识别测试。
+- Docker 安装和运维步骤见 [Docker 部署](./DOCKER_DEPLOYMENT.md)。
 
 ## 打包流程
 

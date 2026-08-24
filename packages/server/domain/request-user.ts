@@ -5,5 +5,11 @@ export type RequestUser = {
   displayName: string;
   provider: IdentityProvider;
   authenticated: boolean;
+  isAdmin?: boolean;
+  /** @deprecated Kept for API and backup compatibility with existing fnOS releases. */
   isGatewayAdmin: boolean;
 };
+
+export function isAdministrator(user: Pick<RequestUser, "isAdmin" | "isGatewayAdmin">) {
+  return user.isAdmin ?? user.isGatewayAdmin;
+}

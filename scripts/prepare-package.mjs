@@ -291,6 +291,7 @@ start_app() {
 
     APP_NAME=${appNameShell} \\
     APP_TITLE=${appTitleShell} \\
+    AUTH_MODE=fnos \\
     GATEWAY_PREFIX=${gatewayPrefixShell} \\
     FNOS_SOCKET_PATH="\${SOCKET_PATH}" \\
     LOG_DIR="\${TRIM_PKGVAR}/log" \\

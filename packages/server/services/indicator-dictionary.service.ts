@@ -10,7 +10,7 @@ import indicatorsSchema from "../../../dictionary/schemas/indicators.schema.json
 import manifestSchema from "../../../dictionary/schemas/manifest.schema.json" with { type: "json" };
 import taxonomySchema from "../../../dictionary/schemas/taxonomy.schema.json" with { type: "json" };
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { configuredRequestTimeout, fetchWithTimeout } from "../utils/outbound-request";
 
@@ -131,7 +131,7 @@ const validateIndicatorsSchema = ajv.compile(indicatorsSchema);
 let coreSyncRunning = false;
 
 function assertAdministrator(user: RequestUser) {
-  if (!user.isGatewayAdmin) {
+  if (!isAdministrator(user)) {
     throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标字典" });
   }
 }

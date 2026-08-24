@@ -1,8 +1,9 @@
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
+import { getAppConfig } from "../utils/runtime-config";
 import {
   normalizeAllObservationsFromDictionary,
   type IndicatorNormalizationMaintenanceResult
@@ -49,7 +50,7 @@ let runnerInterval: ReturnType<typeof setInterval> | null = null;
 let runnerKickTimer: ReturnType<typeof setTimeout> | null = null;
 
 function assertAdministrator(user: RequestUser) {
-  if (!user.isGatewayAdmin) {
+  if (!isAdministrator(user)) {
     throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   }
 }
@@ -188,15 +189,16 @@ function claimNextTask() {
 function taskUser(row: TaskRow): RequestUser {
   if (!row.requestedBy) throw new Error("任务发起用户不存在");
   const user = getDatabase().prepare(`
-    SELECT id, display_name AS displayName, is_gateway_admin AS isGatewayAdmin
+    SELECT id, display_name AS displayName, is_gateway_admin AS isAdmin
     FROM users WHERE id = ?
-  `).get(row.requestedBy) as { id: string; displayName: string; isGatewayAdmin: number } | undefined;
-  if (!user || !user.isGatewayAdmin) throw new Error("任务发起用户已不再具备管理员权限");
+  `).get(row.requestedBy) as { id: string; displayName: string; isAdmin: number } | undefined;
+  if (!user || !user.isAdmin) throw new Error("任务发起用户已不再具备管理员权限");
   return {
     id: user.id,
     displayName: user.displayName,
-    provider: "fnos_gateway",
+    provider: getAppConfig().authMode === "local" ? "local" : "fnos_gateway",
     authenticated: true,
+    isAdmin: true,
     isGatewayAdmin: true
   };
 }

@@ -13,7 +13,11 @@ export type Session = {
   displayName: string;
   provider: "fnos_gateway" | "local" | "development";
   authenticated: boolean;
+  isAdmin: boolean;
+  /** @deprecated Kept while older servers and clients use this field. */
   isGatewayAdmin: boolean;
+  authMode: "fnos" | "local" | "development" | "disabled";
+  setupRequired: boolean;
 };
 
 export type HealthMember = {

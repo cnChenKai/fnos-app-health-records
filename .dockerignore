@@ -1,0 +1,14 @@
+.git
+.github
+.data
+.fnos-build
+.server-dist
+.ui-dist
+dist
+node_modules
+npm-debug.log*
+*.fpk
+*.tar.gz
+docs
+secrets
+packages/server/tests

@@ -3,7 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import {
   clearSystemLogFiles,
   getLogRotationPolicy,
@@ -40,7 +40,7 @@ type SystemLogCursor = {
 
 function requireAdmin(user: RequestUser) {
   if (!user.authenticated) throw createError({ statusCode: 401, statusMessage: "请先登录" });
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看系统日志" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看系统日志" });
 }
 
 function requireAuthenticated(user: RequestUser) {

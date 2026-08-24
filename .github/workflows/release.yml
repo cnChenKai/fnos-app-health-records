@@ -8,6 +8,12 @@ on:
 
 permissions:
   contents: write
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   release:
@@ -25,7 +31,16 @@ jobs:
 
       - name: Read package metadata
         id: package
-        run: node -p "'version=' + require('./package.json').version" >> "$GITHUB_OUTPUT"
+        shell: bash
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "minor=$(node -p "const [major, minor] = require('./package.json').version.split('.'); major + '.' + minor")" >> "$GITHUB_OUTPUT"
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Verify tag matches package version
         if: github.ref_type == 'tag'
@@ -44,11 +59,91 @@ jobs:
       - name: Prepare release notes
         run: node scripts/generate-release-notes.mjs --output=RELEASE_NOTES.md
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Docker metadata
+        id: docker-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.package.outputs.version }}
+            type=raw,value=v${{ steps.package.outputs.version }}
+            type=raw,value=${{ steps.package.outputs.minor }}
+            type=raw,value=latest,enable=${{ steps.package.outputs.stable == 'true' }}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+            org.opencontainers.image.title=健康档案
+
+      - name: Build and publish Docker image
+        id: docker-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.docker-meta.outputs.tags }}
+          labels: ${{ steps.docker-meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            GATEWAY_PREFIX=/
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Sign Docker image
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.docker-build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Add Docker image to release notes
+        shell: bash
+        run: |
+          cat >> RELEASE_NOTES.md <<'EOF'
+
+          ## Docker 镜像
+
+          ```text
+          ghcr.io/${{ env.IMAGE_NAME }}:${{ steps.package.outputs.version }}
+          digest: ${{ steps.docker-build.outputs.digest }}
+          platforms: linux/amd64, linux/arm64
+          ```
+
+          升级 Compose 部署：
+
+          ```bash
+          HEALTH_RECORDS_VERSION=${{ steps.package.outputs.version }} docker compose pull
+          HEALTH_RECORDS_VERSION=${{ steps.package.outputs.version }} docker compose up -d
+          ```
+
+          完整安装和回滚说明见 `docs/DOCKER_DEPLOYMENT.md`。
+          EOF
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false
-          name: 健康档案 ${{ github.ref_name }}
+          tag_name: v${{ steps.package.outputs.version }}
+          name: 健康档案 v${{ steps.package.outputs.version }}
           body_path: RELEASE_NOTES.md
           files: |
             dist/app.tgz

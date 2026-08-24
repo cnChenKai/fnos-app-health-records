@@ -1,6 +1,6 @@
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 
 const relationships = new Set(["spouse", "child", "parent", "sibling", "other"]);
@@ -29,14 +29,14 @@ function requireAuthenticated(user: RequestUser) {
 
 function requireAdmin(user: RequestUser) {
   requireAuthenticated(user);
-  if (!user.isGatewayAdmin) {
+  if (!isAdministrator(user)) {
     throw createError({ statusCode: 403, statusMessage: "仅管理员可管理成员授权" });
   }
 }
 
 function requireMemberManager(user: RequestUser, memberId: string) {
   requireAuthenticated(user);
-  if (user.isGatewayAdmin) return;
+  if (isAdministrator(user)) return;
   const permission = assertMemberAccess(user, memberId);
   if (permission !== "manager") {
     throw createError({ statusCode: 403, statusMessage: "仅有管理权限的账号可修改家庭成员" });
@@ -269,7 +269,7 @@ export function listAccessUsers(user: RequestUser) {
     SELECT u.id, u.display_name AS displayName, u.is_gateway_admin AS isAdmin,
       GROUP_CONCAT(DISTINCT ui.provider) AS providers
     FROM users u
-    JOIN user_identities ui ON ui.user_id = u.id AND ui.provider IN ('fnos_gateway', 'development')
+    JOIN user_identities ui ON ui.user_id = u.id AND ui.provider IN ('fnos_gateway', 'local', 'development')
     GROUP BY u.id
     ORDER BY u.is_gateway_admin DESC, u.display_name
   `).all();
@@ -296,7 +296,7 @@ export function setMemberPermission(user: RequestUser, memberId: string, input: 
   const userId = typeof input.userId === "string" ? input.userId.trim() : "";
     const target = getDatabase().prepare(`
       SELECT u.id FROM users u
-      JOIN user_identities ui ON ui.user_id = u.id AND ui.provider IN ('fnos_gateway', 'development')
+      JOIN user_identities ui ON ui.user_id = u.id AND ui.provider IN ('fnos_gateway', 'local', 'development')
       WHERE u.id = ?
     `).get(userId);
   if (!target) throw createError({ statusCode: 404, statusMessage: "授权账号不存在" });

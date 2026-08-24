@@ -22,6 +22,8 @@ export function isAssetRequest(pathname: string) {
 export function stripGatewayPrefix(pathname: string) {
   const { gatewayPrefix } = getAppConfig();
 
+  if (!gatewayPrefix) return pathname;
+
   if (pathname === gatewayPrefix) {
     return "/";
   }

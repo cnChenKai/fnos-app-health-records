@@ -4,7 +4,7 @@
 
 当前版本已经具备核心档案闭环：概览、档案时间轴、上传处理进度、OCR 文本质量提示、AI 整理、报告校对、定量/定性指标趋势、独立形态发现、提醒、重复报告检测、回收站、完整备份/校验/恢复、运行状态、AI 配置与审计。完整功能进度见 [健康档案应用-TODO.md](./健康档案应用-TODO.md)。
 
-应用发布流程见 [应用发布与数据库升级流程](./docs/RELEASE_PROCESS.md)，版本升级、本地 SQLite 按需迁移和提交检查流程见 [版本与数据库迁移规范](./docs/VERSION_MIGRATION.md)。
+应用发布流程见 [应用发布与数据库升级流程](./docs/RELEASE_PROCESS.md)，Docker 安装见 [Docker 部署](./docs/DOCKER_DEPLOYMENT.md)，版本升级、本地 SQLite 按需迁移和提交检查流程见 [版本与数据库迁移规范](./docs/VERSION_MIGRATION.md)。
 
 ## 应用定位
 
@@ -100,7 +100,23 @@ AI 调用按运行时、任务路由和领域实现分层；Provider 凭据统�
 - 数据安全：报告删除先进入 30 天回收站，可恢复或永久删除；完整备份包含数据库、原件、缩略图、配置和 AI 密钥，内置 sha256 文件校验清单，支持下载、校验、上传外部备份恢复和删除备份记录。
 - 运维审计：运行状态展示数据库、存储和任务队列；用户操作日志、AI 调用次数、耗时、Token 和失败状态支持分页查看；管理员可查看脱敏后的系统运行日志、日志占用和轮转策略，手动清理运行日志或导出诊断包。
 
-## 开发
+## Docker 部署
+
+Docker 版本使用独立本地管理员登录，数据持久化在 `fnos-health-records-data` 卷；fnOS 安装包仍使用系统网关账号。首次启动前创建密码 Secret：
+
+```bash
+mkdir -p secrets
+umask 077
+printf '%s\n' '替换为至少12位的强密码' > secrets/local_admin_password.txt
+docker compose pull
+docker compose up -d
+```
+
+默认访问 `http://服务器地址:3334/`，用户名为 `admin`。正式环境建议固定 `HEALTH_RECORDS_VERSION` 并通过 HTTPS 反向代理访问。完整安装、升级、回滚、卷备份、OCR 和代理配置见 [Docker 部署文档](./docs/DOCKER_DEPLOYMENT.md)。
+
+本地管理员可在应用内修改密码；忘记密码时可在停止容器后使用镜像内置的离线重置命令，过程不会影响 fnOS 网关账号。
+
+## 本地开发
 
 ```bash
 npm ci

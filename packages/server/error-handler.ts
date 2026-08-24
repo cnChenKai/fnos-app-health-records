@@ -1,8 +1,11 @@
 import { HTTPError, type H3Event } from "h3";
-import templateConfig from "../../template.config.json" with { type: "json" };
 import { writeLog } from "./utils/logger";
+import { getAppConfig } from "./utils/runtime-config";
 
-const baseURL = `${templateConfig.gatewayPrefix}/`;
+function baseURL() {
+  const prefix = getAppConfig().gatewayPrefix;
+  return prefix ? `${prefix}/` : "/";
+}
 
 /* h3 的 node 适配器会把所有路由错误再包一层 { unhandled: true } 的 HTTPError，逐层剥回最内层的业务错误 */
 function unwrapHttpError(error: unknown) {
@@ -40,11 +43,12 @@ export default async function errorHandler(error: unknown, event: H3Event) {
 
   if (status === 404) {
     const url = event.url || new URL(event.req.url);
-    if (!url.pathname.startsWith(baseURL)) {
+    const appBase = baseURL();
+    if (appBase !== "/" && !url.pathname.startsWith(appBase)) {
       return new Response(null, {
         status: 302,
         headers: {
-          location: `${baseURL}${url.pathname.slice(1)}${url.search}`
+          location: `${appBase}${url.pathname.slice(1)}${url.search}`
         }
       });
     }

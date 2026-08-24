@@ -35,6 +35,7 @@
     "dictionary:validate": "node scripts/dictionary/validate.mjs",
     "dictionary:reset-core": "node scripts/dictionary/reset-core.mjs",
     "db:repair-unreleased": "node scripts/db-repair-unreleased.mjs",
+    "auth:reset-local": "node scripts/reset-local-admin-password.mjs",
     "dictionary:compare": "node scripts/dictionary/compare.mjs",
     "dictionary:manifest": "node scripts/dictionary/build-manifest.mjs",
     "dictionary:build": "node scripts/dictionary/build-pages.mjs",

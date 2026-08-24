@@ -56,6 +56,7 @@ import {
 } from "../services/report-duplicate-governance.service.ts";
 import { createUpload } from "../services/upload.service.ts";
 import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
+import { hashPassword } from "../services/auth.service.ts";
 import {
   applyObservationFieldOverrides,
   createManualObservation,
@@ -1506,6 +1507,96 @@ test("creates, lists, downloads and restores a full app backup", () => {
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("preserves the current Docker administrator credential when restoring another deployment backup", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-local-backup-restore-"));
+  process.env.STORAGE_DIR = storageDir;
+  process.env.AUTH_MODE = "local";
+  const backupOwner: RequestUser = {
+    id: "backup-local-admin",
+    displayName: "备份设备管理员",
+    provider: "local",
+    authenticated: true,
+    isGatewayAdmin: true
+  };
+  const restoringAdmin: RequestUser = {
+    id: "current-local-admin",
+    displayName: "当前设备管理员",
+    provider: "local",
+    authenticated: true,
+    isGatewayAdmin: true
+  };
+  try {
+    const db = getDatabase();
+    const oldPassword = hashPassword("backup-device-password");
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(backupOwner.id, backupOwner.displayName);
+    db.prepare(`
+      INSERT INTO user_identities (id, user_id, provider, subject)
+      VALUES ('backup-local-identity', ?, 'local', 'backup-admin')
+    `).run(backupOwner.id);
+    db.prepare(`
+      INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt)
+      VALUES ('backup-local-account', ?, 'backup-admin', ?, ?)
+    `).run(backupOwner.id, oldPassword.hash, oldPassword.salt);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('local-restore-member', '本人', 'self', ?)
+    `).run(backupOwner.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('local-restore-member', ?, 'manager', ?)
+    `).run(backupOwner.id, backupOwner.id);
+
+    const backup = createBackup(backupOwner);
+    const currentPassword = hashPassword("current-device-password");
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(restoringAdmin.id, restoringAdmin.displayName);
+    db.prepare(`
+      INSERT INTO user_identities (id, user_id, provider, subject)
+      VALUES ('current-local-identity', ?, 'local', 'current-admin')
+    `).run(restoringAdmin.id);
+    db.prepare(`
+      INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt)
+      VALUES ('current-local-account', ?, 'current-admin', ?, ?)
+    `).run(restoringAdmin.id, currentPassword.hash, currentPassword.salt);
+
+    const restored = restoreFullBackup(restoringAdmin, backup.id);
+    assert.equal(restored.restored, true);
+    assert.equal(restored.identityRebind.userId, restoringAdmin.id);
+    assert.equal(restored.identityRebind.disabledLocalAccountCount, 1);
+
+    const restoredDb = getDatabase();
+    const currentAccount = restoredDb.prepare(`
+      SELECT username, password_hash AS passwordHash, password_salt AS passwordSalt, disabled_at AS disabledAt
+      FROM local_accounts WHERE user_id = ?
+    `).get(restoringAdmin.id) as {
+      username: string;
+      passwordHash: string;
+      passwordSalt: string;
+      disabledAt: string | null;
+    };
+    assert.deepEqual({ ...currentAccount }, {
+      username: "current-admin",
+      passwordHash: currentPassword.hash,
+      passwordSalt: currentPassword.salt,
+      disabledAt: null
+    });
+    const oldAccount = restoredDb.prepare(`
+      SELECT disabled_at AS disabledAt FROM local_accounts WHERE user_id = ?
+    `).get(backupOwner.id) as { disabledAt: string | null };
+    assert.ok(oldAccount.disabledAt);
+    assert.equal(Number((restoredDb.prepare(`
+      SELECT COUNT(*) AS count FROM member_permissions
+      WHERE user_id = ? AND permission = 'manager'
+    `).get(restoringAdmin.id) as { count: number }).count), 1);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    delete process.env.AUTH_MODE;
     rmSync(storageDir, { recursive: true, force: true });
   }
 });

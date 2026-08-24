@@ -10,6 +10,11 @@ const port = Number(process.env.PORT || process.env.NITRO_PORT || templateConfig
 const host = process.env.HOST || process.env.NITRO_HOST || "127.0.0.1";
 const server = createServer(middleware);
 
+if (!socketPath && !process.env.AUTH_MODE && process.env.NODE_ENV !== "development") {
+  console.error("AUTH_MODE is required for direct HTTP deployment; set AUTH_MODE=local for Docker.");
+  process.exit(1);
+}
+
 if (handleUpgrade) {
   server.on("upgrade", handleUpgrade);
 }
@@ -42,6 +47,8 @@ if (socketPath) {
   });
 } else {
   server.listen(port, host, () => {
-    console.log(`Nitro listening at http://${host}:${port}${templateConfig.gatewayPrefix}/`);
+    const configuredPrefix = process.env.GATEWAY_PREFIX ?? templateConfig.gatewayPrefix;
+    const path = configuredPrefix === "/" ? "/" : `/${configuredPrefix.replace(/^\/+|\/+$/g, "")}/`;
+    console.log(`Nitro listening at http://${host}:${port}${path}`);
   });
 }

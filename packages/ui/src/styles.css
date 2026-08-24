@@ -1558,13 +1558,16 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .profile-reminder-link .nav-badge { right: -3px; top: -3px; border-color: var(--surface); }
 
 .settings-menu { border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s); overflow: hidden; }
-.settings-menu a { min-height: 60px; padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 12px; transition: background .15s; }
-.settings-menu a:last-child { border-bottom: 0; }
-.settings-menu a > svg:first-child { color: var(--brand); }
-.settings-menu a > svg:last-child { color: var(--arrow-muted); }
-.settings-menu a > div { min-width: 0; display: grid; gap: 3px; }
+.settings-menu a, .settings-menu-action { min-height: 60px; padding: 12px 16px; border: 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 24px minmax(0, 1fr) 18px; align-items: center; gap: 12px; background: transparent; text-align: left; transition: background .15s; }
+.settings-menu a:last-child, .settings-menu-action:last-child { border-bottom: 0; }
+.settings-menu a > svg:first-child, .settings-menu-action > svg:first-child { color: var(--brand); }
+.settings-menu a > svg:last-child, .settings-menu-action > svg:last-child { color: var(--arrow-muted); }
+.settings-menu a > div, .settings-menu-action > div { min-width: 0; display: grid; gap: 3px; }
 .settings-menu a span { color: var(--muted); font-size: 12px; }
-.settings-menu a:hover { background: var(--fill-2); }
+.settings-menu a:hover, .settings-menu-action:hover { background: var(--fill-2); }
+.settings-menu-action { width: 100%; color: var(--ink); }
+.settings-menu-action span { color: var(--muted); font-size: 12px; }
+.danger-menu-action > svg:first-child, .danger-menu-action strong { color: var(--danger); }
 
 .subpage-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .subpage-header > div { display: grid; gap: 3px; min-width: 0; flex: 1; }
@@ -2286,6 +2289,12 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 }
 .login-panel input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .login-panel .primary-button { width: 100%; min-height: 46px; }
+.login-form { display: grid; gap: 14px; }
+.login-error { margin: 0 !important; color: var(--danger) !important; line-height: 1.5; }
+.login-notice { display: flex; align-items: flex-start; gap: 9px; padding: 11px 12px; border-radius: var(--radius-m); background: var(--brand-softer); line-height: 1.55; }
+.login-notice > svg { flex: 0 0 auto; margin-top: 1px; color: var(--brand); }
+.login-warning { background: var(--amber-soft); }
+.login-warning > svg { color: var(--amber); }
 
 /* ---------- 桌面端字号收敛 ---------- */
 .timeline-item strong { font-size: 14px; }

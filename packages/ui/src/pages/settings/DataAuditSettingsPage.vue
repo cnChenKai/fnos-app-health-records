@@ -51,7 +51,7 @@ async function exportMember() {
 }
 
 async function loadBackups() {
-  if (!app.session.value?.isGatewayAdmin) return;
+  if (!app.session.value?.isAdmin) return;
   loadingBackups.value = true;
   try {
     backups.value = await request<BackupSummary[]>("backups");
@@ -231,7 +231,7 @@ onMounted(() => {
         <DatabaseBackup :size="20" />
         <div><h3>完整应用备份</h3><p>包含 SQLite 快照、报告原件、分页图、运行配置和 AI 密钥；仅系统管理员可操作。</p></div>
       </header>
-      <div v-if="app.session.value?.isGatewayAdmin" class="backup-header-actions">
+      <div v-if="app.session.value?.isAdmin" class="backup-header-actions">
         <button
           class="header-action"
           type="button"
@@ -260,7 +260,7 @@ onMounted(() => {
           </label>
         </div>
 
-      <div v-if="!app.session.value?.isGatewayAdmin" class="settings-form">
+      <div v-if="!app.session.value?.isAdmin" class="settings-form">
         <p class="preview-hint">完整备份包含所有成员的医疗数据和密钥，仅系统管理员可查看和恢复。</p>
       </div>
       <div v-else class="backup-list">

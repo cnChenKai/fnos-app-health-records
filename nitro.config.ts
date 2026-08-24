@@ -1,9 +1,14 @@
 import templateConfig from "./template.config.json" with { type: "json" };
 import { defineNitroConfig } from "nitro/config";
 
+const configuredPrefix = process.env.GATEWAY_PREFIX ?? templateConfig.gatewayPrefix;
+const gatewayPrefix = configuredPrefix === "/"
+  ? ""
+  : `/${configuredPrefix.replace(/^\/+|\/+$/g, "")}`;
+
 export default defineNitroConfig({
   preset: "node-middleware",
-  baseURL: `${templateConfig.gatewayPrefix}/`,
+  baseURL: gatewayPrefix ? `${gatewayPrefix}/` : "/",
   serverDir: "packages/server",
   errorHandler: "packages/server/error-handler.ts",
   /* 关闭 nitro 内建静态服务（它插队在所有中间件之前，会绕过维护模式拦截）。

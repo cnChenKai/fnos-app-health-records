@@ -26,7 +26,7 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import type {
   CursorPage,
   DuplicateReportCandidate,
@@ -74,7 +74,10 @@ import {
   stopJobRunner,
 } from "./job-runner.service";
 import { enqueueFileGarbage } from "./file-gc.service";
-import { rebindRestoredGatewayAdministrator } from "./restore-identity.service";
+import {
+  captureRestoringAdministratorCredential,
+  rebindRestoredAdministrator,
+} from "./restore-identity.service";
 import {
   listManualReportFieldKeys,
   reportFieldDefinitions,
@@ -6086,7 +6089,7 @@ function createReportSuggestionReminder(user: RequestUser, reportId: string) {
 }
 
 export function listAuditLogs(user: RequestUser, limit = 80) {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: "仅管理员可查看审计日志",
@@ -6433,7 +6436,7 @@ export function listUserOperationAuditLogs(
   createdAt: string;
   detail: Record<string, unknown>;
 }> {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: "仅管理员可查看用户操作日志",
@@ -6615,7 +6618,7 @@ export function listUserOperationAuditLogs(
 }
 
 export function clearUserOperationAuditLogs(user: RequestUser) {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: "仅管理员可清理用户操作日志",
@@ -6643,7 +6646,7 @@ export function getAiAuditSummary(
   limit = 30,
   cursorValue?: string,
 ) {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: "仅管理员可查看 AI 审计",
@@ -6825,7 +6828,7 @@ export function buildMemberExportManifest(user: RequestUser, memberId: string) {
 }
 
 export async function regeneratePdfPagePreviews(user: RequestUser) {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: "仅管理员可重新生成 PDF 单页图",
@@ -7025,7 +7028,7 @@ function timestampForFilename(date = new Date()) {
 }
 
 function assertGatewayAdmin(user: RequestUser, action: string) {
-  if (!user.isGatewayAdmin)
+  if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
       statusMessage: `仅管理员可${action}`,
@@ -7725,6 +7728,7 @@ function restoreBackupFromArchive(
   }
   const extractRoot = mkdtempSync(join(tmpdir(), "health-records-restore-"));
   let shouldRestartRunner = false;
+  const localCredential = captureRestoringAdministratorCredential(user);
 
   try {
     extractTarArchive(archivePath, extractRoot);
@@ -7738,7 +7742,7 @@ function restoreBackupFromArchive(
       replaceStorageDirectory(directoryName, extractRoot);
     replaceDatabaseFromBackup(extractRoot);
     getDatabase();
-    const identityRebind = rebindRestoredGatewayAdministrator(user);
+    const identityRebind = rebindRestoredAdministrator(user, localCredential);
     insertRestoreAudit(user.id, backupId, safetyBackup.id);
     return {
       restored: true,

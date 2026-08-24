@@ -1,5 +1,7 @@
-import { createError, defineEventHandler } from "h3";
+import { defineEventHandler, readBody } from "h3";
+import { login } from "../../../services/auth.service";
+import { ok } from "../../../utils/api-response";
 
-export default defineEventHandler(() => {
-  throw createError({ statusCode: 410, statusMessage: "健康档案使用 fnOS 账号体系，不提供独立登录" });
+export default defineEventHandler(async (event) => {
+  return ok(login(event, (await readBody(event)) || {}));
 });

@@ -298,7 +298,7 @@ function reloadTrends() {
 
 // 问题池接口仅管理员可访问，非管理员直接跳过，避免无谓的 403
 function loadAdminIssueCount() {
-  if (!app.session.value?.isGatewayAdmin) return;
+  if (!app.session.value?.isAdmin) return;
   request<IndicatorNormalizationMetrics>("maintenance/indicator-normalization/metrics")
     .then((metrics) => { adminIssueCount.value = metrics.totals.issueGroups; })
     .catch(() => {});
@@ -711,7 +711,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
 }, { immediate: true });
 
 // session 可能在页面挂载后才就绪，这里等管理员身份确定后再拉取待治理数
-watch(() => app.session.value?.isGatewayAdmin, (isAdmin) => {
+watch(() => app.session.value?.isAdmin, (isAdmin) => {
   if (isAdmin) loadAdminIssueCount();
 }, { immediate: true });
 

@@ -13,8 +13,9 @@ const topbarSearchFocused = ref(false);
 const topbarSearchInput = ref<HTMLInputElement | null>(null);
 
 const accountRole = computed(() => {
-  if (!app.session.value?.isGatewayAdmin) return "家庭成员";
+  if (!app.session.value?.isAdmin) return "家庭成员";
   if (app.session.value.provider === "development") return "开发管理员";
+  if (app.session.value.provider === "local") return "本地管理员";
   return "fnOS 系统管理员";
 });
 const pageTitle = computed(() => (route.meta.title as string) || "健康档案");
@@ -97,7 +98,7 @@ const providerLabel = computed(() => {
   if (provider === "development") return "开发账号";
   return "fnOS 账号";
 });
-const roleLabel = computed(() => app.session.value?.isGatewayAdmin ? "管理员" : "家庭成员");
+const roleLabel = computed(() => app.session.value?.isAdmin ? "管理员" : "家庭成员");
 const navItems = [
   { to: "/overview", label: "概览", icon: LayoutDashboard },
   { to: "/records", label: "档案", icon: FolderHeart },

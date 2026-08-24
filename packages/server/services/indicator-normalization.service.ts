@@ -1,7 +1,7 @@
 import { getDatabase } from "../database/client";
 import { createHash } from "node:crypto";
 import { createId } from "../utils/identifier";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createError } from "h3";
 import {
   activeIndicatorDictionaryVersion,
@@ -1834,7 +1834,7 @@ function normalizePendingReportObservations(reportId: string): IndicatorNormaliz
 }
 
 export function normalizeAllObservations(user: RequestUser): IndicatorNormalizationMaintenanceResult {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
   const reportIds = getDatabase().prepare(`
     SELECT DISTINCT report_id AS reportId FROM observations ORDER BY report_id
@@ -1925,7 +1925,7 @@ export async function normalizeAllObservationsFromDictionary(
     onProgress?: (progress: IndicatorNormalizationMaintenanceProgress) => void;
   }
 ): Promise<IndicatorNormalizationMaintenanceResult> {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
   const trendPinSnapshot = options?.full ? snapshotTrendPinMappings() : [];
   if (options?.full) {
@@ -1982,7 +1982,7 @@ export async function normalizeAllObservationsFromDictionary(
 }
 
 export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNormalizationMetrics {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标质量统计" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标质量统计" });
   const db = getDatabase();
   const totalsRow = db.prepare(`
     SELECT
@@ -2114,7 +2114,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
 }
 
 export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNormalizationIssue[] {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标理解状态" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标理解状态" });
   ensureBuiltinIndicatorCatalog();
   synchronizeUnmatchedNamePool();
   const rows = getDatabase().prepare(`
@@ -2245,7 +2245,7 @@ function searchIndicatorCatalogOptions(query = ""): IndicatorCatalogOption[] {
 }
 
 export function searchIndicatorCatalog(user: RequestUser, query = ""): IndicatorCatalogOption[] {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查询标准指标" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查询标准指标" });
   return searchIndicatorCatalogOptions(query);
 }
 
@@ -2343,7 +2343,7 @@ export function resolveIndicatorNormalizationIssue(
     reason?: string | null;
   }
 ): IndicatorGovernanceResult {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可治理指标" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可治理指标" });
   ensureBuiltinIndicatorCatalog();
   const fingerprint = input.fingerprint?.trim();
   if (!/^[a-f0-9]{64}$/i.test(fingerprint || "")) {
@@ -2557,7 +2557,7 @@ function aliasContextKey(alias: Pick<AliasRow, "normalizedAlias" | "scope" | "ho
 }
 
 export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100): IndicatorGovernanceHistoryItem[] {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
   const safeLimit = Math.max(1, Math.min(300, Math.trunc(limit || 100)));
   const rows = getDatabase().prepare(`
     SELECT history.id, history.event_type AS eventType, history.fingerprint,
@@ -2597,7 +2597,7 @@ export function undoIndicatorGovernanceDecision(
   fingerprintInput: string,
   reason?: string | null
 ): IndicatorGovernanceUndoResult {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可撤销指标治理" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可撤销指标治理" });
   ensureBuiltinIndicatorCatalog();
   const fingerprint = fingerprintInput.trim();
   if (!/^[a-f0-9]{64}$/i.test(fingerprint)) {
@@ -2719,7 +2719,7 @@ export function undoIndicatorGovernanceDecision(
 }
 
 export function listIndicatorAliasGovernance(user: RequestUser): IndicatorAliasGovernanceOverview {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
   ensureBuiltinIndicatorCatalog();
   const db = getDatabase();
   const allRows = db.prepare(`
@@ -2797,7 +2797,7 @@ export function setIndicatorAliasEnabled(
   enabled: boolean,
   reason?: string | null
 ): IndicatorAliasUpdateResult {
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可管理指标别名" });
   ensureBuiltinIndicatorCatalog();
   const aliasId = aliasIdInput.trim();
   const db = getDatabase();

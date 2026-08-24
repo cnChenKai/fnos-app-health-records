@@ -5,11 +5,14 @@ import templateConfig from "../../template.config.json" with { type: "json" };
 
 const appPort = Number(process.env.APP_PORT || templateConfig.localDevPort);
 const webPort = Number(process.env.WEB_PORT || appPort + 1);
-const gatewayPrefix = templateConfig.gatewayPrefix;
+const configuredPrefix = process.env.GATEWAY_PREFIX ?? templateConfig.gatewayPrefix;
+const gatewayPrefix = configuredPrefix === "/"
+  ? ""
+  : `/${configuredPrefix.replace(/^\/+|\/+$/g, "")}`;
 
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
-  base: `${gatewayPrefix}/`,
+  base: gatewayPrefix ? `${gatewayPrefix}/` : "/",
   plugins: [vue()],
   resolve: {
     alias: {

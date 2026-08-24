@@ -16,7 +16,7 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createError } from "h3";
 import { getDatabase, getDatabaseStatus } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { getLogRotationPolicy, redactLogText, redactLogValue } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
@@ -33,7 +33,7 @@ type DiagnosticLogSource = {
 
 function requireAdmin(user: RequestUser) {
   if (!user.authenticated) throw createError({ statusCode: 401, statusMessage: "请先登录" });
-  if (!user.isGatewayAdmin) throw createError({ statusCode: 403, statusMessage: "仅管理员可导出诊断包" });
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可导出诊断包" });
 }
 
 function timestampForFilename(date: Date) {

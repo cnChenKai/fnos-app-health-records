@@ -96,6 +96,14 @@ async function load() {
   }
 }
 
+async function logout() {
+  await request("auth/logout", { method: "POST" });
+  session.value = null;
+  members.value = [];
+  selectedMemberId.value = "";
+  await load();
+}
+
 async function repairUnreleasedSchema() {
   if (!schemaMaintenance.value || repairingSchema.value) return;
   repairingSchema.value = true;
@@ -150,6 +158,7 @@ export function useAppContext() {
     refreshMembers,
     refreshReminderCount,
     repairUnreleasedSchema,
+    logout,
     load
   };
 }

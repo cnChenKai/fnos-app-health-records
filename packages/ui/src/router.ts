@@ -20,6 +20,7 @@ import UserAuditSettingsPage from "./pages/settings/UserAuditSettingsPage.vue";
 import AiAuditSettingsPage from "./pages/settings/AiAuditSettingsPage.vue";
 import SystemLogsSettingsPage from "./pages/settings/SystemLogsSettingsPage.vue";
 import AboutSettingsPage from "./pages/settings/AboutSettingsPage.vue";
+import AccountSecuritySettingsPage from "./pages/settings/AccountSecuritySettingsPage.vue";
 import { useAppContext } from "./composables/useAppContext";
 
 const base = import.meta.env.BASE_URL.endsWith("/") ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
@@ -39,6 +40,7 @@ const router = createRouter({
     { path: "/me/trash", component: TrashSettingsPage, meta: { title: "回收站" } },
     { path: "/me/duplicates", component: DuplicatesSettingsPage, meta: { title: "重复报告检测" } },
     { path: "/me/data", component: DataAuditSettingsPage, meta: { title: "备份与恢复" } },
+    { path: "/me/account-security", component: AccountSecuritySettingsPage, meta: { title: "账号安全", requiresLocalAccount: true } },
     { path: "/me/audit", component: UserAuditSettingsPage, meta: { title: "用户操作日志", requiresAdmin: true } },
     { path: "/me/ai-audit", component: AiAuditSettingsPage, meta: { title: "AI 审计", requiresAdmin: true } },
     { path: "/me/system-logs", component: SystemLogsSettingsPage, meta: { title: "系统日志", requiresAdmin: true } },
@@ -55,10 +57,11 @@ const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
-  if (!to.meta.requiresAdmin) return true;
   const app = useAppContext();
   if (!app.session.value) await app.load();
-  if (app.session.value?.isGatewayAdmin) return true;
+  if (to.meta.requiresLocalAccount && app.session.value?.provider !== "local") return "/me";
+  if (!to.meta.requiresAdmin) return true;
+  if (app.session.value?.isAdmin) return true;
   return "/me";
 });
 

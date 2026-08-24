@@ -1401,7 +1401,7 @@ async function refreshJobs(silent = false) {
     /* OCR 运行状态只在打开报告/手动重试（非轮询）时查询，轮询周期内不再重复请求 */
     const [nextJobs, ocr] = await Promise.all([
       request<ProcessingJob[]>(`jobs?reportId=${encodeURIComponent(reportId)}`),
-      !silent && app.session.value?.isGatewayAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
+      !silent && app.session.value?.isAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
     if (seq !== jobsSeq || props.reportId !== reportId) return;
     const jobStatusChanged = nextJobs.length !== previousStatuses.size
@@ -1972,8 +1972,8 @@ onActivated(() => {
       <div v-if="processingExpanded" class="processing-details">
         <div v-if="needsOcrRuntime" class="runtime-warning compact">
           <CircleAlert :size="18" />
-          <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isGatewayAdmin ? "原件已保存，安装后任务会自动继续。" : "原件已保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
-          <RouterLink v-if="app.session.value?.isGatewayAdmin" to="/me/runtime">去设置</RouterLink>
+          <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已保存，安装后任务会自动继续。" : "原件已保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
+          <RouterLink v-if="app.session.value?.isAdmin" to="/me/runtime">去设置</RouterLink>
         </div>
         <div v-if="jobsPollingStopped" class="processing-recovery-notice">
           <CircleAlert :size="18" />

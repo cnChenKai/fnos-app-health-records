@@ -92,6 +92,27 @@
 - [x] 原件查看、导出、删除、授权、配置、备份和登录失败审计。
 - [x] AI 调用次数、耗时、Token 和失败状态审计。
 - [ ] 视觉发送审计明细。
+- [ ] AI Provider 增加 Ollama 预设：继续使用 OpenAI-compatible `/v1/chat/completions`，支持可编辑服务地址、免 API Key、手动填写文本模型、连接测试和独立配置保存；首期仅正式支持文本模型，不包含模型下载管理、多个 Ollama 实例、自动模型发现和视觉能力检测。
+- [ ] Ollama 预设补齐 fnOS 同机、Docker 访问宿主机和局域网其他设备的地址说明，并验证长报告 JSON 输出、指标遗漏、上下文长度、输出截断、请求超时及服务不可达提示。
+- [ ] Ollama 后续增强：通过 `/api/tags` 获取已安装模型，按模型声明上下文长度、最大输出 Token 和文本/视觉能力，并允许为不同 AI 任务选择 Ollama 模型。
+
+## P2 Docker 部署与独立鉴权
+
+- [x] 保持单仓库和同一套业务代码，通过显式 `AUTH_MODE=fnos|local` 选择 fnOS 网关身份或 Docker 本地身份；配置缺失或非法时拒绝启动，禁止自动降级为无鉴权管理员。
+- [x] 将请求身份统一为与部署方式无关的用户和角色模型，业务权限统一读取 `isAdmin` / `isAdministrator()`；数据库和 API 暂保留 `isGatewayAdmin` 兼容旧版，同时保持 fnOS 现有权限行为不变。
+- [x] Docker `local` 模式重新启用本地账号登录、退出、Cookie 会话解析和登录失败限流，fnOS 模式继续关闭独立登录。
+- [x] 提供安全的首次管理员初始化流程，支持 Docker Secret 或一次性初始化凭据；不得把默认密码、明文密码或密钥写入镜像、仓库和运行日志。
+- [x] 补齐本地管理员修改密码、会话撤销、过期会话清理和忘记密码后的 Docker 主机离线重置流程。
+- [x] Cookie 会话增加 CSRF 防护、可信反向代理配置和 HTTPS/Secure Cookie 验证，禁止 Docker 模式信任客户端伪造的 `X-Trim-*` 网关身份头。
+- [x] fnOS 与 Docker 备份格式保持兼容；跨部署恢复后允许当前可信管理员重新绑定数据所有权和成员权限，并留下审计记录。
+- [x] 增加多阶段 `Dockerfile`、`.dockerignore`、非 root 运行用户、健康检查、优雅停止和持久化目录约定。
+- [x] 提供 `docker-compose.yml` 示例，明确数据库、报告原件、备份、日志和配置卷，以及端口、时区、AI/OCR 配置和反向代理接入方式。
+- [ ] 明确 OCR 运行时的镜像策略和体积上限，验证 `linux/amd64` 与 `linux/arm64` 的 RapidOCR/OpenVINO 或兼容后端可用性。
+- [x] 增加 Docker 空库初始化、重启、升级、备份恢复、权限隔离、伪造身份头、CSRF、登录限流和会话撤销测试。
+- [x] 在 GitHub Actions 中构建并发布 OCI 镜像到 GHCR，至少提供 `vX.Y.Z`、`X.Y`、`latest` 和提交 SHA 标签；tag 版本必须与 `package.json` 一致。
+- [x] 发布 `linux/amd64`、`linux/arm64` 多架构 manifest，并为镜像添加源码、版本、许可证等 OCI 标签以及 SBOM、来源证明和签名。
+- [x] GitHub Release 同时发布 fnOS `.fpk` 和对应 Docker 镜像说明，记录应用版本、数据库 schema、支持架构、升级命令和不兼容变更。
+- [x] 编写 Docker 安装、首次登录、HTTPS 反向代理、升级、回滚、数据目录权限、备份和故障排查文档。
 
 ## P3 发布验收
 

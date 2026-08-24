@@ -10,6 +10,7 @@ export default defineEventHandler((event) => {
     service: config.appName,
     runtime: "nitro",
     accessMode: getRequestAccessMode(event),
+    authMode: config.authMode,
     gatewayPrefix: config.gatewayPrefix,
     port: config.appPort,
     servicePort: config.servicePort

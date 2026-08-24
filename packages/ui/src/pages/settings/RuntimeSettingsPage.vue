@@ -222,7 +222,7 @@ onActivated(syncStatusPolling);
         <Cpu :size="21" />
         <div><h3>运行状态</h3><p>设备本地识别环境与任务队列</p></div>
         <button
-          v-if="app.session.value?.isGatewayAdmin"
+          v-if="app.session.value?.isAdmin"
           class="header-action"
           type="button"
           :disabled="ocr?.available || ocr?.installing"

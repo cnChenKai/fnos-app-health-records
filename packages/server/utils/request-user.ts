@@ -1,7 +1,9 @@
 import type { H3Event } from "h3";
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "./identifier";
+import { getAppConfig } from "./runtime-config";
+import { getLocalSessionUser } from "../services/auth.service";
 
 function requestAccessMode(event: H3Event) {
   const request = event.node!.req!;
@@ -17,7 +19,7 @@ function ensureUser(user: RequestUser) {
       display_name = excluded.display_name,
       is_gateway_admin = excluded.is_gateway_admin,
       updated_at = CURRENT_TIMESTAMP
-  `).run(user.id, user.displayName, user.isGatewayAdmin ? 1 : 0);
+  `).run(user.id, user.displayName, isAdministrator(user) ? 1 : 0);
   db.prepare(`
     INSERT INTO user_identities (id, user_id, provider, subject)
     VALUES (?, ?, ?, ?)
@@ -43,7 +45,7 @@ function ensureUser(user: RequestUser) {
 }
 
 function gatewayUser(event: H3Event): RequestUser | null {
-  if (requestAccessMode(event) !== "gateway") return null;
+  if (getAppConfig().authMode !== "fnos" || requestAccessMode(event) !== "gateway") return null;
   const request = event.node!.req!;
   const uid = request.headers["x-trim-userid"];
   if (typeof uid !== "string" || !uid.trim()) return null;
@@ -54,6 +56,7 @@ function gatewayUser(event: H3Event): RequestUser | null {
     displayName: typeof username === "string" && username.trim() ? username.trim() : uid.trim(),
     provider: "fnos_gateway",
     authenticated: true,
+    isAdmin,
     isGatewayAdmin: isAdmin
   };
 }
@@ -65,12 +68,16 @@ export function getRequestUser(event: H3Event): RequestUser {
     return resolved;
   }
 
+  const local = getLocalSessionUser(event);
+  if (local) return local;
+
   if (process.env.NODE_ENV === "development" || Boolean(process.env.VITE_DEV_SERVER_URL)) {
     const developmentUser: RequestUser = {
       id: "local-development-owner",
       displayName: "开发管理员",
       provider: "development",
       authenticated: true,
+      isAdmin: true,
       isGatewayAdmin: true
     };
     ensureUser(developmentUser);
@@ -80,8 +87,9 @@ export function getRequestUser(event: H3Event): RequestUser {
   return {
     id: "anonymous",
     displayName: "未登录",
-    provider: "fnos_gateway",
+    provider: getAppConfig().authMode === "local" ? "local" : "fnos_gateway",
     authenticated: false,
+    isAdmin: false,
     isGatewayAdmin: false
   };
 }

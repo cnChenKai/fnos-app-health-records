@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
 import { assertMemberManage } from "./member.service";
@@ -1190,7 +1190,7 @@ export function mergeMorphologyTrackingGroups(user: RequestUser, memberId: strin
 }
 
 export function rebuildMorphologyTrackingForAdministrator(user: RequestUser) {
-  if (!user.isGatewayAdmin) {
+  if (!isAdministrator(user)) {
     throw createError({ statusCode: 403, statusMessage: "仅管理员可重新关联历史形态发现" });
   }
   const result = rebuildAllMorphologyTracking();

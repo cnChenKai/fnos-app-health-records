@@ -8,6 +8,8 @@ export type AppRuntimeConfig = {
   appTitle: string;
   appVersion: string;
   accessMode: "gateway" | "port";
+  authMode: "fnos" | "local" | "development" | "disabled";
+  trustProxy: boolean;
   gatewayPrefix: string;
   appPort: number | null;
   logLevel: string;
@@ -32,6 +34,21 @@ function boundedInteger(value: string | undefined, fallback: number, minimum: nu
   return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
 }
 
+function normalizedGatewayPrefix(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") return "";
+  return `/${trimmed.replace(/^\/+|\/+$/g, "")}`;
+}
+
+function resolvedAuthMode(isDevelopment: boolean): AppRuntimeConfig["authMode"] {
+  if (isDevelopment) return "development";
+  const configured = String(process.env.AUTH_MODE || "").trim().toLowerCase();
+  if (configured === "fnos" || configured === "local") return configured;
+  if (configured) throw new Error("AUTH_MODE must be either fnos or local");
+  if (process.env.FNOS_SOCKET_PATH) return "fnos";
+  return "disabled";
+}
+
 function persistedConfig(storageDir: string): PersistedRuntimeConfig {
   const path = join(storageDir, "config", "runtime.json");
   if (!existsSync(path)) return {};
@@ -53,13 +70,16 @@ export function getAppConfig(): AppRuntimeConfig {
   const stored = persistedConfig(storageDir);
   const applicationDir = process.env.TRIM_APPDEST || process.cwd();
   const ocrRoot = isDevelopment ? resolve(process.cwd(), "packages", "ocr-worker") : resolve(applicationDir, "ocr-worker");
+  const authMode = resolvedAuthMode(isDevelopment);
 
   return {
     appName,
     appTitle: process.env.APP_TITLE || templateConfig.appTitle,
     appVersion: process.env.APP_VERSION || packageJson.version,
     accessMode: process.env.FNOS_SOCKET_PATH ? "gateway" : "port",
-    gatewayPrefix: process.env.GATEWAY_PREFIX || templateConfig.gatewayPrefix,
+    authMode,
+    trustProxy: process.env.TRUST_PROXY === "1" || process.env.TRUST_PROXY === "true",
+    gatewayPrefix: normalizedGatewayPrefix(process.env.GATEWAY_PREFIX ?? templateConfig.gatewayPrefix),
     appPort: process.env.FNOS_SOCKET_PATH
       ? null
       : Number(process.env.NITRO_PORT || process.env.PORT || templateConfig.localDevPort),

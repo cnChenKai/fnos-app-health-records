@@ -24,7 +24,7 @@ const memberAccess = ref<MemberAccess[]>([]);
 const accessMember = ref<HealthMember | null>(null);
 const form = ref({ displayName: "", relationship: "child", birthDate: "", sex: "", bloodTypeAbo: "", bloodTypeRh: "" });
 const editorTitle = computed(() => editingId.value ? "编辑成员" : "添加家庭成员");
-const isAdmin = computed(() => Boolean(app.session.value?.isGatewayAdmin));
+const isAdmin = computed(() => Boolean(app.session.value?.isAdmin));
 useScrollLock(computed(() => editorOpen.value || accessOpen.value));
 
 function onModalKeydown(event: KeyboardEvent) {
@@ -123,7 +123,7 @@ function currentPermission(userId: string) {
 }
 
 function providerLabel(providers: string | null) {
-  const labels: Record<string, string> = { fnos_gateway: "fnOS 账号", local: "历史本地账号", development: "开发账号" };
+  const labels: Record<string, string> = { fnos_gateway: "fnOS 账号", local: "本地账号", development: "开发账号" };
   return (providers || "").split(",").filter(Boolean).map((provider) => labels[provider] || provider).join("、") || "账号";
 }
 
