@@ -108,6 +108,8 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   box-shadow: var(--shadow-s); transition: background .15s;
 }
 .icon-button:hover { background: var(--brand-softer); }
+.icon-button.audit-clear-button { color: var(--danger); }
+.icon-button.audit-clear-button:hover:not(:disabled) { background: var(--danger-soft); }
 
 .plain-icon-button {
   width: 36px; height: 36px; border: 0; border-radius: 10px; background: transparent;
@@ -2516,16 +2518,25 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .observation-panel-footer { min-height: 42px; }
   .modal-panel.observation-all-modal { width: 100%; height: 92dvh; max-height: 92dvh; border-radius: 20px 20px 0 0; }
   .observation-all-body { overflow: auto; }
-  .observation-all-layout { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-areas: "list" "source" "editor"; }
-  .observation-all-list,
-  .observation-source-panel,
-  .observation-edit-panel { overflow: visible; border-right: 0; }
-  .observation-all-list { max-height: 38dvh; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-  .observation-source-panel { min-height: 340px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-  .observation-source-image-wrapper img { max-height: 52dvh; }
-  .observation-edit-panel { min-height: 430px; padding: 12px 14px calc(16px + var(--safe-bottom)); }
+  .observation-all-layout { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-areas: "list"; }
+  .observation-all-list { max-height: none; padding: 10px 14px calc(16px + var(--safe-bottom)); overflow: visible; border-right: 0; }
+  .observation-source-panel { display: none; }
+  .observation-edit-panel { display: none; }
+  .observation-edit-panel.is-open {
+    position: fixed; inset: 0; z-index: 130; width: 100%; height: 100dvh;
+    padding: calc(12px + var(--safe-top)) 14px calc(16px + var(--safe-bottom));
+    border: 0; background: var(--surface); display: flex; overflow: hidden;
+  }
+  .observation-edit-panel.is-open > header {
+    flex: 0 0 auto; min-height: 50px; padding-bottom: 10px; border-bottom: 1px solid var(--line);
+  }
   .observation-all-actions .soft-action-button { padding: 0 8px; }
-  .observation-edit-panel .observation-editor-form { padding-bottom: 0; }
+  .observation-edit-panel .observation-editor-form {
+    flex: 1; min-height: 0; padding: 14px 0 0; overflow-y: auto; overscroll-behavior: contain;
+  }
+  .observation-edit-panel .observation-editor-form .form-actions {
+    position: sticky; bottom: 0; padding: 10px 0 0; background: var(--surface);
+  }
   .morphology-list { grid-template-columns: minmax(0, 1fr); }
   .observation-meta { grid-column: 1; width: 100%; }
   .observation-normalization-line,

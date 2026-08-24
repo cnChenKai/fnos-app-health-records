@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { LoaderCircle, RefreshCw } from "@lucide/vue";
+import { LoaderCircle, RefreshCw, Trash2 } from "@lucide/vue";
 import BackToTop from "../../components/BackToTop.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import PullIndicator from "../../components/PullIndicator.vue";
@@ -9,6 +9,7 @@ import { formatDatabaseTime } from "../../utils/time";
 import type { CursorPage, UserOperationAuditLog } from "../../types/api";
 import { usePullRefresh } from "../../composables/usePullRefresh";
 import { useToast } from "../../composables/useToast";
+import { useConfirm } from "../../composables/useConfirm";
 
 const PAGE_SIZE = 30;
 const root = ref<HTMLElement | null>(null);
@@ -22,6 +23,7 @@ const hasMore = ref(false);
 let observer: IntersectionObserver | null = null;
 let seq = 0;
 const toast = useToast();
+const confirmDialog = useConfirm();
 
 function shortId(value: string | null) {
   if (!value) return "—";
@@ -81,6 +83,21 @@ const { pullDistance, refreshing, refresh } = usePullRefresh(root, async () => {
   toast.show(succeeded ? "日志已刷新" : "刷新失败，请稍后重试");
 });
 
+function clearLogs() {
+  if (!logs.value.length) return;
+  confirmDialog.ask({
+    title: "清理用户操作日志",
+    message: "将永久删除当前全部用户操作记录。清理完成后仅保留本次清理操作的记录，此操作无法撤销。",
+    confirmText: "确认清理",
+    danger: true,
+    run: async () => {
+      const result = await request<{ deletedCount: number }>("audit/user", { method: "DELETE" });
+      await load(true);
+      toast.show(`已清理 ${result.deletedCount} 条用户操作记录`);
+    }
+  });
+}
+
 function attachObserver(element: HTMLElement | null) {
   observer?.disconnect();
   observer = null;
@@ -101,6 +118,9 @@ onBeforeUnmount(() => observer?.disconnect());
 <template>
   <section ref="root" class="settings-page audit-page">
     <SubPageHeader title="用户操作日志" description="按时间倒序记录报告、成员、提醒、备份和维护操作">
+      <button class="icon-button audit-clear-button" type="button" title="清理用户操作日志" :disabled="loading || refreshing || !logs.length" @click="clearLogs">
+        <Trash2 :size="17" />
+      </button>
       <button class="icon-button" type="button" title="刷新" :disabled="loading || refreshing" @click="refresh">
         <RefreshCw :size="17" :class="{ 'spin-icon': loading || refreshing }" />
       </button>

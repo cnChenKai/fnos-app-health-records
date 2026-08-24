@@ -11,6 +11,7 @@ import { schemaVersion } from "../database/schema.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
   classifyObservationDisplay,
+  clearUserOperationAuditLogs,
   createBackup,
   createReminder,
   confirmReportReady,
@@ -1340,6 +1341,46 @@ test("renders dictionary and unknown user audit actions without leaking internal
       `${deletedBackup.title}${deletedBackup.description}${deletedBackup.targetLabel}${deletedBackup.targetName}`,
       /backup_internal_identifier/
     );
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("only administrators can clear user operation logs and the cleanup remains auditable", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-clear-user-audit-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, detail_json)
+      VALUES ('audit-first', ?, 'report.upload', 'report', '{}'),
+             ('audit-second', ?, 'backup.create', 'backup', '{}')
+    `).run(manager.id, manager.id);
+
+    const regularUser: RequestUser = {
+      id: "regular-user",
+      displayName: "普通用户",
+      provider: "fnos_gateway",
+      authenticated: true,
+      isGatewayAdmin: false
+    };
+    assert.throws(
+      () => clearUserOperationAuditLogs(regularUser),
+      /仅管理员可清理用户操作日志/
+    );
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM audit_logs").get() as { count: number }).count, 2);
+
+    assert.deepEqual(clearUserOperationAuditLogs(manager), { deletedCount: 2 });
+    const remaining = listUserOperationAuditLogs(manager, 10).items;
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].action, "system.user_audit_clear");
+    assert.equal(remaining[0].title, "清理用户操作日志");
+    assert.equal(remaining[0].description, "清理 2 条记录");
+    assert.equal(remaining[0].actorName, manager.displayName);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

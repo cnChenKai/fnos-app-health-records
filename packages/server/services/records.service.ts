@@ -6176,6 +6176,7 @@ const auditActionTitles: Record<string, string> = {
   "report_structured_section.create": "新增报告专属内容",
   "report_structured_section.update": "校对报告专属内容",
   "report_structured_section.delete": "删除报告专属内容",
+  "system.user_audit_clear": "清理用户操作日志",
   "system.logs_clear": "清理系统日志",
   "system.diagnostics_export": "导出系统诊断包",
   "dictionary.update": "更新指标字典",
@@ -6193,6 +6194,7 @@ const auditTargetLabels: Record<string, string> = {
   morphology_finding: "形态发现",
   clinical_fact: "报告分类信息",
   report_structured_section: "报告专属内容",
+  user_audit_log: "用户操作日志",
   system_log: "系统日志",
   indicator_dictionary: "指标字典",
   user: "用户账号",
@@ -6358,6 +6360,8 @@ function userAuditDescription(
     parts.push(`${detail.memberCount} 位成员`);
   if (typeof detail.deletedFiles === "number")
     parts.push(`清理 ${detail.deletedFiles} 个日志文件`);
+  if (typeof detail.deletedCount === "number")
+    parts.push(`清理 ${detail.deletedCount} 条记录`);
   if (typeof detail.freedBytes === "number") {
     const freed =
       detail.freedBytes < 1024 * 1024
@@ -6608,6 +6612,30 @@ export function listUserOperationAuditLogs(
         ? encodeAuditCursor({ createdAt: last.createdAt, id: last.id })
         : null,
   };
+}
+
+export function clearUserOperationAuditLogs(user: RequestUser) {
+  if (!user.isGatewayAdmin)
+    throw createError({
+      statusCode: 403,
+      statusMessage: "仅管理员可清理用户操作日志",
+    });
+
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = db.prepare("DELETE FROM audit_logs").run();
+    const deletedCount = Number(result.changes);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'system.user_audit_clear', 'user_audit_log', NULL, ?)
+    `).run(createId("audit"), user.id, JSON.stringify({ deletedCount }));
+    db.exec("COMMIT");
+    return { deletedCount };
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
 }
 
 export function getAiAuditSummary(
