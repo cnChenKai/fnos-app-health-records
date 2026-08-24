@@ -15,19 +15,14 @@ env:
   IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE || 'timorm/fnos-app-health-records' }}
 
 jobs:
-  release:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      minor: ${{ steps.package.outputs.minor }}
+      stable: ${{ steps.package.outputs.stable }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
       - name: Read package metadata
         id: package
         shell: bash
@@ -52,27 +47,67 @@ jobs:
             exit 1
           fi
 
-      - name: Validate, test and package release
-        run: RELEASE_STRICT_CHANGELOG=1 npm run release:ci
+  validate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate, test and typecheck
+        run: |
+          RELEASE_STRICT_CHANGELOG=1 npm run validate:release
+          npm test
+          npm run typecheck
 
-      - name: Prepare release notes
-        run: node scripts/generate-release-notes.mjs --output=RELEASE_NOTES.md
+  fpk:
+    needs: [prepare, validate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Cache fnpack
+        uses: actions/cache@v4
+        with:
+          path: tools/fnpack*
+          key: ${{ runner.os }}-fnpack-1.2.3
+      - name: Download fnpack if needed
+        run: npm run download:fnpack
+      - name: Build and validate FPK
+        run: npm run pack:fpk
+      - name: Upload FPK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-fpk-${{ needs.prepare.outputs.version }}
+          path: |
+            dist/app.tgz
+            dist/fnos-app-health-records-${{ needs.prepare.outputs.version }}.fpk
+          if-no-files-found: error
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
+  docker:
+    needs: [prepare, validate]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.docker-build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
       - name: Validate Docker Hub configuration
         shell: bash
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
             echo "Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets before releasing." >&2
@@ -92,13 +127,13 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ steps.package.outputs.version }}
-            type=raw,value=v${{ steps.package.outputs.version }}
-            type=raw,value=${{ steps.package.outputs.minor }}
-            type=raw,value=latest,enable=${{ steps.package.outputs.stable == 'true' }}
+            type=raw,value=${{ needs.prepare.outputs.version }}
+            type=raw,value=v${{ needs.prepare.outputs.version }}
+            type=raw,value=${{ needs.prepare.outputs.minor }}
+            type=raw,value=latest,enable=${{ needs.prepare.outputs.stable == 'true' }}
             type=sha,format=short
           labels: |
-            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
             org.opencontainers.image.title=健康档案
 
       - name: Build and publish Docker image
@@ -112,7 +147,7 @@ jobs:
           tags: ${{ steps.docker-meta.outputs.tags }}
           labels: ${{ steps.docker-meta.outputs.labels }}
           build-args: |
-            APP_VERSION=${{ steps.package.outputs.version }}
+            APP_VERSION=${{ needs.prepare.outputs.version }}
             GATEWAY_PREFIX=/
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -126,6 +161,17 @@ jobs:
           DIGEST: ${{ steps.docker-build.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
+  publish:
+    needs: [prepare, fpk, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-fpk-${{ needs.prepare.outputs.version }}
+          path: dist
+      - name: Prepare release notes
+        run: node scripts/generate-release-notes.mjs --output=RELEASE_NOTES.md
       - name: Add Docker image to release notes
         shell: bash
         run: |
@@ -134,16 +180,16 @@ jobs:
           ## Docker 镜像
 
           ```text
-          docker.io/${{ env.IMAGE_NAME }}:${{ steps.package.outputs.version }}
-          digest: ${{ steps.docker-build.outputs.digest }}
+          docker.io/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
+          digest: ${{ needs.docker.outputs.digest }}
           platforms: linux/amd64, linux/arm64
           ```
 
           升级 Compose 部署：
 
           ```bash
-          HEALTH_RECORDS_VERSION=${{ steps.package.outputs.version }} docker compose pull
-          HEALTH_RECORDS_VERSION=${{ steps.package.outputs.version }} docker compose up -d
+          HEALTH_RECORDS_VERSION=${{ needs.prepare.outputs.version }} docker compose pull
+          HEALTH_RECORDS_VERSION=${{ needs.prepare.outputs.version }} docker compose up -d
           ```
 
           完整安装和回滚说明见 `docs/DOCKER_DEPLOYMENT.md`。
@@ -153,9 +199,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: false
-          tag_name: v${{ steps.package.outputs.version }}
-          name: 健康档案 v${{ steps.package.outputs.version }}
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: 健康档案 v${{ needs.prepare.outputs.version }}
           body_path: RELEASE_NOTES.md
           files: |
             dist/app.tgz
-            dist/fnos-app-health-records-${{ steps.package.outputs.version }}.fpk
+            dist/fnos-app-health-records-${{ needs.prepare.outputs.version }}.fpk

@@ -1,5 +1,5 @@
 ARG NODE_IMAGE=node:22-bookworm-slim
-FROM ${NODE_IMAGE} AS build
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS build
 
 WORKDIR /app
 COPY package.json package-lock.json ./

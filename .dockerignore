@@ -1,6 +1,10 @@
 .git
 .github
 .data
+.docker-test-data
+.DS_Store
+.dictionary-pages
+snapshot
 .fnos-build
 .server-dist
 .ui-dist
