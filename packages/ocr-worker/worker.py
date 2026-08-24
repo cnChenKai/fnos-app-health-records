@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import io
 import math
 import os
 import platform
@@ -1572,6 +1573,49 @@ def create_thumbnail(
             image.close()
 
 
+def assemble_pdf(input_path: Path, output_path: Path, pages: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a portable PDF from ordered PDF/image source pages without changing source PDFs."""
+    import fitz
+    from PIL import ImageOps
+
+    output = fitz.open()
+    try:
+        for item in pages:
+            source_path = Path(str(item["path"]))
+            mime_type = str(item.get("mimeType") or "")
+            rotation = int(item.get("rotation") or 0) % 360
+            if mime_type == "application/pdf" or source_path.suffix.lower() == ".pdf":
+                with open_pdf_document(source_path) as source:
+                    page_number = int(item.get("sourcePageNumber") or 1) - 1
+                    if page_number < 0 or page_number >= source.page_count:
+                        raise IndexError(f"PDF page does not exist: {page_number + 1}")
+                    output.insert_pdf(source, from_page=page_number, to_page=page_number)
+                if rotation:
+                    output[-1].set_rotation(rotation)
+                continue
+
+            validate_image_dimensions(source_path)
+            with open_image_source(source_path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                image.load()
+            try:
+                if rotation:
+                    rotated = image.rotate(-rotation, expand=True)
+                    image.close()
+                    image = rotated
+                image_bytes = io.BytesIO()
+                image.save(image_bytes, format="JPEG", quality=92, optimize=True)
+                page = output.new_page(width=image.width, height=image.height)
+                page.insert_image(page.rect, stream=image_bytes.getvalue())
+            finally:
+                image.close()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output.save(str(output_path), garbage=3, deflate=True)
+        return {"outputPath": str(output_path), "pageCount": len(pages)}
+    finally:
+        output.close()
+
+
 def run_daemon() -> int:
     emit(
         {
@@ -1615,6 +1659,12 @@ def run_daemon() -> int:
             heartbeat.start()
             if action == "inspect_pdf":
                 result = inspect_pdf(image_path)
+            elif action == "assemble_pdf":
+                result = assemble_pdf(
+                    image_path,
+                    Path(request["outputPath"]),
+                    list(request.get("pages") or []),
+                )
             elif action == "thumbnail":
                 result = create_thumbnail(
                     image_path,
@@ -1688,7 +1738,7 @@ def run_daemon() -> int:
             if heartbeat is not None:
                 heartbeat.stop()
                 heartbeat = None
-            if action == "thumbnail":
+            if action in {"thumbnail", "assemble_pdf"}:
                 raw_output_path = request.get("outputPath") if isinstance(request, dict) else None
                 cleanup_partial_output(Path(raw_output_path) if raw_output_path else None)
             if isinstance(error, WorkerInputError):

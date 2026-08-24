@@ -12,7 +12,7 @@ import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
 
 export type WorkerRequest = {
-  action: "inspect_pdf" | "thumbnail" | "ocr";
+  action: "inspect_pdf" | "thumbnail" | "ocr" | "assemble_pdf";
   imagePath: string;
   mimeType?: string | null;
   outputPath?: string;
@@ -21,6 +21,12 @@ export type WorkerRequest = {
   maxSize?: number;
   quality?: number;
   renderScale?: number;
+  pages?: Array<{
+    path: string;
+    mimeType: string;
+    sourcePageNumber?: number | null;
+    rotation?: number;
+  }>;
   recycleAfterResponse?: boolean;
 };
 
@@ -39,6 +45,7 @@ export type WorkerResponse = {
   coordHeight?: number;
   engineElapsed?: unknown;
   elapsedMs?: number;
+  outputPath?: string;
   workerRssBytes?: number;
   workerPeakRssBytes?: number;
   workerRequestCount?: number;
@@ -346,6 +353,36 @@ function validateThumbnailOutputFile(payload: WorkerRequest) {
   }
 }
 
+function validatePdfOutputFile(payload: WorkerRequest) {
+  if (!payload.outputPath) throw workerError("PDF 输出路径缺失", "OCR_WORKER_OUTPUT_FILE_INVALID");
+  let stats;
+  try {
+    stats = lstatSync(payload.outputPath);
+  } catch {
+    throw workerError("PDF 输出文件未生成", "OCR_WORKER_OUTPUT_FILE_INVALID");
+  }
+  if (!stats.isFile() || stats.size < 5) {
+    cleanupInvalidOutputFile(payload.outputPath);
+    throw workerError("PDF 输出文件无效", "OCR_WORKER_OUTPUT_FILE_INVALID");
+  }
+  if (stats.size > workerMaxOutputFileBytes()) {
+    cleanupInvalidOutputFile(payload.outputPath);
+    throw workerError("PDF 输出文件超过安全限制", "OCR_WORKER_OUTPUT_FILE_TOO_LARGE");
+  }
+  const signature = Buffer.alloc(5);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(payload.outputPath, "r");
+    const bytesRead = readSync(descriptor, signature, 0, signature.length, 0);
+    if (bytesRead !== signature.length || signature.toString("ascii") !== "%PDF-") {
+      cleanupInvalidOutputFile(payload.outputPath);
+      throw workerError("PDF 输出文件格式无效", "OCR_WORKER_OUTPUT_FILE_INVALID");
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
 function validOcrBox(value: unknown) {
   if (!Array.isArray(value)) return false;
   if (
@@ -630,6 +667,12 @@ function validateSuccessfulResponse(
     }
     try {
       validateThumbnailOutputFile(payload);
+    } catch (error) {
+      return { error: error as Error };
+    }
+  } else if (payload.action === "assemble_pdf") {
+    try {
+      validatePdfOutputFile(payload);
     } catch (error) {
       return { error: error as Error };
     }

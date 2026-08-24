@@ -2064,6 +2064,133 @@ export function getReportPageFile(
   };
 }
 
+type ReportOriginalDownload = {
+  path: string;
+  mimeType: "application/pdf";
+  filename: string;
+};
+
+const reportOriginalExportTasks = new Map<string, Promise<void>>();
+
+function reportDownloadFilename(title: string, fallback: string) {
+  const base = (title || fallback)
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return `${base || "健康报告"}.pdf`;
+}
+
+function reportOriginalExportKey(pages: Array<{ id: string; pageNumber: number; storagePath: string; sha256: string; rotation: number }>) {
+  return createHash("sha256").update(JSON.stringify(pages.map((page) => [
+    page.id, page.pageNumber, page.storagePath, page.sha256, page.rotation,
+  ]))).digest("hex").slice(0, 32);
+}
+
+function reportOriginalExportPath(reportId: string, key: string) {
+  const directory = join(getAppConfig().storageDir, "report-exports");
+  mkdirSync(directory, { recursive: true });
+  return join(directory, `${reportId}-${key}.pdf`);
+}
+
+function reportOriginalPages(user: RequestUser, reportId: string) {
+  const db = getDatabase();
+  const report = db.prepare(
+    "SELECT member_id AS memberId, title FROM reports WHERE id = ? AND status <> 'trashed'",
+  ).get(reportId) as { memberId: string; title: string } | undefined;
+  if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+  assertMemberAccess(user, report.memberId);
+  const pages = db.prepare(`
+    SELECT id, page_number AS pageNumber, original_name AS originalName,
+      storage_path AS storagePath, mime_type AS mimeType, source_page_number AS sourcePageNumber,
+      source_page_count AS sourcePageCount, rotation, sha256
+    FROM report_pages WHERE report_id = ? ORDER BY page_number
+  `).all(reportId) as Array<{
+    id: string; pageNumber: number; originalName: string; storagePath: string;
+    mimeType: string; sourcePageNumber: number | null; sourcePageCount: number | null; rotation: number; sha256: string;
+  }>;
+  if (!pages.length) throw createError({ statusCode: 404, statusMessage: "报告没有可导出的原件" });
+  return { report, pages };
+}
+
+export async function getReportOriginalDownload(user: RequestUser, reportId: string): Promise<ReportOriginalDownload> {
+  const { report, pages } = reportOriginalPages(user, reportId);
+  const filename = reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, ""));
+  const pdfPages = pages.filter((page) => page.mimeType === "application/pdf");
+  const isSinglePdfSource = pdfPages.length === pages.length
+    && new Set(pages.map((page) => page.storagePath)).size === 1
+    && pages.every((page) => page.sourcePageNumber !== null);
+  if (isSinglePdfSource) {
+    const path = storagePath(pages[0].storagePath);
+    if (!existsSync(path)) throw createError({ statusCode: 404, statusMessage: "报告原件文件不存在" });
+    return { path, mimeType: "application/pdf", filename };
+  }
+
+  const outputPath = reportOriginalExportPath(reportId, reportOriginalExportKey(pages));
+  if (existsSync(outputPath)) return { path: outputPath, mimeType: "application/pdf", filename };
+  throw createError({ statusCode: 409, statusMessage: "PDF 正在生成，请稍后刷新后下载" });
+}
+
+async function generateReportOriginalExport(user: RequestUser, reportId: string) {
+  const { pages } = reportOriginalPages(user, reportId);
+  const workerPages = pages.map((page) => ({
+    path: storagePath(page.storagePath), mimeType: page.mimeType,
+    sourcePageNumber: page.sourcePageNumber, rotation: page.rotation,
+  }));
+  for (const page of workerPages) {
+    if (!existsSync(page.path)) throw new Error("报告原件文件不存在");
+  }
+  const outputPath = reportOriginalExportPath(reportId, reportOriginalExportKey(pages));
+  if (existsSync(outputPath)) return;
+  try {
+    const result = await requestWorker({
+      action: "assemble_pdf", imagePath: workerPages[0].path, mimeType: workerPages[0].mimeType,
+      outputPath, pages: workerPages,
+    });
+    if (!result.ok || !existsSync(outputPath)) throw new Error(result.errorMessage || "报告原件 PDF 导出失败");
+  } catch (error) {
+    rmSync(outputPath, { force: true });
+    throw error;
+  }
+}
+
+export function getReportOriginalExportStatus(user: RequestUser, reportId: string) {
+  const { report, pages } = reportOriginalPages(user, reportId);
+  const filename = reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, ""));
+  const isPdf = pages.every((page) => page.mimeType === "application/pdf")
+    && new Set(pages.map((page) => page.storagePath)).size === 1;
+  if (isPdf) return { status: "ready" as const, filename };
+  const key = reportOriginalExportKey(pages);
+  const outputPath = reportOriginalExportPath(reportId, key);
+  if (existsSync(outputPath)) return { status: "ready" as const, filename };
+  return { status: reportOriginalExportTasks.has(`${reportId}:${key}`) ? "generating" as const : "available" as const, filename };
+}
+
+export function queueReportOriginalExport(user: RequestUser, reportId: string) {
+  const status = getReportOriginalExportStatus(user, reportId);
+  if (status.status !== "available") return status;
+  const { pages } = reportOriginalPages(user, reportId);
+  const taskKey = `${reportId}:${reportOriginalExportKey(pages)}`;
+  if (!reportOriginalExportTasks.has(taskKey)) {
+    const task = generateReportOriginalExport(user, reportId)
+      .catch(() => undefined)
+      .finally(() => reportOriginalExportTasks.delete(taskKey));
+    reportOriginalExportTasks.set(taskKey, task);
+  }
+  return { ...status, status: "generating" as const };
+}
+
+export function getReportOriginalDownloadInfo(user: RequestUser, reportId: string) {
+  const { report, pages } = reportOriginalPages(user, reportId);
+  const sourceIsPdf = pages.length && pages.every((page) => page.mimeType === "application/pdf")
+    && new Set(pages.map((page) => page.storagePath)).size === 1;
+  const cachedPath = reportOriginalExportPath(reportId, reportOriginalExportKey(pages));
+  return {
+    filename: reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, "")),
+    directPath: sourceIsPdf ? storagePath(pages[0].storagePath) : existsSync(cachedPath) ? cachedPath : null,
+  };
+}
+
 export async function getReportPagePreviewFile(
   user: RequestUser,
   reportId: string,

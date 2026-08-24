@@ -12,6 +12,7 @@ import FormSelect from "./FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
+import { downloadStreamedFile } from "../utils/download";
 import { describeObservationAbnormal, formatObservationNormalization, formatReferenceRange } from "../utils/indicator-display";
 import { formatDatabaseTime, formatDatabaseTimeWithYear } from "../utils/time";
 import { hasEmptyCompletedOcr, resolveAiTriggerState } from "../utils/ai-trigger-state";
@@ -121,6 +122,9 @@ const observationForm = ref({
 const editOriginalIndex = ref(0);
 const savingReport = ref(false);
 const savingPages = ref(false);
+const exportingOriginal = ref(false);
+const originalExportStatus = ref<"ready" | "generating" | "available">("available");
+let originalExportStatusTimer: ReturnType<typeof setInterval> | null = null;
 const pageRefreshAwaitingJobs = ref(false);
 const editForm = ref({
   title: "", reportType: "other", hospitalName: "", hospitalBranch: "", city: "",
@@ -563,6 +567,47 @@ function aiUnitMeta(unit: AiExtractionUnitProgress) {
 
 function originalUrl(page: ReportPage) {
   return apiUrl(`reports/${page.reportId}/pages/${page.id}/original`);
+}
+
+async function downloadReportOriginal() {
+  if (exportingOriginal.value) return;
+  exportingOriginal.value = true;
+  try {
+    if (originalExportStatus.value !== "ready") {
+      originalExportStatus.value = "generating";
+      await request(`reports/${encodeURIComponent(props.reportId)}/original`, { method: "POST" });
+      for (let attempt = 0; attempt < 300; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(props.reportId)}/original/status`);
+        originalExportStatus.value = status.status;
+        if (status.status === "ready") break;
+      }
+      if (originalExportStatus.value !== "ready") throw new Error("PDF 生成超时，请稍后再试");
+    }
+    await downloadStreamedFile(`reports/${encodeURIComponent(props.reportId)}/original`, "健康报告.pdf");
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "报告原件导出失败");
+  } finally {
+    exportingOriginal.value = false;
+  }
+}
+
+function stopOriginalExportStatusPolling() {
+  if (originalExportStatusTimer) clearInterval(originalExportStatusTimer);
+  originalExportStatusTimer = null;
+}
+
+function startOriginalExportStatusPolling(reportId: string) {
+  stopOriginalExportStatusPolling();
+  originalExportStatusTimer = setInterval(() => {
+    void request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`)
+      .then((status) => {
+        if (props.reportId !== reportId) return;
+        originalExportStatus.value = status.status;
+        if (status.status !== "generating") stopOriginalExportStatusPolling();
+      })
+      .catch(() => undefined);
+  }, 1500);
 }
 
 function thumbnailUrl(page: ReportPage) {
@@ -1460,7 +1505,16 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
   if (!preserveCurrent) detail.value = null;
   try {
     const next = await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}`);
-    if (seq === detailSeq && props.reportId === reportId && next.id === reportId) detail.value = next;
+    if (seq === detailSeq && props.reportId === reportId && next.id === reportId) {
+      detail.value = next;
+      try {
+        const status = await request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`);
+        if (seq === detailSeq && props.reportId === reportId) {
+          originalExportStatus.value = status.status;
+          if (status.status === "generating") startOriginalExportStatusPolling(reportId);
+        }
+      } catch { /* 原件状态不影响报告详情显示。 */ }
+    }
   } catch (cause) {
     if (seq === detailSeq && props.reportId === reportId) {
       detailError.value = cause instanceof Error ? cause.message : "报告详情读取失败";
@@ -1559,6 +1613,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleViewerKeydown);
 });
 onBeforeUnmount(() => {
+  stopOriginalExportStatusPolling();
   stopJobsPolling();
   stopEventPolling();
   eventSeq += 1;
@@ -2068,6 +2123,11 @@ onActivated(() => {
     <article class="preview-card originals-card">
       <div class="section-title-row">
         <div><h4>报告原件</h4><p>点击打开原图或 PDF 原件</p></div>
+        <button class="soft-action-button" type="button" :disabled="exportingOriginal || !detail?.pages.length" @click="downloadReportOriginal">
+          <LoaderCircle v-if="exportingOriginal || originalExportStatus === 'generating'" class="spin-icon" :size="15" />
+          <Download v-else :size="15" />
+          {{ originalExportStatus === 'ready' ? '下载 PDF' : originalExportStatus === 'generating' ? '正在生成 PDF' : '生成 PDF' }}
+        </button>
       </div>
       <div v-if="detail?.pages.length" class="original-grid">
         <div v-for="(page, index) in detail.pages" :key="page.id" class="original-tile-card">
