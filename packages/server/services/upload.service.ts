@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, statSync, writeFileSync, writeSync
+} from "node:fs";
 import { join } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
@@ -24,7 +26,21 @@ export type UploadInputFile = {
   rotation?: number;
 };
 
+export type LocalUploadInputFile = {
+  originalName: string;
+  sourcePath: string;
+  rotation?: number;
+};
+
 type DetectedType = { mimeType: string; extension: string; kind: "image" | "pdf" };
+type ValidatedUploadFile = {
+  originalName: string;
+  rotation: number;
+  detected: DetectedType;
+  fileSize: number;
+  data?: Uint8Array;
+  sourcePath?: string;
+};
 
 function startsWith(data: Uint8Array, bytes: number[]) {
   return bytes.every((byte, index) => data[index] === byte);
@@ -86,14 +102,112 @@ function validateFiles(files: UploadInputFile[]) {
       ...file,
       originalName: cleanOriginalName(file.originalName, index),
       rotation: cleanRotation(file.rotation),
+      fileSize: file.data.byteLength,
       detected
     };
   });
 }
 
-export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[]) {
+function readFileSignature(path: string) {
+  const descriptor = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  try {
+    const signature = Buffer.alloc(32);
+    return signature.subarray(0, readSync(descriptor, signature, 0, signature.byteLength, 0));
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[] {
+  if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  if (files.length > maxFileCount) {
+    throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
+  }
+  let totalBytes = 0;
+  return files.map((file, index) => {
+    let stats: ReturnType<typeof statSync>;
+    try {
+      stats = statSync(file.sourcePath);
+    } catch {
+      throw createError({ statusCode: 409, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
+    }
+    if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: `“${cleanOriginalName(file.originalName, index)}”不是普通文件` });
+    if (!stats.size) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
+    if (stats.size > maxFileBytes) {
+      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+    }
+    totalBytes += stats.size;
+    if (totalBytes > maxTotalBytes) {
+      throw createError({ statusCode: 413, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
+    }
+    let detected: DetectedType | null;
+    try {
+      detected = detectUploadType(readFileSignature(file.sourcePath));
+    } catch {
+      throw createError({ statusCode: 409, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
+    }
+    if (!detected) {
+      throw createError({ statusCode: 415, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
+    }
+    return {
+      originalName: cleanOriginalName(file.originalName, index),
+      sourcePath: file.sourcePath,
+      rotation: cleanRotation(file.rotation),
+      fileSize: stats.size,
+      detected
+    };
+  });
+}
+
+function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
+  if (file.data) {
+    writeFileSync(destination, file.data, { flag: "wx", mode: 0o600 });
+    return createHash("sha256").update(file.data).digest("hex");
+  }
+  if (!file.sourcePath) throw new Error("Missing local import source path");
+
+  const source = openSync(file.sourcePath, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+  let target: number | null = null;
+  try {
+    const sourceStats = fstatSync(source);
+    if (!sourceStats.isFile() || sourceStats.size !== file.fileSize) {
+      throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+    }
+    target = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const hash = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    let copied = 0;
+    while (true) {
+      const bytesRead = readSync(source, chunk, 0, chunk.byteLength, null);
+      if (!bytesRead) break;
+      copied += bytesRead;
+      if (copied > maxFileBytes || copied > file.fileSize) {
+        throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+      }
+      hash.update(chunk.subarray(0, bytesRead));
+      let written = 0;
+      while (written < bytesRead) written += writeSync(target, chunk, written, bytesRead - written);
+    }
+    if (copied !== file.fileSize) {
+      throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+    }
+    return hash.digest("hex");
+  } catch (error) {
+    rmSync(destination, { force: true });
+    throw error;
+  } finally {
+    if (target !== null) closeSync(target);
+    closeSync(source);
+  }
+}
+
+function createValidatedUpload(
+  user: RequestUser,
+  memberId: string,
+  validated: ValidatedUploadFile[],
+  source: "browser_upload" | "nas_import"
+) {
   assertMemberManage(user, memberId);
-  const validated = validateFiles(files);
   const reportTitle = "待识别报告";
   const reportId = createId("report");
   const relativeDirectory = join("reports", memberId, reportId);
@@ -105,15 +219,15 @@ export function createUpload(user: RequestUser, memberId: string, files: UploadI
     const prepared = validated.map((file, index) => {
       const pageId = createId("page");
       const relativePath = join(relativeDirectory, `${pageId}${file.detected.extension}`);
-      writeFileSync(join(getAppConfig().storageDir, relativePath), file.data, { flag: "wx", mode: 0o600 });
+      const sha256 = persistValidatedFile(file, join(getAppConfig().storageDir, relativePath));
       return {
         id: pageId,
         pageNumber: index + 1,
         originalName: file.originalName,
         storagePath: relativePath,
         mimeType: file.detected.mimeType,
-        fileSize: file.data.byteLength,
-        sha256: createHash("sha256").update(file.data).digest("hex"),
+        fileSize: file.fileSize,
+        sha256,
         rotation: file.rotation,
         kind: file.detected.kind
       };
@@ -165,6 +279,7 @@ export function createUpload(user: RequestUser, memberId: string, files: UploadI
       VALUES (?, ?, 'report.upload', 'report', ?, ?)
     `).run(createId("audit"), user.id, reportId, JSON.stringify({
       memberId,
+      source,
       fileCount: prepared.length,
       totalBytes: prepared.reduce((sum, page) => sum + page.fileSize, 0)
     }));
@@ -185,6 +300,14 @@ export function createUpload(user: RequestUser, memberId: string, files: UploadI
     rmSync(absoluteDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[]) {
+  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload");
+}
+
+export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[]) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import");
 }
 
 

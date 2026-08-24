@@ -22,6 +22,7 @@ LABEL org.opencontainers.image.title="健康档案" \
 RUN apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 update \
     && apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
       ca-certificates curl python3 python3-venv tini \
+      libxcb1 libglib2.0-0 libgl1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

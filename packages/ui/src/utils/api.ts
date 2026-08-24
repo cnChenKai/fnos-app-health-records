@@ -21,7 +21,7 @@ export function apiUrl(path: string) {
 
 function networkError(cause: unknown) {
   /* fetch 自身抛出的 TypeError 是英文技术串，转换为可理解的提示并保留细节供排查 */
-  return new Error(`无法连接服务器，请检查网络或 fnOS 网关状态后重试（${describeTechnical(cause)}）`);
+  return new Error(`无法连接服务器，请检查网络与应用服务状态后重试（${describeTechnical(cause)}）`);
 }
 
 function parseApiPayload<T>(status: number, okFlag: boolean, text: string): T {

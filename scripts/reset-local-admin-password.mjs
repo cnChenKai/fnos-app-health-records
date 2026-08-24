@@ -19,7 +19,7 @@ if (!passwordFile) fail("Usage: node scripts/reset-local-admin-password.mjs --pa
 if (!existsSync(passwordFile)) fail(`Password file does not exist: ${passwordFile}`);
 
 const password = readFileSync(passwordFile, "utf8").trim();
-if (password.length < 12 || password.length > 128) fail("New password must contain 12-128 characters");
+if (password.length < 8 || password.length > 128) fail("New password must contain 8-128 characters");
 
 const storageDir = process.env.STORAGE_DIR || "/data";
 const databasePath = join(storageDir, "db", "health-records.sqlite");
@@ -41,7 +41,7 @@ db.exec("BEGIN IMMEDIATE");
 try {
   db.prepare(`
     UPDATE local_accounts
-    SET password_hash = ?, password_salt = ?, updated_at = CURRENT_TIMESTAMP
+    SET password_hash = ?, password_salt = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(hash, salt, account.id);
   db.prepare(`
@@ -65,4 +65,4 @@ try {
   db.close();
 }
 
-console.log(`Local administrator password reset completed for ${account.username}; all sessions were revoked.`);
+console.log(`Local administrator password reset completed for ${account.username}; all sessions were revoked and password change is required on next login.`);

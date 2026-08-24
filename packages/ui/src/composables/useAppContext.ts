@@ -80,7 +80,7 @@ async function load() {
   schemaMaintenance.value = null;
   try {
     session.value = await request<Session>("session");
-    if (session.value.authenticated) {
+    if (session.value.authenticated && !session.value.mustChangePassword) {
       await refreshMembers();
     } else {
       members.value = [];

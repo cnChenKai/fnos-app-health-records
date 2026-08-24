@@ -91,6 +91,7 @@ check(manifest.changelog === template.releaseNotes?.summary, "manifest.changelog
 check(manifest.source === "thirdparty", "manifest.source must be thirdparty");
 check(manifest.os_min_version === template.osMinVersion, "manifest.os_min_version is missing or stale");
 check(manifest.ctl_stop === "true", "service applications must expose lifecycle controls");
+check(manifest.disable_authorization_path === "false", "NAS file import requires fnOS authorized paths");
 check(!("service_port" in manifest), "gateway applications must not declare service_port");
 check(manifest.desktop_applaunchname === template.desktopLaunchName, "desktop entry ID mismatch");
 
@@ -139,6 +140,12 @@ for (const scriptName of [
   if (existsSync(filePath)) {
     check((statSync(filePath).mode & 0o111) !== 0, `${relativePath} must be executable`);
   }
+}
+
+if (existsSync(join(packageDir, "cmd/main"))) {
+  const mainScript = readFileSync(join(packageDir, "cmd/main"), "utf8");
+  check(mainScript.includes("fnos-authorized-paths"), "cmd/main must persist fnOS authorized paths");
+  check(mainScript.includes("TRIM_DATA_ACCESSIBLE_PATHS"), "cmd/main must consume fnOS authorized paths");
 }
 
 check(!existsSync(join(packageDir, "app/ui/index.cgi")), "gateway template must not include index.cgi");

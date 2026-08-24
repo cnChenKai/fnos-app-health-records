@@ -8,6 +8,7 @@ import {
   ensureClinicalFactColumns,
   ensureIndicatorDictionaryColumns,
   ensureIndicatorGovernanceSchema,
+  ensureLocalAccountColumns,
   ensureMemberBloodTypeColumns,
   ensureObservationDisplayFlagColumns,
   ensureObservationFieldOverrideSchema,
@@ -216,6 +217,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
+    ensureLocalAccountColumns(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
@@ -273,6 +275,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureMemberBloodTypeColumns(db);
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
+    ensureLocalAccountColumns(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);

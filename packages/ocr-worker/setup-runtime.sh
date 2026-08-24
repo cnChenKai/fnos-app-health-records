@@ -289,9 +289,13 @@ install_onnxruntime_backend() {
 }
 
 PREFER_ONNXRUNTIME=0
+MACHINE_KEY="$(uname -m 2>/dev/null | tr '[:upper:]' '[:lower:]' || printf unknown)"
 if [ "${PYTHON_MINOR}" = "3.12" ]; then
   PREFER_ONNXRUNTIME=1
   log "检测到 Python 3.12：当前 OpenVINO 依赖锁定版本不提供兼容 wheel，将直接使用 ONNXRuntime 备用后端。"
+elif [ "${MACHINE_KEY}" = "aarch64" ] || [ "${MACHINE_KEY}" = "arm64" ]; then
+  PREFER_ONNXRUNTIME=1
+  log "检测到 ARM64 架构：为避免 OpenVINO 重复推理的内存问题，直接使用 ONNXRuntime 后端。"
 fi
 
 if [ "${PREFER_ONNXRUNTIME}" = "1" ]; then
@@ -320,7 +324,15 @@ if CHECK_RESULT_JSON="$(OCR_BACKEND="${CHECK_COMMAND_ENV}" "${VENV_DIR}/bin/pyth
 import json
 import os
 try:
-    payload = json.loads(os.environ.get("CHECK_RESULT_JSON", "{}"))
+    payload = {}
+    for line in reversed(os.environ.get("CHECK_RESULT_JSON", "").splitlines()):
+        try:
+            candidate = json.loads(line.strip())
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
     print(payload.get("engine") or "auto")
 except Exception:
     print("auto")
@@ -347,7 +359,15 @@ from pathlib import Path
 import sys
 
 try:
-    check = json.loads(os.environ.get("CHECK_RESULT_JSON", "{}"))
+    check = {}
+    for line in reversed(os.environ.get("CHECK_RESULT_JSON", "").splitlines()):
+        try:
+            candidate = json.loads(line.strip())
+        except Exception:
+            continue
+        if isinstance(candidate, dict):
+            check = candidate
+            break
 except Exception:
     check = {}
 

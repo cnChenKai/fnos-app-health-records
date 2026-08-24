@@ -145,7 +145,9 @@ test("exports a sanitized administrator diagnostic bundle without health data", 
   await withLogEnvironment(async (logDir) => {
     const extractionRoot = mkdtempSync(join(tmpdir(), "health-records-diagnostics-test-"));
     const previousPackageVar = process.env.TRIM_PKGVAR;
+    const previousAuthMode = process.env.AUTH_MODE;
     process.env.TRIM_PKGVAR = dirname(logDir);
+    process.env.AUTH_MODE = "local";
     let bundle: ReturnType<typeof createDiagnosticBundle> | null = null;
     try {
       const db = getDatabase();
@@ -190,6 +192,9 @@ test("exports a sanitized administrator diagnostic bundle without health data", 
       assert.equal(manifest.privacy.sanitized, true);
       assert.ok(manifest.privacy.excluded.includes("数据库"));
       assert.equal(existsSync(join(extractionRoot, "db")), false);
+      const readme = readFileSync(join(extractionRoot, "README.txt"), "utf8");
+      assert.match(readme, /Docker 容器启动问题/);
+      assert.doesNotMatch(readme, /飞牛|fnOS/);
 
       const audit = db.prepare("SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'system.diagnostics_export'")
         .get() as { count: number };
@@ -200,6 +205,8 @@ test("exports a sanitized administrator diagnostic bundle without health data", 
       rmSync(extractionRoot, { recursive: true, force: true });
       if (previousPackageVar === undefined) delete process.env.TRIM_PKGVAR;
       else process.env.TRIM_PKGVAR = previousPackageVar;
+      if (previousAuthMode === undefined) delete process.env.AUTH_MODE;
+      else process.env.AUTH_MODE = previousAuthMode;
     }
   });
 });

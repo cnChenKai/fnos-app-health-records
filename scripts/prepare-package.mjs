@@ -106,7 +106,7 @@ const privilege = {
   groupname: template.appName
 };
 
-// The starter does not require user-visible shares or system integration.
+// Existing NAS files are selected through fnOS authorized paths, not an app-owned data share.
 const resource = {};
 
 const manifest = `appname=${template.appName}
@@ -126,7 +126,7 @@ desktop_uidir=ui
 desktop_applaunchname=${template.desktopLaunchName}
 install_dep_apps=${template.runtimeDependency}
 ctl_stop=true
-disable_authorization_path=true
+disable_authorization_path=false
 checksum=__APP_TGZ_MD5__
 `;
 
@@ -227,6 +227,7 @@ const cmdMain = `#!/bin/bash
 
 LOG_FILE="\${TRIM_PKGVAR}/info.log"
 PID_FILE="\${TRIM_PKGVAR}/app.pid"
+AUTHORIZED_PATHS_FILE="\${TRIM_PKGVAR}/data/config/fnos-authorized-paths"
 APP_DIR="\${TRIM_APPDEST}/server"
 SERVER_ENTRY="\${APP_DIR}/serve.mjs"
 SOCKET_PATH="\${TRIM_APPDEST}/${template.gatewaySocket}"
@@ -247,6 +248,25 @@ report_error() {
         printf "%s\\n" "$1" > "\${TRIM_TEMP_LOGFILE}"
     fi
 }
+
+sync_authorized_paths() {
+    # fnOS supplies this value to lifecycle scripts. Persist it so the running
+    # service can observe authorization changes without relying on stale process env.
+    if [ "\${TRIM_DATA_ACCESSIBLE_PATHS+x}" != "x" ]; then
+        return 0
+    fi
+    mkdir -p "$(dirname "\${AUTHORIZED_PATHS_FILE}")"
+    umask 077
+    temp_file="\${AUTHORIZED_PATHS_FILE}.$$"
+    if printf "%s" "\${TRIM_DATA_ACCESSIBLE_PATHS}" > "\${temp_file}"; then
+        mv -f "\${temp_file}" "\${AUTHORIZED_PATHS_FILE}"
+    else
+        rm -f "\${temp_file}"
+        return 1
+    fi
+}
+
+sync_authorized_paths || log_msg "Unable to persist fnOS authorized paths"
 
 read_pid() {
     [ -r "\${PID_FILE}" ] || return 1
@@ -298,6 +318,7 @@ start_app() {
     STORAGE_DIR="\${TRIM_PKGVAR}/data" \\
     TRIM_PKGVAR="\${TRIM_PKGVAR}" \\
     TRIM_APPDEST="\${TRIM_APPDEST}" \\
+    TRIM_DATA_ACCESSIBLE_PATHS="\${TRIM_DATA_ACCESSIBLE_PATHS:-}" \\
     OCR_WORKER_SCRIPT="\${OCR_WORKER_SCRIPT}" \\
     OCR_SETUP_SCRIPT="\${OCR_SETUP_SCRIPT}" \\
     OCR_PYTHON_BIN="\${OCR_PYTHON_BIN}" \\
@@ -414,6 +435,18 @@ ERROR_LOG="\${TRIM_TEMP_LOGFILE:-\${TRIM_PKGVAR:-/tmp}/health-records-${mode}-er
 DETAIL_LOG="\${ERROR_LOG}.detail"
 
 mkdir -p "$(dirname "\${ERROR_LOG}")"
+
+if [ "\${TRIM_DATA_ACCESSIBLE_PATHS+x}" = "x" ]; then
+    AUTHORIZED_PATHS_FILE="\${TRIM_PKGVAR}/data/config/fnos-authorized-paths"
+    mkdir -p "$(dirname "\${AUTHORIZED_PATHS_FILE}")"
+    umask 077
+    AUTHORIZED_PATHS_TEMP="\${AUTHORIZED_PATHS_FILE}.$$"
+    if printf "%s" "\${TRIM_DATA_ACCESSIBLE_PATHS}" > "\${AUTHORIZED_PATHS_TEMP}"; then
+        mv -f "\${AUTHORIZED_PATHS_TEMP}" "\${AUTHORIZED_PATHS_FILE}"
+    else
+        rm -f "\${AUTHORIZED_PATHS_TEMP}"
+    fi
+fi
 
 node "\${TRIM_APPDEST}/tools/write-runtime-config.mjs" "\${TRIM_PKGVAR}/data" ${mode} > "\${DETAIL_LOG}" 2>&1
 status=$?

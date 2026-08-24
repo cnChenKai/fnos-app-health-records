@@ -6,6 +6,7 @@ export type RequestUser = {
   provider: IdentityProvider;
   authenticated: boolean;
   isAdmin?: boolean;
+  mustChangePassword?: boolean;
   /** @deprecated Kept for API and backup compatibility with existing fnOS releases. */
   isGatewayAdmin: boolean;
 };

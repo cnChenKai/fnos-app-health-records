@@ -13,7 +13,7 @@
 | fnOS manifest 版本 | `0.2.2` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
 | fnOS sub_version | `0.2.2.0` | `scripts/prepare-package.mjs` 生成 |
 | Docker 镜像版本 | `0.2.2`、`v0.2.2` | GitHub Tag 工作流从 `package.json` 生成 |
-| Docker 镜像仓库 | `ghcr.io/timor-m/fnos-app-health-records` | GitHub Container Registry |
+| Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v16` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
@@ -260,7 +260,7 @@ fnOS 真机验证：
 
 Docker 发布验证：
 
-- 空数据卷可通过 Docker Secret 初始化本地管理员并登录。
+- 空数据卷默认使用 `admin/admin` 初始化本地管理员，首次登录强制修改密码；管理员重置账号后使用临时密码 `admin`，下次登录再次强制修改。
 - 容器进程使用非 root 用户，`/data` 卷可写，重启和重建容器后数据与 OCR 环境保留。
 - 匿名请求和伪造 `X-Trim-*` 请求不能获得成员或管理员权限，登录限流、CSRF、退出和会话过期行为正常。
 - `/healthz` 健康检查正常，根路径 UI、上传、备份下载与恢复可直接访问。

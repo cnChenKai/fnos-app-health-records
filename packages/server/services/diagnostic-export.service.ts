@@ -111,6 +111,11 @@ export function createDiagnosticBundle(user: RequestUser) {
   const stagingRoot = join(temporaryRoot, "diagnostics");
   const archivePath = join(temporaryRoot, filename);
   const logsRoot = join(stagingRoot, "logs");
+  const deploymentCopy = config.authMode === "fnos"
+    ? { lifecycleLog: "飞牛应用启停日志", troubleshooting: "应用运行、OCR 安装和飞牛应用启停问题" }
+    : config.authMode === "local"
+      ? { lifecycleLog: "Docker 容器启动日志", troubleshooting: "应用运行、OCR 安装和 Docker 容器启动问题" }
+      : { lifecycleLog: "应用启动日志", troubleshooting: "应用运行、OCR 安装和启动问题" };
 
   try {
     mkdirSync(logsRoot, { recursive: true });
@@ -118,7 +123,7 @@ export function createDiagnosticBundle(user: RequestUser) {
     const sources: DiagnosticLogSource[] = [
       { key: "application", label: "应用运行日志", filePath: applicationPolicy.filePath, format: "jsonl" },
       { key: "ocr-install", label: "OCR 安装日志", filePath: join(config.logDir, "ocr-install.log"), format: "plain" },
-      { key: "lifecycle", label: "fnOS 启停日志", filePath: lifecycleLogPath(), format: "plain" }
+      { key: "lifecycle", label: deploymentCopy.lifecycleLog, filePath: lifecycleLogPath(), format: "plain" }
     ];
     const includedLogs: Array<{
       source: string;
@@ -158,6 +163,7 @@ export function createDiagnosticBundle(user: RequestUser) {
         title: config.appTitle,
         version: config.appVersion,
         accessMode: config.accessMode,
+        authMode: config.authMode,
         gatewayPrefix: config.gatewayPrefix,
         servicePort: config.servicePort
       },
@@ -214,7 +220,7 @@ export function createDiagnosticBundle(user: RequestUser) {
       [
         "健康档案诊断包",
         "",
-        "该文件由管理员手动导出，用于排查应用运行、OCR 安装和 fnOS 启停问题。",
+        `该文件由管理员手动导出，用于排查${deploymentCopy.troubleshooting}。`,
         "日志已执行脱敏，每个日志文件最多保留末尾 2 MB。",
         "诊断包不包含数据库、报告原件、OCR 报告内容、AI 配置或密钥、用户身份资料。",
         ""

@@ -1,6 +1,9 @@
 # OCR Worker
 
-The worker runs PP-OCRv4 mobile through RapidOCR with the OpenVINO CPU backend.
+The worker runs PP-OCRv4 mobile through RapidOCR. x86 environments prefer the
+OpenVINO CPU backend; ARM64 environments use ONNXRuntime because repeated
+OpenVINO inference can exhaust container memory even when a one-shot smoke test
+passes.
 It is a single long-lived Python process controlled by the Nitro server through
 newline-delimited JSON.
 

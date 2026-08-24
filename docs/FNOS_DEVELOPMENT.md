@@ -72,7 +72,7 @@ platform=all
 install_dep_apps=nodejs_v22
 os_min_version=1.1.3100
 ctl_stop=true
-disable_authorization_path=true
+disable_authorization_path=false
 ```
 
 约束：
@@ -82,7 +82,7 @@ disable_authorization_path=true
 - 统一网关应用不声明 `service_port`。
 - 最低系统版本必须反映真实测试范围。
 - 服务应用使用 `ctl_stop=true` 提供启停和状态控制。
-- 当前模板不访问用户目录，因此隐藏授权目录设置；派生应用需要用户文件时必须调整。
+- 健康档案允许管理员从已有 NAS 目录导入报告，因此显示系统“授权目录”设置。
 
 ## 5. 访问模型
 
@@ -134,7 +134,7 @@ HTTP 服务端口默认 `3334`，只由安装/配置向导设置端口号，不�
 - `config/resource` 只声明实际使用的资源。
 - 数据共享目录通常不需要给自身重复配置 `permission`，系统会授予应用用户所需 ACL。
 
-健康档案当前不需要用户可见共享目录，因此 `config/resource` 默认为 `{}`。后续若增加文件管理器导入或导出，再声明 `data-share`。
+健康档案不创建用户可见的应用共享目录，因此 `config/resource` 保持 `{}`。管理员在 fnOS 应用设置中授权现有目录后，应用只通过 `TRIM_DATA_ACCESSIBLE_PATHS` 浏览这些目录；导入时会把文件复制进应用私有存储，源目录无需授予写权限。生命周期脚本会把当前授权路径同步到应用私有配置，目录选择接口每次请求都会重新读取，避免常驻 Node 进程长期使用旧环境变量。若刚修改授权后仍未显示，应在应用中心停止并重新启动健康档案，让飞牛重新注入授权环境。
 
 ## 7. 用户向导
 

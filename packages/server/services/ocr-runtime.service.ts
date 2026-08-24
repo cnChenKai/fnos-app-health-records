@@ -63,16 +63,26 @@ function readyMarkerPath(pythonBin: string) {
   return join(dirname(dirname(pythonBin)), ".health-records-ocr-ready");
 }
 
+function requiresArm64OnnxRuntime() {
+  return process.arch === "arm64";
+}
+
 function hasVerifiedRuntime() {
   return runtimeReadiness().ready;
 }
 
 function runtimeReadiness() {
   const config = getAppConfig();
+  const marker = readyMarkerPath(config.ocrPythonBin);
+  const runtime = readRuntimeInfo(marker);
+  const backend = runtime?.engine || runtime?.backend;
   const checks = [
     { key: "pythonBin", path: config.ocrPythonBin, ok: existsSync(config.ocrPythonBin) },
     { key: "workerScript", path: config.ocrWorkerScript, ok: existsSync(config.ocrWorkerScript) },
-    { key: "readyMarker", path: readyMarkerPath(config.ocrPythonBin), ok: existsSync(readyMarkerPath(config.ocrPythonBin)) }
+    { key: "readyMarker", path: marker, ok: existsSync(marker) },
+    ...(requiresArm64OnnxRuntime()
+      ? [{ key: "backend", path: `${marker} (rapidocr-onnxruntime)`, ok: backend === "rapidocr-onnxruntime" }]
+      : [])
   ];
   return {
     ready: checks.every((item) => item.ok),
@@ -232,6 +242,14 @@ export function getOcrStatus() {
   const readyMarker = readyMarkerPath(config.ocrPythonBin);
   const available = readiness.ready;
   const runtime = readRuntimeInfo(readyMarker);
+  const arm64MigrationWarning =
+    requiresArm64OnnxRuntime() && existsSync(readyMarker) &&
+    (runtime?.engine || runtime?.backend) !== "rapidocr-onnxruntime"
+      ? "当前 ARM64 OCR 环境使用了不兼容的 OpenVINO 后端，请重新安装 OCR 环境以切换到 ONNXRuntime。"
+      : undefined;
+  if (arm64MigrationWarning && !lastInstall.warning) {
+    lastInstall = { ...lastInstall, warning: arm64MigrationWarning };
+  }
   if (lastInstall.state === "failed" && lastInstall.exitCode === 0) {
     lastInstall = {
       ...lastInstall,
@@ -239,7 +257,7 @@ export function getOcrStatus() {
       error: undefined,
       warning: available
         ? undefined
-        : `安装脚本已成功退出，但服务端运行路径校验未完全通过：${readiness.missing.join("；")}`,
+        : arm64MigrationWarning || `安装脚本已成功退出，但服务端运行路径校验未完全通过：${readiness.missing.join("；")}`,
       runtimeReady: available,
       missing: readiness.missing
     };

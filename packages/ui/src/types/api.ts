@@ -14,6 +14,7 @@ export type Session = {
   provider: "fnos_gateway" | "local" | "development";
   authenticated: boolean;
   isAdmin: boolean;
+  mustChangePassword: boolean;
   /** @deprecated Kept while older servers and clients use this field. */
   isGatewayAdmin: boolean;
   authMode: "fnos" | "local" | "development" | "disabled";
@@ -81,6 +82,16 @@ export type AccessUser = {
   displayName: string;
   isAdmin: number;
   providers: string | null;
+};
+
+export type LocalAccount = {
+  id: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  isAdmin: number;
+  mustChangePassword: number;
+  disabledAt: string | null;
 };
 
 export type MemberAccess = {

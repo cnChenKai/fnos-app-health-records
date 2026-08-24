@@ -52,7 +52,7 @@ const reminderBadge = computed(() => {
 
     <nav class="settings-menu" aria-label="设置入口">
       <RouterLink to="/me/members"><UsersRound :size="20" /><div><strong>家庭成员</strong><span>{{ app.session.value?.isAdmin ? "成员资料与访问权限" : "添加和管理自己的成员" }}</span></div><ChevronRight :size="18" /></RouterLink>
-      <RouterLink v-if="app.session.value?.provider === 'local'" to="/me/account-security"><KeyRound :size="20" /><div><strong>账号安全</strong><span>修改本地管理员密码并退出所有设备</span></div><ChevronRight :size="18" /></RouterLink>
+      <RouterLink v-if="app.session.value?.provider === 'local' && app.session.value?.isAdmin" to="/me/account-security"><KeyRound :size="20" /><div><strong>账号安全</strong><span>管理本地账号与密码</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/duplicates"><GitMerge :size="20" /><div><strong>重复报告检测</strong><span>手动扫描并合并或删除重复报告</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/trash"><Trash2 :size="20" /><div><strong>回收站</strong><span>恢复或永久删除已移除报告</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/data"><DatabaseBackup :size="20" /><div><strong>备份与恢复</strong><span>成员清单导出，管理员可完整备份和恢复</span></div><ChevronRight :size="18" /></RouterLink>

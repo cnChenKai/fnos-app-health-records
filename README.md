@@ -88,7 +88,7 @@ AI 调用按运行时、任务路由和领域实现分层；Provider 凭据统�
 ## 主要功能
 
 - 家庭成员档案：支持默认本人、家庭成员新增维护，以及 fnOS 管理员对成员访问权限的管理。
-- 报告上传：支持拍照、多图、拖放、HEIC、JPEG、PNG、WebP 和多页 PDF；上传后可离开页面，后台任务继续处理。
+- 报告上传：支持拍照、多图、拖放、HEIC、JPEG、PNG、WebP 和多页 PDF；管理员还可从 fnOS 授权目录或 Docker 只读挂载目录直接导入 NAS 现有文件；上传后可离开页面，后台任务继续处理。
 - OCR 与 PDF：PDF 可拆分为单页记录；遇到原生文字层不完整、页面包含大面积扫描图或表格图片时，会按页高清渲染后 OCR，并与 PDF 文字层合并；OCR 结果记录质量分数、弱识别原因和详细处理日志；单页预览使用高清图，原 PDF 可单独查看。
 - AI 结构化：管理员可配置 OpenAI-compatible 多模型 Provider；模型切换保留各自配置，API Key 加密存储；AI 输出报告标题、类型、医院、科室、部位、日期、结论、建议、定量/定性指标和形态发现。系统会在设备内预判体检、检验、影像、门诊、住院、处方、票据和疫苗等内容类型，再为每个解析单元组合专属提取约束；诊断、用药、诊疗操作、接种和费用分别保存，体检总结、检验标本/方法、病理镜下所见、门诊病史、住院经过等原文章节也使用固定类型独立保存，不混入趋势指标。进入 AI 前会按 OCR 原始顺序重建页面并过滤患者直接个资，再按完整页面、章节和表格边界生成稳定解析单元。
 - 形态发现：影像、超声、内镜、病理和体格检查中的结构变化独立存入 `morphology_findings`，记录器官、区域、侧别、类型、尺寸、扩展测量、形态描述、原报告分级、原文证据和置信度。系统会在本地建立跨报告形态变化线，左右侧冲突不合并，多区域歧义保留待确认；成员管理员可校对字段、人工关联/拆分/合并、忽略误提取并创建复查提醒，人工结果在 AI 重跑和维护重建后仍保持优先。
@@ -102,17 +102,26 @@ AI 调用按运行时、任务路由和领域实现分层；Provider 凭据统�
 
 ## Docker 部署
 
-Docker 版本使用独立本地管理员登录，数据持久化在 `fnos-health-records-data` 卷；fnOS 安装包仍使用系统网关账号。首次启动前创建密码 Secret：
+Docker 版本使用独立本地管理员登录，默认将应用完整数据持久化在 `fnos-health-records-data` 命名卷；fnOS 安装包仍使用系统网关账号。首次启动默认账号为 `admin/admin`，首次登录后必须修改密码：
 
 ```bash
-mkdir -p secrets
-umask 077
-printf '%s\n' '替换为至少12位的强密码' > secrets/local_admin_password.txt
+mkdir -p reports
 docker compose pull
 docker compose up -d
 ```
 
-默认访问 `http://服务器地址:3334/`，用户名为 `admin`。正式环境建议固定 `HEALTH_RECORDS_VERSION` 并通过 HTTPS 反向代理访问。完整安装、升级、回滚、卷备份、OCR 和代理配置见 [Docker 部署文档](./docs/DOCKER_DEPLOYMENT.md)。
+官方镜像发布在 Docker Hub：`docker.io/timorm/fnos-app-health-records`。如需覆盖镜像仓库，可在 `.env` 中设置 `DOCKERHUB_IMAGE=你的账号/fnos-app-health-records`。
+
+默认访问 `http://服务器地址:3334/`，用户名和密码为 `admin`；首次登录后必须修改密码。管理员可在“账号安全”添加普通本地账号或将已有本地账号重置为临时密码 `admin`。正式环境建议固定 `HEALTH_RECORDS_VERSION` 并通过 HTTPS 反向代理访问。完整安装、升级、回滚、卷备份、OCR 和代理配置见 [Docker 部署文档](./docs/DOCKER_DEPLOYMENT.md)。
+
+Compose 默认将当前目录的 `./reports` 只读挂载到容器 `/reports`。也可设置 `REPORTS_HOST_PATH=/mnt/nas/health-reports` 后重建容器，在“上传报告 -> 从 NAS 导入”中选择已有报告；应用会复制原件到自身数据卷，不会移动或修改源文件。旧版本默认使用 `./imports` 时，请将原目录改名为 `./reports`，或显式保留 `REPORTS_HOST_PATH=./imports`。
+
+Docker 的两个目录职责彼此独立：`REPORTS_HOST_PATH` 是 NAS 上已有报告的源目录，只读挂载到 `/reports`；`DATA_HOST_PATH` 是应用数据库、原件、配置、日志、备份和 OCR 环境的可写存储目录，挂载到 `/data`。如果希望两者都使用 NAS 上的明确目录，可在 `.env` 中设置：
+
+```dotenv
+REPORTS_HOST_PATH=/mnt/nas/health-reports
+DATA_HOST_PATH=/mnt/nas/health-records
+```
 
 本地管理员可在应用内修改密码；忘记密码时可在停止容器后使用镜像内置的离线重置命令，过程不会影响 fnOS 网关账号。
 
@@ -256,7 +265,7 @@ OCR 环境不会随应用包内置完整 Python 虚拟环境，首次使用前�
 3. 如果没有 3.9–3.11，会尝试安装应用私有 Python 3.11 到应用数据目录。
 4. 如果没有配置私有 Python 安装包，最后才回退到系统 Python 3.12，并使用 ONNXRuntime 兼容后端。
 
-OpenVINO 依赖安装或动态库加载失败时会自动切换到 ONNXRuntime 备用后端。Python 3.12 环境会直接使用 ONNXRuntime，因为当前锁定的 OpenVINO 版本范围没有 Python 3.12 可用 wheel。
+OpenVINO 依赖安装或动态库加载失败时会自动切换到 ONNXRuntime 备用后端。Python 3.12 环境会直接使用 ONNXRuntime，因为当前锁定的 OpenVINO 版本范围没有 Python 3.12 可用 wheel。ARM64 环境也会直接使用 ONNXRuntime；部分 ARM64 OpenVINO 版本虽然能通过单次导入测试，但连续推理时会出现内存暴涨，不能作为稳定的长任务后端。
 
 应用私有 Python 不会写入 `/usr/bin`、`/usr/local/bin` 等系统路径，默认安装在：
 
@@ -292,6 +301,7 @@ Python 3.12 使用 ONNXRuntime 后端时，首次安装会下载 rapidocr、onnx
 - 设备无法访问 PyPI，或需要配置可用的 pip 镜像。
 - 未配置应用私有 Python 包，且设备上只有 Python 3.12 时，会自动回退 ONNXRuntime，不会继续强装 OpenVINO。
 - 当前 CPU 架构或 Python 版本没有 rapidocr-openvino/openvino 对应 wheel；应用会尽量自动切换到 ONNXRuntime 后端。
+- ARM64 设备升级后如果页面显示旧 OCR 环境需要重新安装，请重新安装一次；应用会把旧的 OpenVINO 环境标记为不兼容并改用 ONNXRuntime。
 - 数据目录不可写或磁盘空间不足。
 - macOS arm64 仅作为开发环境参考，OpenVINO macOS wheel 可能出现动态库加载兼容问题；fnOS OCR 验收应以 Linux 真机日志为准。
 

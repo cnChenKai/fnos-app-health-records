@@ -93,12 +93,20 @@ function safeDetailJson(detail?: Record<string, unknown>) {
 function hasOcrRuntime(config = getAppConfig()) {
   if (!existsSync(config.ocrPythonBin) || !existsSync(config.ocrWorkerScript))
     return false;
-  if (
-    !existsSync(
-      join(dirname(dirname(config.ocrPythonBin)), ".health-records-ocr-ready"),
-    )
-  )
+  const markerPath = join(dirname(dirname(config.ocrPythonBin)), ".health-records-ocr-ready");
+  if (!existsSync(markerPath))
     return false;
+  if (process.arch === "arm64") {
+    try {
+      const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+        backend?: string;
+        engine?: string;
+      };
+      if ((marker.engine || marker.backend) !== "rapidocr-onnxruntime") return false;
+    } catch {
+      return false;
+    }
+  }
   const statusPath = join(
     config.storageDir,
     "config",

@@ -8,7 +8,7 @@ export async function downloadFile(path: string, fallbackName: string) {
   try {
     response = await fetch(apiUrl(path));
   } catch (cause) {
-    throw new Error(`无法连接服务器，请检查网络或 fnOS 网关状态后重试（${describeTechnical(cause)}）`);
+    throw new Error(`无法连接服务器，请检查网络与应用服务状态后重试（${describeTechnical(cause)}）`);
   }
   if (!response.ok) {
     let detail = "";
@@ -38,7 +38,7 @@ export async function downloadStreamedFile(path: string, fallbackName: string) {
   try {
     response = await fetch(url, { method: "HEAD", cache: "no-store" });
   } catch (cause) {
-    throw new Error(`无法连接服务器，请检查网络或 fnOS 网关状态后重试（${describeTechnical(cause)}）`);
+    throw new Error(`无法连接服务器，请检查网络与应用服务状态后重试（${describeTechnical(cause)}）`);
   }
   if (!response.ok) {
     throw new Error(`备份文件下载准备失败（HTTP ${response.status}）`);

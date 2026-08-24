@@ -1,6 +1,6 @@
 services:
   health-records:
-    image: ghcr.io/timor-m/fnos-app-health-records:${HEALTH_RECORDS_VERSION:-latest}
+    image: docker.io/${DOCKERHUB_IMAGE:-timorm/fnos-app-health-records}:${HEALTH_RECORDS_VERSION:-latest}
     build:
       context: .
       args:
@@ -13,23 +13,17 @@ services:
     environment:
       AUTH_MODE: local
       GATEWAY_PREFIX: /
-      LOCAL_ADMIN_USERNAME: ${LOCAL_ADMIN_USERNAME:-admin}
       LOCAL_ADMIN_DISPLAY_NAME: ${LOCAL_ADMIN_DISPLAY_NAME:-本地管理员}
-      LOCAL_ADMIN_PASSWORD_FILE: /run/secrets/local_admin_password
       TRUST_PROXY: ${TRUST_PROXY:-0}
+      IMPORT_ROOTS: /reports
       TZ: ${TZ:-Asia/Shanghai}
-    secrets:
-      - local_admin_password
     volumes:
-      - health-records-data:/data
+      - ${DATA_HOST_PATH:-health-records-data}:/data
+      - ${REPORTS_HOST_PATH:-${IMPORT_HOST_PATH:-./reports}}:/reports:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     security_opt:
       - no-new-privileges:true
-
-secrets:
-  local_admin_password:
-    file: ${LOCAL_ADMIN_PASSWORD_FILE:-./secrets/local_admin_password.txt}
 
 volumes:
   health-records-data:

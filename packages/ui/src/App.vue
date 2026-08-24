@@ -4,6 +4,7 @@ import { onMounted } from "vue";
 import AppShell from "./layouts/AppShell.vue";
 import ConfirmDialog from "./components/ConfirmDialog.vue";
 import LoginView from "./pages/LoginView.vue";
+import PasswordChangeRequiredView from "./pages/PasswordChangeRequiredView.vue";
 import { useAppContext } from "./composables/useAppContext";
 import { useTheme } from "./composables/useTheme";
 import { useToast } from "./composables/useToast";
@@ -57,6 +58,7 @@ onMounted(() => {
     <button class="primary-button" type="button" @click="app.load">重试</button>
   </div>
   <LoginView v-else-if="!app.session.value?.authenticated" @authenticated="app.load" />
+  <PasswordChangeRequiredView v-else-if="app.session.value?.mustChangePassword" />
   <AppShell v-else />
   <ConfirmDialog />
   <div class="toast" :class="{ show: toast.visible.value }" role="status">{{ toast.message.value }}</div>

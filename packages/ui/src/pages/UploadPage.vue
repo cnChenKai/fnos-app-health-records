@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onActivated, onBeforeUnmount, onDeactivated, ref } from "vue";
 import {
-  ArrowDown, ArrowUp, Camera, CheckCircle2, CircleAlert, FileImage, FileText,
-  ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
+  ArrowDown, ArrowUp, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
+  Folder, FolderOpen, HardDrive, ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
 } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
 import { request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
+import { getDeploymentCopy } from "../utils/deployment-copy";
 import type { ProcessingJob } from "../types/api";
 import {
   calculateProcessingJobProgress, groupProcessingJobBatches, isProcessingJobBatchSettled
@@ -27,6 +28,28 @@ type UploadResult = {
   jobCount: number;
 };
 
+type LocalImportRoot = { id: string; label: string; path: string };
+type LocalImportEntry = {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  size: number | null;
+  modifiedAt: string;
+};
+type LocalBrowserResponse = {
+  roots: LocalImportRoot[];
+  current: { rootId: string; path: string } | null;
+  entries: LocalImportEntry[];
+  truncated: boolean;
+  availability: {
+    state: "ready" | "not_configured" | "unavailable";
+    configuredCount: number;
+    unavailableCount: number;
+    message: string | null;
+  };
+};
+type SelectedLocalFile = { rootId: string; path: string; name: string; size: number };
+
 
 const app = useAppContext();
 const items = ref<QueueItem[]>([]);
@@ -36,6 +59,16 @@ const error = ref("");
 const result = ref<UploadResult | null>(null);
 const jobs = ref<ProcessingJob[]>([]);
 const runtimeAvailable = ref(true);
+const localBrowserOpen = ref(false);
+const localBrowserLoading = ref(false);
+const localImporting = ref(false);
+const localError = ref("");
+const localRoots = ref<LocalImportRoot[]>([]);
+const localCurrent = ref<{ rootId: string; path: string } | null>(null);
+const localEntries = ref<LocalImportEntry[]>([]);
+const localTruncated = ref(false);
+const localAvailability = ref<LocalBrowserResponse["availability"] | null>(null);
+const selectedLocalFiles = ref<SelectedLocalFile[]>([]);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const totalBytes = computed(() => items.value.reduce((total, item) => total + item.file.size, 0));
 const batchGroups = computed(() => groupProcessingJobBatches(jobs.value));
@@ -54,6 +87,13 @@ const ocrEmptyWarning = computed(() => {
   return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
 });
 const accept = ".heic,.heif,.jpg,.jpeg,.png,.webp,.pdf,image/heic,image/heif,image/jpeg,image/png,image/webp,application/pdf";
+const localSelectionBytes = computed(() => selectedLocalFiles.value.reduce((sum, file) => sum + file.size, 0));
+const currentLocalRoot = computed(() => localRoots.value.find((root) => root.id === localCurrent.value?.rootId) || null);
+const localBreadcrumbs = computed(() => {
+  const segments = (localCurrent.value?.path || "").split("/").filter(Boolean);
+  return segments.map((name, index) => ({ name, path: segments.slice(0, index + 1).join("/") }));
+});
+const deploymentCopy = computed(() => getDeploymentCopy(app.session.value?.authMode));
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -156,6 +196,113 @@ function rotate(item: QueueItem) {
 function clearQueue() {
   for (const item of items.value) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
   items.value = [];
+}
+
+function isLocalSelected(entry: LocalImportEntry) {
+  if (!localCurrent.value) return false;
+  return selectedLocalFiles.value.some((file) => file.rootId === localCurrent.value?.rootId && file.path === entry.path);
+}
+
+async function loadLocalDirectory(rootId?: string, path = "") {
+  localBrowserLoading.value = true;
+  localError.value = "";
+  try {
+    const query = rootId
+      ? `?rootId=${encodeURIComponent(rootId)}&path=${encodeURIComponent(path)}`
+      : "";
+    const response = await request<LocalBrowserResponse>(`local-files${query}`);
+    localRoots.value = response.roots;
+    localCurrent.value = response.current;
+    localEntries.value = response.entries;
+    localTruncated.value = response.truncated;
+    localAvailability.value = response.availability;
+  } catch (cause) {
+    localError.value = cause instanceof Error ? cause.message : "无法读取 NAS 目录";
+  } finally {
+    localBrowserLoading.value = false;
+  }
+}
+
+async function openLocalBrowser() {
+  localBrowserOpen.value = true;
+  localRoots.value = [];
+  localCurrent.value = null;
+  localEntries.value = [];
+  localTruncated.value = false;
+  localAvailability.value = null;
+  selectedLocalFiles.value = [];
+  await loadLocalDirectory();
+  if (localRoots.value.length === 1) await loadLocalDirectory(localRoots.value[0]!.id);
+}
+
+function closeLocalBrowser() {
+  if (localImporting.value) return;
+  localBrowserOpen.value = false;
+  localError.value = "";
+}
+
+function chooseLocalRoot(root: LocalImportRoot) {
+  void loadLocalDirectory(root.id);
+}
+
+function openLocalDirectory(entry: LocalImportEntry) {
+  if (!localCurrent.value || entry.type !== "directory") return;
+  void loadLocalDirectory(localCurrent.value.rootId, entry.path);
+}
+
+function toggleLocalFile(entry: LocalImportEntry) {
+  if (!localCurrent.value || entry.type !== "file") return;
+  localError.value = "";
+  const index = selectedLocalFiles.value.findIndex((file) =>
+    file.rootId === localCurrent.value?.rootId && file.path === entry.path
+  );
+  if (index >= 0) {
+    selectedLocalFiles.value.splice(index, 1);
+    return;
+  }
+  if (selectedLocalFiles.value.length >= 24) {
+    localError.value = "一次最多导入 24 个文件";
+    return;
+  }
+  if ((entry.size || 0) > 40 * 1024 * 1024) {
+    localError.value = "单个文件不能超过 40 MB";
+    return;
+  }
+  if (localSelectionBytes.value + (entry.size || 0) > 200 * 1024 * 1024) {
+    localError.value = "单次导入不能超过 200 MB";
+    return;
+  }
+  selectedLocalFiles.value.push({
+    rootId: localCurrent.value.rootId,
+    path: entry.path,
+    name: entry.name,
+    size: entry.size || 0
+  });
+}
+
+async function submitLocalImport() {
+  if (!selectedLocalFiles.value.length || !app.selectedMemberId.value) return;
+  localImporting.value = true;
+  localError.value = "";
+  error.value = "";
+  result.value = null;
+  try {
+    result.value = await request<UploadResult>("local-files/import", {
+      method: "POST",
+      body: JSON.stringify({
+        memberId: app.selectedMemberId.value,
+        files: selectedLocalFiles.value.map(({ rootId, path }) => ({ rootId, path }))
+      })
+    });
+    clearQueue();
+    selectedLocalFiles.value = [];
+    localBrowserOpen.value = false;
+    startPolling();
+  } catch (cause) {
+    localError.value = cause instanceof Error ? cause.message : "从 NAS 导入失败";
+  } finally {
+    localImporting.value = false;
+  }
 }
 
 function stopPolling() {
@@ -295,6 +442,9 @@ onActivated(() => {
           <Camera :size="18" /><span>拍照</span>
           <input type="file" accept="image/*" capture="environment" aria-label="拍摄报告照片" @change="pick" />
         </label>
+        <button v-if="app.session.value?.isAdmin" class="nas-import-button" type="button" @click="openLocalBrowser">
+          <HardDrive :size="18" /><span>从 NAS 导入</span>
+        </button>
       </div>
     </div>
 
@@ -319,7 +469,7 @@ onActivated(() => {
       </div>
       <div v-if="!runtimeAvailable" class="runtime-warning">
         <CircleAlert :size="18" />
-        <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已安全保存，安装后任务会自动继续。" : "原件已安全保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
+        <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已安全保存，安装后任务会自动继续。" : `原件已安全保存，请联系${deploymentCopy.administrator}安装 OCR 环境。` }}</span></div>
         <RouterLink v-if="app.session.value?.isAdmin" to="/me/runtime">前往运行与识别</RouterLink>
       </div>
       <div v-if="ocrEmptyWarning" class="runtime-warning">
@@ -361,5 +511,70 @@ onActivated(() => {
         </button>
       </div>
     </div>
+
+    <Teleport to="body">
+      <div v-if="localBrowserOpen" class="modal-backdrop local-file-backdrop" @click.self="closeLocalBrowser">
+        <section class="modal-panel local-file-modal" role="dialog" aria-modal="true" aria-labelledby="local-file-title">
+          <header>
+            <div><FolderOpen :size="20" /><h3 id="local-file-title">从 NAS 导入报告</h3></div>
+            <button type="button" title="关闭" :disabled="localImporting" @click="closeLocalBrowser"><X :size="20" /></button>
+          </header>
+
+          <div class="local-file-browser">
+            <div v-if="localCurrent" class="local-file-toolbar">
+              <nav aria-label="当前目录">
+                <button type="button" @click="loadLocalDirectory(localCurrent.rootId)">{{ currentLocalRoot?.label || "授权目录" }}</button>
+                <template v-for="crumb in localBreadcrumbs" :key="crumb.path">
+                  <ChevronRight :size="14" />
+                  <button type="button" @click="loadLocalDirectory(localCurrent.rootId, crumb.path)">{{ crumb.name }}</button>
+                </template>
+              </nav>
+              <button v-if="localRoots.length > 1" type="button" @click="loadLocalDirectory()">切换目录</button>
+            </div>
+
+            <div v-if="localBrowserLoading" class="local-file-empty"><LoaderCircle class="spin-icon" :size="24" /><span>正在读取目录</span></div>
+            <div v-else-if="localError && !localRoots.length" class="local-file-empty is-error"><CircleAlert :size="24" /><span>{{ localError }}</span></div>
+            <div v-else-if="!localCurrent && !localRoots.length" class="local-file-empty">
+              <HardDrive :size="28" />
+              <strong>{{ localAvailability?.state === "unavailable" ? "授权目录当前不可读取" : deploymentCopy.importEmptyTitle }}</strong>
+              <span>{{ localAvailability?.message || deploymentCopy.importEmptyDescription }}</span>
+              <button class="soft-action-button" type="button" title="重新检测授权目录" @click="loadLocalDirectory()">
+                <RefreshCw :size="16" /><span>重新检测</span>
+              </button>
+            </div>
+            <div v-else-if="!localCurrent" class="local-root-list">
+              <button v-for="root in localRoots" :key="root.id" type="button" @click="chooseLocalRoot(root)">
+                <HardDrive :size="21" /><span><strong>{{ root.label }}</strong><small>{{ root.path }}</small></span><ChevronRight :size="18" />
+              </button>
+            </div>
+            <div v-else-if="!localEntries.length" class="local-file-empty"><Folder :size="26" /><span>此目录中没有支持的报告文件</span></div>
+            <div v-else class="local-entry-list">
+              <template v-for="entry in localEntries" :key="entry.path">
+                <button v-if="entry.type === 'directory'" class="local-entry is-directory" type="button" @click="openLocalDirectory(entry)">
+                  <Folder :size="20" /><span><strong>{{ entry.name }}</strong><small>文件夹</small></span><ChevronRight :size="17" />
+                </button>
+                <label v-else class="local-entry" :class="{ 'is-selected': isLocalSelected(entry) }">
+                  <input type="checkbox" :checked="isLocalSelected(entry)" @change="toggleLocalFile(entry)" />
+                  <FileText v-if="/\.pdf$/i.test(entry.name)" :size="20" />
+                  <FileImage v-else :size="20" />
+                  <span><strong>{{ entry.name }}</strong><small>{{ formatBytes(entry.size || 0) }}</small></span>
+                </label>
+              </template>
+              <p v-if="localTruncated" class="local-file-limit">目录内容较多，仅显示前 500 项，请进入更具体的子目录。</p>
+            </div>
+          </div>
+
+          <p v-if="(localError || localAvailability?.message) && localRoots.length" class="local-file-error">{{ localError || localAvailability?.message }}</p>
+          <footer class="local-file-footer">
+            <span>已选 {{ selectedLocalFiles.length }} 个文件<template v-if="selectedLocalFiles.length"> · {{ formatBytes(localSelectionBytes) }}</template></span>
+            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting" @click="submitLocalImport">
+              <LoaderCircle v-if="localImporting" class="spin-icon" :size="18" />
+              <HardDrive v-else :size="18" />
+              {{ localImporting ? "正在导入" : "导入并开始识别" }}
+            </button>
+          </footer>
+        </section>
+      </div>
+    </Teleport>
   </section>
 </template>

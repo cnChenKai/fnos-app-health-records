@@ -23,6 +23,22 @@ def ocr_line(text, confidence, x1, y1, x2, y2, variant=None):
 
 
 class TableRetryTest(unittest.TestCase):
+    def test_auto_backend_prefers_onnxruntime_on_arm64(self):
+        self.assertEqual(
+            worker.backend_candidates(machine="aarch64"),
+            ["onnxruntime", "openvino"],
+        )
+        self.assertEqual(
+            worker.backend_candidates(machine="x86_64"),
+            ["openvino", "onnxruntime"],
+        )
+
+    def test_explicit_backend_is_not_overridden_by_architecture(self):
+        self.assertEqual(
+            worker.backend_candidates("openvino", "aarch64"),
+            ["openvino"],
+        )
+
     def test_detects_missing_and_corrupted_double_column_results(self):
         lines = [
             ocr_line("白细胞数(WBC)", 0.97, 80, 60, 260, 90),

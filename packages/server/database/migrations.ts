@@ -414,6 +414,13 @@ export function tableColumnNames(db: DatabaseSync, tableName: string) {
   return new Set(columns.map((column) => column.name));
 }
 
+export function ensureLocalAccountColumns(db: DatabaseSync) {
+  const columns = tableColumnNames(db, "local_accounts");
+  if (!columns.has("must_change_password")) {
+    db.exec("ALTER TABLE local_accounts ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0 CHECK (must_change_password IN (0, 1))");
+  }
+}
+
 // OCR 行坐标系参考尺寸（页面点坐标/校正后图片像素），供叠加层按统一坐标系定位。
 // 版本冻结期不新增 schema 版本，随每次启动幂等补齐。
 export function ensureOcrCoordSpaceColumns(db: DatabaseSync) {

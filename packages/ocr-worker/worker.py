@@ -351,9 +351,23 @@ def validate_pdf_page(page: Any, render_scale: float) -> tuple[float, float]:
     return width, height
 
 
+def backend_candidates(requested: str | None = None, machine: str | None = None) -> list[str]:
+    requested = str(requested if requested is not None else os.environ.get("OCR_BACKEND", "auto")).strip().lower()
+    if requested in {"", "auto"}:
+        machine = str(machine if machine is not None else platform.machine()).strip().lower()
+        # OpenVINO can pass a one-shot smoke test on ARM64 but has been observed
+        # to exhaust container memory on the second inference. ONNXRuntime is
+        # the stable backend for repeated ARM64 OCR requests.
+        return (
+            ["onnxruntime", "openvino"]
+            if machine in {"aarch64", "arm64"}
+            else ["openvino", "onnxruntime"]
+        )
+    return [requested]
+
+
 def load_engine():
-    requested = str(os.environ.get("OCR_BACKEND", "auto")).strip().lower()
-    candidates = ["openvino", "onnxruntime"] if requested in {"", "auto"} else [requested]
+    candidates = backend_candidates()
     errors: list[str] = []
 
     for candidate in candidates:
@@ -431,11 +445,20 @@ def run_smoke_test() -> dict[str, Any]:
         recognize_started = time.perf_counter()
         lines, engine_elapsed = recognize_image(engine, image_path, None)
         recognize_elapsed_ms = round((time.perf_counter() - recognize_started) * 1000)
+        repeat_started = time.perf_counter()
+        repeat_lines, repeat_engine_elapsed = recognize_image(engine, image_path, None)
+        repeat_elapsed_ms = round((time.perf_counter() - repeat_started) * 1000)
 
     texts = [str(line.get("text", "")) for line in lines]
     joined = " ".join(texts).upper()
     if "OCR" not in joined or "2026" not in joined:
         raise RuntimeError(f"OCR smoke test did not recognize expected text. recognized={texts[:8]}")
+    repeat_texts = [str(line.get("text", "")) for line in repeat_lines]
+    repeat_joined = " ".join(repeat_texts).upper()
+    if "OCR" not in repeat_joined or "2026" not in repeat_joined:
+        raise RuntimeError(
+            f"OCR repeated smoke test did not recognize expected text. recognized={repeat_texts[:8]}"
+        )
 
     return {
         "backend": backend["name"],
@@ -443,6 +466,8 @@ def run_smoke_test() -> dict[str, Any]:
         "engineLoadMs": load_elapsed_ms,
         "recognizeMs": recognize_elapsed_ms,
         "engineElapsed": engine_elapsed,
+        "repeatRecognizeMs": repeat_elapsed_ms,
+        "repeatEngineElapsed": repeat_engine_elapsed,
         "recognizedText": texts[:8],
     }
 

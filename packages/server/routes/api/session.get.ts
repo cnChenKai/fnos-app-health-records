@@ -11,6 +11,7 @@ export default defineEventHandler((event) => {
   return ok({
     ...user,
     isAdmin: isAdministrator(user),
+    mustChangePassword: Boolean(user.mustChangePassword),
     authMode: config.authMode,
     setupRequired: config.authMode === "local" && localAuthSetupRequired()
   });

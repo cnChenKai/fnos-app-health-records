@@ -19,6 +19,7 @@ import { resolveClinicalEvidenceNavigation } from "../utils/clinical-evidence-na
 import { resolveReportReprocessNotice } from "../utils/report-reprocess-state";
 import { resolveProcessingDelayNotice, resolveProcessingRecoveryState } from "../utils/processing-recovery-state";
 import { processingCodeLabel } from "../utils/processing-code-labels";
+import { getDeploymentCopy } from "../utils/deployment-copy";
 import {
   calculateProcessingJobProgress, groupProcessingJobBatches, isProcessingJobBatchSettled,
   processingJobBatchLabel, type ProcessingJobBatch
@@ -48,6 +49,7 @@ const emit = defineEmits<{
 }>();
 
 const app = useAppContext();
+const deploymentCopy = computed(() => getDeploymentCopy(app.session.value?.authMode));
 const toast = useToast();
 const confirmDialog = useConfirm();
 const detail = ref<ReportDetail | null>(null);
@@ -1972,7 +1974,7 @@ onActivated(() => {
       <div v-if="processingExpanded" class="processing-details">
         <div v-if="needsOcrRuntime" class="runtime-warning compact">
           <CircleAlert :size="18" />
-          <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已保存，安装后任务会自动继续。" : "原件已保存，请联系 fnOS 管理员安装 OCR 环境。" }}</span></div>
+          <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已保存，安装后任务会自动继续。" : `原件已保存，请联系${deploymentCopy.administrator}安装 OCR 环境。` }}</span></div>
           <RouterLink v-if="app.session.value?.isAdmin" to="/me/runtime">去设置</RouterLink>
         </div>
         <div v-if="jobsPollingStopped" class="processing-recovery-notice">

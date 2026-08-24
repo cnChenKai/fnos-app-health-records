@@ -1,5 +1,4 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { createError, getRequestIP, setCookie, deleteCookie, type H3Event } from "h3";
 import { getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
@@ -35,22 +34,16 @@ function cleanBootstrapUsername(value: string) {
   return username;
 }
 
-function cleanBootstrapPassword(value: string) {
+function cleanPassword(value: string) {
   const password = value.trim();
-  if (password.length < 12 || password.length > 128) {
-    throw new Error("Local administrator password must contain 12-128 characters");
+  if (password.length < 8 || password.length > 128) {
+    throw new Error("Local password must contain 8-128 characters");
   }
   return password;
 }
 
-function bootstrapPassword() {
-  const path = String(process.env.LOCAL_ADMIN_PASSWORD_FILE || "").trim();
-  if (path) {
-    if (!existsSync(path)) throw new Error(`LOCAL_ADMIN_PASSWORD_FILE does not exist: ${path}`);
-    return readFileSync(path, "utf8").trim();
-  }
-  return String(process.env.LOCAL_ADMIN_PASSWORD || "").trim();
-}
+const defaultLocalAdminUsername = "admin";
+const defaultLocalAdminPassword = "admin";
 
 export function localAuthSetupRequired() {
   if (getAppConfig().authMode !== "local") return false;
@@ -64,12 +57,11 @@ export function bootstrapLocalAdministrator() {
   if (getAppConfig().authMode !== "local" || !localAuthSetupRequired()) {
     return { created: false, setupRequired: false };
   }
-  const rawPassword = bootstrapPassword();
-  if (!rawPassword) return { created: false, setupRequired: true };
-
-  const username = cleanBootstrapUsername(process.env.LOCAL_ADMIN_USERNAME || "admin");
+  const username = cleanBootstrapUsername(process.env.LOCAL_ADMIN_USERNAME || defaultLocalAdminUsername);
   const displayName = String(process.env.LOCAL_ADMIN_DISPLAY_NAME || username).trim().slice(0, 40) || username;
-  const password = cleanBootstrapPassword(rawPassword);
+  /* 环境变量仍兼容旧部署；新部署无需 Secret，空数据库固定使用 admin/admin。 */
+  const configuredPassword = String(process.env.LOCAL_ADMIN_PASSWORD || "").trim();
+  const password = configuredPassword ? cleanPassword(configuredPassword) : defaultLocalAdminPassword;
   const passwordValue = hashPassword(password);
   const userId = createId("user");
   const db = getDatabase();
@@ -87,8 +79,8 @@ export function bootstrapLocalAdministrator() {
       INSERT INTO user_identities (id, user_id, provider, subject) VALUES (?, ?, 'local', ?)
     `).run(createId("identity"), userId, username);
     db.prepare(`
-      INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt, must_change_password)
+      VALUES (?, ?, ?, ?, ?, 1)
     `).run(createId("account"), userId, username, passwordValue.hash, passwordValue.salt);
     const memberId = createId("member");
     db.prepare(`
@@ -104,7 +96,6 @@ export function bootstrapLocalAdministrator() {
       VALUES (?, ?, 'auth.local_admin_bootstrap', 'user', ?, ?)
     `).run(createId("audit"), userId, userId, JSON.stringify({ username }));
     db.exec("COMMIT");
-    delete process.env.LOCAL_ADMIN_PASSWORD;
     return { created: true, setupRequired: false, username };
   } catch (cause) {
     db.exec("ROLLBACK");
@@ -119,12 +110,13 @@ export function getLocalSessionUser(event: H3Event): RequestUser | null {
   const hash = tokenHash(token);
   const db = getDatabase();
   const row = db.prepare(`
-    SELECT u.id, u.display_name AS displayName, u.is_gateway_admin AS isAdmin
+    SELECT u.id, u.display_name AS displayName, u.is_gateway_admin AS isAdmin,
+      la.must_change_password AS mustChangePassword
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
     JOIN local_accounts la ON la.user_id = u.id AND la.disabled_at IS NULL
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP
-  `).get(hash) as { id: string; displayName: string; isAdmin: number } | undefined;
+  `).get(hash) as { id: string; displayName: string; isAdmin: number; mustChangePassword: number } | undefined;
   if (!row) return null;
   db.prepare(`
     UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP
@@ -136,6 +128,7 @@ export function getLocalSessionUser(event: H3Event): RequestUser | null {
     provider: "local",
     authenticated: true,
     isAdmin: Boolean(row.isAdmin),
+    mustChangePassword: Boolean(row.mustChangePassword),
     isGatewayAdmin: Boolean(row.isAdmin)
   };
 }
@@ -165,9 +158,7 @@ export function login(event: H3Event, body: Record<string, unknown>) {
   if (getAppConfig().authMode !== "local") {
     throw createError({ statusCode: 410, statusMessage: "当前部署使用 fnOS 账号体系，不提供独立登录" });
   }
-  if (localAuthSetupRequired()) {
-    throw createError({ statusCode: 503, statusMessage: "本地管理员尚未初始化，请先配置 Docker Secret 并重启" });
-  }
+  if (localAuthSetupRequired()) throw createError({ statusCode: 503, statusMessage: "本地管理员尚未初始化，请重启应用" });
   const username = requiredText(body.username, "用户名");
   const password = requiredText(body.password, "密码");
   const ip = getRequestIP(event, { xForwardedFor: getAppConfig().trustProxy }) || "unknown";
@@ -182,9 +173,10 @@ export function login(event: H3Event, body: Record<string, unknown>) {
   }
 
   const account = db.prepare(`
-    SELECT la.user_id AS userId, la.password_hash AS passwordHash, la.password_salt AS passwordSalt
+    SELECT la.user_id AS userId, la.password_hash AS passwordHash, la.password_salt AS passwordSalt,
+      la.must_change_password AS mustChangePassword
     FROM local_accounts la WHERE la.username = ? AND la.disabled_at IS NULL
-  `).get(username) as { userId: string; passwordHash: string; passwordSalt: string } | undefined;
+  `).get(username) as { userId: string; passwordHash: string; passwordSalt: string; mustChangePassword: number } | undefined;
   const succeeded = Boolean(account && verifyPassword(password, account.passwordSalt, account.passwordHash));
   db.prepare("INSERT INTO login_attempts (username, ip_address, succeeded) VALUES (?, ?, ?)")
     .run(username, ip, succeeded ? 1 : 0);
@@ -207,7 +199,7 @@ export function login(event: H3Event, body: Record<string, unknown>) {
     path: "/",
     maxAge: 12 * 60 * 60
   });
-  return { authenticated: true };
+  return { authenticated: true, mustChangePassword: Boolean(account.mustChangePassword) };
 }
 
 export function logout(event: H3Event) {
@@ -224,18 +216,16 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
     throw createError({ statusCode: 410, statusMessage: "当前部署使用 fnOS 账号体系，密码由 fnOS 统一管理" });
   }
   if (!user.authenticated) throw createError({ statusCode: 401, statusMessage: "请先登录" });
-  if (user.provider !== "local" || !isAdministrator(user)) {
-    throw createError({ statusCode: 403, statusMessage: "仅本地管理员可修改密码" });
-  }
+  if (user.provider !== "local") throw createError({ statusCode: 403, statusMessage: "仅本地账号可修改密码" });
 
-  const currentPassword = requiredText(body.currentPassword, "当前密码");
+  const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword.trim() : "";
   let newPassword = "";
   try {
-    newPassword = cleanBootstrapPassword(requiredText(body.newPassword, "新密码"));
+    newPassword = cleanPassword(requiredText(body.newPassword, "新密码"));
   } catch {
     throw createError({
       statusCode: 400,
-      statusMessage: "新密码长度必须为 12-128 个字符"
+      statusMessage: "新密码长度必须为 8-128 个字符"
     });
   }
   const confirmation = requiredText(body.confirmPassword, "确认密码");
@@ -248,15 +238,18 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
 
   const db = getDatabase();
   const account = db.prepare(`
-    SELECT id, username, password_hash AS passwordHash, password_salt AS passwordSalt
+    SELECT id, username, password_hash AS passwordHash, password_salt AS passwordSalt,
+      must_change_password AS mustChangePassword
     FROM local_accounts WHERE user_id = ? AND disabled_at IS NULL
   `).get(user.id) as {
     id: string;
     username: string;
     passwordHash: string;
     passwordSalt: string;
+    mustChangePassword: number;
   } | undefined;
-  if (!account || !verifyPassword(currentPassword, account.passwordSalt, account.passwordHash)) {
+  const forcedChange = Boolean(user.mustChangePassword) && Boolean(account?.mustChangePassword);
+  if (!account || (!forcedChange && (!currentPassword || !verifyPassword(currentPassword, account.passwordSalt, account.passwordHash)))) {
     throw createError({ statusCode: 400, statusMessage: "当前密码不正确" });
   }
 
@@ -265,7 +258,7 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
   try {
     db.prepare(`
       UPDATE local_accounts
-      SET password_hash = ?, password_salt = ?, updated_at = CURRENT_TIMESTAMP
+      SET password_hash = ?, password_salt = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(next.hash, next.salt, account.id);
     db.prepare(`
@@ -275,8 +268,8 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
     db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
-      VALUES (?, ?, 'auth.local_password_changed', 'user', ?, ?)
-    `).run(createId("audit"), user.id, user.id, JSON.stringify({ username: account.username, sessionsRevoked: true }));
+      VALUES (?, ?, ?, 'user', ?, ?)
+    `).run(createId("audit"), user.id, forcedChange ? "auth.local_password_first_changed" : "auth.local_password_changed", user.id, JSON.stringify({ username: account.username, sessionsRevoked: true }));
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");
@@ -284,4 +277,115 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
   }
   deleteCookie(event, "health_session", { path: "/" });
   return { changed: true, reauthenticationRequired: true };
+}
+
+function requireLocalAdministrator(user: RequestUser) {
+  if (getAppConfig().authMode !== "local") {
+    throw createError({ statusCode: 410, statusMessage: "当前部署使用 fnOS 账号体系，账号密码由 fnOS 统一管理" });
+  }
+  if (!user.authenticated) throw createError({ statusCode: 401, statusMessage: "请先登录" });
+  if (user.provider !== "local" || !isAdministrator(user)) {
+    throw createError({ statusCode: 403, statusMessage: "仅本地管理员可管理账号" });
+  }
+}
+
+export function listLocalAccounts(user: RequestUser) {
+  requireLocalAdministrator(user);
+  return getDatabase().prepare(`
+    SELECT la.id, la.user_id AS userId, la.username, u.display_name AS displayName,
+      u.is_gateway_admin AS isAdmin, la.must_change_password AS mustChangePassword,
+      la.disabled_at AS disabledAt
+    FROM local_accounts la
+    JOIN users u ON u.id = la.user_id
+    ORDER BY u.is_gateway_admin DESC, u.display_name, la.username
+  `).all();
+}
+
+export function createLocalAccount(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  let username = "";
+  try {
+    username = cleanBootstrapUsername(requiredText(body.username, "用户名"));
+  } catch (cause) {
+    if (cause && typeof cause === "object" && "statusCode" in cause) throw cause;
+    throw createError({ statusCode: 400, statusMessage: "用户名需为 3-64 位字母、数字、点、下划线或短横线" });
+  }
+  const displayName = requiredText(body.displayName, "显示名称").slice(0, 40);
+  const db = getDatabase();
+  if (db.prepare("SELECT 1 FROM local_accounts WHERE username = ?").get(username)) {
+    throw createError({ statusCode: 409, statusMessage: "用户名已存在" });
+  }
+  const userId = createId("user");
+  const passwordValue = hashPassword(defaultLocalAdminPassword);
+  const memberId = createId("member");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 0)").run(userId, displayName);
+    db.prepare("INSERT INTO user_identities (id, user_id, provider, subject) VALUES (?, ?, 'local', ?)").run(createId("identity"), userId, username);
+    db.prepare(`
+      INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt, must_change_password)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `).run(createId("account"), userId, username, passwordValue.hash, passwordValue.salt);
+    db.prepare("INSERT INTO health_members (id, display_name, relationship, created_by) VALUES (?, ?, 'self', ?)").run(memberId, displayName, userId);
+    db.prepare("INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES (?, ?, 'manager', ?)").run(memberId, userId, userId);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'auth.local_account_created', 'user', ?, ?)
+    `).run(createId("audit"), actor.id, userId, JSON.stringify({ username, displayName, temporaryPassword: true }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return { created: true, userId, username, displayName, temporaryPassword: defaultLocalAdminPassword, mustChangePassword: true };
+}
+
+export function resetLocalAccountPassword(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  const userId = typeof body.userId === "string" ? body.userId.trim() : "";
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  if (!userId && !username) throw createError({ statusCode: 400, statusMessage: "请选择要重置的账号" });
+  const requestedPassword = typeof body.newPassword === "string" ? body.newPassword.trim() : "";
+  let password = defaultLocalAdminPassword;
+  if (requestedPassword) {
+    try {
+      password = cleanPassword(requestedPassword);
+    } catch {
+      throw createError({ statusCode: 400, statusMessage: "密码长度必须为 8-128 个字符" });
+    }
+    const confirmation = requiredText(body.confirmPassword, "确认密码");
+    if (password !== confirmation) throw createError({ statusCode: 400, statusMessage: "两次输入的密码不一致" });
+  }
+  const db = getDatabase();
+  const account = db.prepare(`
+    SELECT la.id, la.user_id AS userId, la.username, u.display_name AS displayName
+    FROM local_accounts la JOIN users u ON u.id = la.user_id
+    WHERE ${userId ? "la.user_id = ?" : "la.username = ?"} AND la.disabled_at IS NULL
+  `).get(userId || username) as { id: string; userId: string; username: string; displayName: string } | undefined;
+  if (!account) throw createError({ statusCode: 404, statusMessage: "本地账号不存在或已停用" });
+  const next = hashPassword(password);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      UPDATE local_accounts SET password_hash = ?, password_salt = ?, must_change_password = 1,
+        updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).run(next.hash, next.salt, account.id);
+    db.prepare("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL").run(account.userId);
+    db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'auth.local_account_password_reset', 'user', ?, ?)
+    `).run(createId("audit"), actor.id, account.userId, JSON.stringify({ username: account.username, sessionsRevoked: true, mustChangePassword: true }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return {
+    reset: true,
+    username: account.username,
+    displayName: account.displayName,
+    ...(requestedPassword ? {} : { temporaryPassword: defaultLocalAdminPassword }),
+    mustChangePassword: true
+  };
 }

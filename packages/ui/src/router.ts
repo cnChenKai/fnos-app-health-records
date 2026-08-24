@@ -40,7 +40,7 @@ const router = createRouter({
     { path: "/me/trash", component: TrashSettingsPage, meta: { title: "回收站" } },
     { path: "/me/duplicates", component: DuplicatesSettingsPage, meta: { title: "重复报告检测" } },
     { path: "/me/data", component: DataAuditSettingsPage, meta: { title: "备份与恢复" } },
-    { path: "/me/account-security", component: AccountSecuritySettingsPage, meta: { title: "账号安全", requiresLocalAccount: true } },
+    { path: "/me/account-security", component: AccountSecuritySettingsPage, meta: { title: "账号安全", requiresLocalAccount: true, requiresAdmin: true } },
     { path: "/me/audit", component: UserAuditSettingsPage, meta: { title: "用户操作日志", requiresAdmin: true } },
     { path: "/me/ai-audit", component: AiAuditSettingsPage, meta: { title: "AI 审计", requiresAdmin: true } },
     { path: "/me/system-logs", component: SystemLogsSettingsPage, meta: { title: "系统日志", requiresAdmin: true } },

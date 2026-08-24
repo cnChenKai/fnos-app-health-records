@@ -7,16 +7,19 @@ import { join } from "node:path";
 import test from "node:test";
 import type { H3Event } from "h3";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
+import forcePasswordChange from "../middleware/03-password-change.ts";
 import { getRequestUser } from "../utils/request-user.ts";
 import {
   bootstrapLocalAdministrator,
   changeLocalPassword,
+  createLocalAccount,
   localAuthSetupRequired,
   login,
-  logout
+  logout,
+  resetLocalAccountPassword
 } from "../services/auth.service.ts";
 
-function localAuthEvent(options: { cookie?: string; forwardedProto?: string; clientAddress?: string } = {}) {
+function localAuthEvent(options: { cookie?: string; forwardedProto?: string; clientAddress?: string; path?: string } = {}) {
   const nodeHeaders: Record<string, string> = {};
   if (options.cookie) nodeHeaders.cookie = options.cookie;
   if (options.forwardedProto) nodeHeaders["x-forwarded-proto"] = options.forwardedProto;
@@ -24,11 +27,11 @@ function localAuthEvent(options: { cookie?: string; forwardedProto?: string; cli
   return {
     req: {
       headers,
-      url: "http://health.test/api/auth/login",
+      url: `http://health.test${options.path || "/api/auth/login"}`,
       context: { clientAddress: options.clientAddress || "127.0.0.1" }
     },
     res: { headers: new Headers() },
-    node: { req: { headers: nodeHeaders, socket: {} } }
+    node: { req: { headers: nodeHeaders, url: options.path || "/api/auth/login", socket: {} } }
   } as unknown as H3Event;
 }
 
@@ -157,6 +160,7 @@ test("bootstraps a Docker local administrator and resolves only its persisted se
       provider: "local",
       authenticated: true,
       isAdmin: true,
+      mustChangePassword: true,
       isGatewayAdmin: true
     });
 
@@ -182,6 +186,72 @@ test("bootstraps a Docker local administrator and resolves only its persisted se
   }
 });
 
+test("creates admin/admin on a fresh local deployment and requires the first password change", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-local-default-"));
+  process.env.STORAGE_DIR = storageDir;
+  process.env.AUTH_MODE = "local";
+  try {
+    bootstrapLocalAdministrator();
+    const loginEvent = localAuthEvent();
+    assert.deepEqual(login(loginEvent, { username: "admin", password: "admin" }), {
+      authenticated: true,
+      mustChangePassword: true
+    });
+    const cookie = (loginEvent.res.headers.get("set-cookie") || "").split(";", 1)[0];
+    const user = getRequestUser(localAuthEvent({ cookie }));
+    assert.equal(user.mustChangePassword, true);
+    assert.throws(() => forcePasswordChange(localAuthEvent({ cookie, path: "/api/overview" })),
+      (error: unknown) => Number((error as { statusCode?: number }).statusCode) === 428);
+    assert.doesNotThrow(() => forcePasswordChange(localAuthEvent({ cookie, path: "/api/session" })));
+    assert.deepEqual(changeLocalPassword(localAuthEvent({ cookie }), user, {
+      newPassword: "first-local-password-2026",
+      confirmPassword: "first-local-password-2026"
+    }), { changed: true, reauthenticationRequired: true });
+    assert.throws(() => login(localAuthEvent(), { username: "admin", password: "admin" }), (error: unknown) => Number((error as { statusCode?: number }).statusCode) === 401);
+    assert.deepEqual(login(localAuthEvent(), { username: "admin", password: "first-local-password-2026" }), {
+      authenticated: true,
+      mustChangePassword: false
+    });
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    delete process.env.AUTH_MODE;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("allows a local administrator to reset an ordinary local account", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-local-account-reset-"));
+  process.env.STORAGE_DIR = storageDir;
+  process.env.AUTH_MODE = "local";
+  try {
+    bootstrapLocalAdministrator();
+    const adminLogin = localAuthEvent();
+    login(adminLogin, { username: "admin", password: "admin" });
+    const adminCookie = (adminLogin.res.headers.get("set-cookie") || "").split(";", 1)[0];
+    const db = getDatabase();
+    const adminUser = getRequestUser(localAuthEvent({ cookie: adminCookie }));
+    const created = createLocalAccount(adminUser, { username: "ordinary", displayName: "普通用户" });
+    const ordinaryUserId = created.userId;
+    assert.deepEqual(created.temporaryPassword, "admin");
+    assert.deepEqual(resetLocalAccountPassword(getRequestUser(localAuthEvent({ cookie: adminCookie })), {
+      userId: ordinaryUserId,
+      newPassword: "ordinary-reset-password-2026",
+      confirmPassword: "ordinary-reset-password-2026"
+    }), { reset: true, username: "ordinary", displayName: "普通用户", mustChangePassword: true });
+    assert.deepEqual(login(localAuthEvent(), { username: "ordinary", password: "ordinary-reset-password-2026" }), {
+      authenticated: true,
+      mustChangePassword: true
+    });
+    assert.equal((db.prepare("SELECT must_change_password AS value FROM local_accounts WHERE user_id = ?").get(ordinaryUserId) as { value: number }).value, 1);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    delete process.env.AUTH_MODE;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("logs in, revokes local sessions, trusts HTTPS proxy explicitly and rate limits failures", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-local-login-"));
   process.env.STORAGE_DIR = storageDir;
@@ -194,7 +264,7 @@ test("logs in, revokes local sessions, trusts HTTPS proxy explicitly and rate li
     assert.deepEqual(login(loginEvent, {
       username: "docker-admin",
       password: "local-admin-password-2026"
-    }), { authenticated: true });
+    }), { authenticated: true, mustChangePassword: true });
     const setCookie = loginEvent.res.headers.get("set-cookie") || "";
     assert.match(setCookie, /^health_session=[^;]+;/);
     assert.match(setCookie, /HttpOnly/);
@@ -253,10 +323,15 @@ test("changes a local administrator password and revokes every existing session"
     const event = localAuthEvent({ cookie: firstCookie });
     const user = getRequestUser(event);
 
+    assert.throws(() => changeLocalPassword(event, user, {
+      currentPassword: "local-admin-password-2026",
+      newPassword: "short7!",
+      confirmPassword: "short7!"
+    }), (error: unknown) => Number((error as { statusCode?: number }).statusCode) === 400);
     assert.deepEqual(changeLocalPassword(event, user, {
       currentPassword: "local-admin-password-2026",
-      newPassword: "new-local-password-2026",
-      confirmPassword: "new-local-password-2026"
+      newPassword: "short8!!",
+      confirmPassword: "short8!!"
     }), { changed: true, reauthenticationRequired: true });
     assert.match(event.res.headers.get("set-cookie") || "", /Max-Age=0/);
     assert.equal(getRequestUser(localAuthEvent({ cookie: firstCookie })).authenticated, false);
@@ -267,12 +342,12 @@ test("changes a local administrator password and revokes every existing session"
     }), (error: unknown) => Number((error as { statusCode?: number }).statusCode) === 401);
     assert.deepEqual(login(localAuthEvent(), {
       username: "docker-admin",
-      password: "new-local-password-2026"
-    }), { authenticated: true });
+      password: "short8!!"
+    }), { authenticated: true, mustChangePassword: false });
     const audit = getDatabase().prepare(`
-      SELECT action FROM audit_logs WHERE action = 'auth.local_password_changed'
+      SELECT action FROM audit_logs WHERE action = 'auth.local_password_first_changed'
     `).get() as { action: string } | undefined;
-    assert.equal(audit?.action, "auth.local_password_changed");
+    assert.equal(audit?.action, "auth.local_password_first_changed");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -337,7 +412,7 @@ test("resets a forgotten local password through the offline Docker command", () 
     assert.deepEqual(login(localAuthEvent(), {
       username: "docker-admin",
       password: "offline-reset-password-2026"
-    }), { authenticated: true });
+    }), { authenticated: true, mustChangePassword: true });
     const audit = getDatabase().prepare(`
       SELECT action FROM audit_logs WHERE action = 'auth.local_password_reset'
     `).get() as { action: string } | undefined;
