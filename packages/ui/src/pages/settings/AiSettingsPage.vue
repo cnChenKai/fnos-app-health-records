@@ -67,6 +67,20 @@ const saving = ref(false);
 const testing = ref(false);
 const currentProvider = computed(() => ai.value.providers.find((item) => item.key === ai.value.provider));
 const implementedTasks = computed(() => ai.value.tasks.filter((task) => task.implemented));
+const visionModelHint = computed(() => {
+  const model = ai.value.visionModel.trim().toLowerCase();
+  if (!model) return "请填写视觉模型名称";
+  if (ai.value.textModel.trim() && model === ai.value.textModel.trim().toLowerCase()) {
+    return "视觉模型与文本模型相同，请确认该模型确实支持图片输入";
+  }
+  if (/(\b|[-_:])(vl|vision|visual|llava|moondream|internvl|minicpm[-_]?v|idefics|pixtral|qwen[\w.-]*vl|gemma[\w.-]*3)(\b|[-_:])/i.test(model)) {
+    return "已识别为可能支持图片输入的模型，请继续测试确认";
+  }
+  if (/(embedding|rerank|bge[-_]|text[-_]?embedding|nomic[-_]embed|deepseek[-_]?r1|deepseek[-_]?v3|deepseek[-_]?v4|qwen[-_]?(turbo|plus|max)|kimi[-_]|glm[-_]|gpt[-_]?(3\.5|4\.1-mini)|llama[23](\.\d+)?$)/i.test(model)) {
+    return "模型名称看起来更像文本模型，建议更换支持图片输入的模型并点击“测试视觉模型”验证";
+  }
+  return "无法仅根据模型名称确认视觉能力，请点击“测试视觉模型”验证";
+});
 
 function editableSettings(value: AiSettings) {
   return {
@@ -140,6 +154,18 @@ async function test() {
   catch (error) { message.value = error instanceof Error ? error.message : "连接失败"; }
   finally { testing.value = false; }
 }
+async function testVision() {
+  testing.value = true; message.value = "";
+  try {
+    const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
+      method: "POST",
+      body: JSON.stringify({ ...aiBody(), testVision: true })
+    });
+    message.value = `${result.model} 视觉模型可用，耗时 ${result.elapsedMs} ms`;
+  }
+  catch (error) { message.value = error instanceof Error ? error.message : "视觉模型测试失败"; }
+  finally { testing.value = false; }
+}
 async function loadSettings() {
   loading.value = true;
   loadError.value = "";
@@ -168,7 +194,7 @@ onMounted(() => { void loadSettings(); });
         <label><span>AI 服务商</span><FormSelect v-model="ai.provider" :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))" aria-label="AI 服务商" @change="changeProvider" /></label>
         <label class="toggle-row"><div><strong>视觉增强</strong><span>复杂表格可发送处理后的页面副本</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" /></label>
         <label><span>API 地址</span><input v-model.trim="ai.baseUrl" :placeholder="currentProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
-        <div class="form-grid"><label><span>文本模型</span><input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" /><small v-if="currentProvider?.modelHint" class="field-hint">{{ currentProvider.modelHint }}</small></label><label><span>视觉模型</span><input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '按需填写支持图片的模型'" /></label></div>
+        <div class="form-grid"><label><span>文本模型</span><input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" /><small v-if="currentProvider?.modelHint" class="field-hint">{{ currentProvider.modelHint }}</small></label><label><span>视觉模型</span><input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '填写支持图片输入的模型'" /><small class="field-hint" :class="{ 'field-warning': ai.visionModel.trim() && !visionModelHint.includes('可能支持') }">{{ visionModelHint }}</small></label></div>
         <label><span>API Key <small v-if="currentProvider?.apiKeyRequired === false">（可选）</small></span><input v-model="ai.apiKey" type="password" autocomplete="new-password" :placeholder="currentProvider?.apiKeyRequired === false ? 'Ollama 默认无需填写' : ai.apiKeyConfigured ? `已配置 ${ai.apiKeyMasked}` : '输入 API Key'" /></label>
         <section v-if="implementedTasks.length" class="ai-task-bindings">
           <header><strong>场景模型</strong><span>默认继承上方模型，也可为单个场景独立指定</span></header>
@@ -191,7 +217,7 @@ onMounted(() => { void loadSettings(); });
           </article>
         </section>
         <p v-if="message" class="form-message">{{ message }}</p>
-        <div class="form-actions"><button type="button" :disabled="saving || testing" @click="test"><LoaderCircle v-if="testing" class="spin-icon" :size="17" /><TestTubeDiagonal v-else :size="17" />{{ testing ? "正在测试" : "测试连接" }}</button><button class="primary-button" type="button" :disabled="saving || testing" @click="save"><LoaderCircle v-if="saving" class="spin-icon" :size="17" /><Save v-else :size="17" />{{ saving ? "正在保存" : "保存" }}</button></div>
+        <div class="form-actions"><button type="button" :disabled="saving || testing" @click="test"><LoaderCircle v-if="testing" class="spin-icon" :size="17" /><TestTubeDiagonal v-else :size="17" />{{ testing ? "正在测试" : "测试文本模型" }}</button><button type="button" :disabled="saving || testing || !ai.visionModel.trim()" @click="testVision"><LoaderCircle v-if="testing" class="spin-icon" :size="17" /><TestTubeDiagonal v-else :size="17" />测试视觉模型</button><button class="primary-button" type="button" :disabled="saving || testing" @click="save"><LoaderCircle v-if="saving" class="spin-icon" :size="17" /><Save v-else :size="17" />{{ saving ? "正在保存" : "保存" }}</button></div>
       </div>
     </section>
   </section>

@@ -34,6 +34,7 @@ export type AiTaskBinding = {
 
 export type AiSettingsInput = Partial<AiSettings> & {
   clearApiKey?: boolean;
+  testVision?: boolean;
   taskBindings?: Partial<Record<AiTaskKey, AiTaskBinding | null>>;
 };
 
@@ -296,16 +297,21 @@ export function saveAiSettings(input: AiSettingsInput) {
   const current = resolveProvider(provider, parsed);
   const submittedKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
   const apiKey = input.clearApiKey === true ? "" : submittedKey || current.apiKey;
+  const visionEnabled = input.visionEnabled === undefined ? current.visionEnabled : input.visionEnabled === true;
+  const visionModel = String(input.visionModel ?? current.visionModel).trim();
+  if (visionEnabled && !visionModel) {
+    throw createError({ statusCode: 400, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
+  }
   const next: ParsedAiSettings = {
     enabled: input.enabled === undefined ? parsed.enabled : input.enabled === true,
     provider,
     providers: {
       ...parsed.providers,
       [provider]: {
-        visionEnabled: input.visionEnabled === undefined ? current.visionEnabled : input.visionEnabled === true,
+        visionEnabled,
         baseUrl: normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl)),
         textModel: String(input.textModel || current.textModel).trim(),
-        visionModel: String(input.visionModel ?? current.visionModel).trim(),
+        visionModel,
         apiKey
       }
     },
@@ -342,12 +348,14 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const current = resolveProvider(provider, parsed);
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
-  if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !textModel) {
+  const testVision = input.testVision === true;
+  const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
+  if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !model) {
     throw createError({
       statusCode: 400,
       statusMessage: aiProviderCatalog[provider].apiKeyRequired === false
-        ? `请先配置 ${aiProviderCatalog[provider].label} 文本模型`
-        : `请先配置 ${aiProviderCatalog[provider].label} API Key 和文本模型`
+        ? `请先配置 ${aiProviderCatalog[provider].label} ${testVision ? "视觉" : "文本"}模型`
+        : `请先配置 ${aiProviderCatalog[provider].label} API Key 和${testVision ? "视觉" : "文本"}模型`
     });
   }
   const baseUrl = normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl));
@@ -357,10 +365,18 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
       provider,
       baseUrl,
       apiKey,
-      model: textModel
+      model
     }, {
-      messages: [{ role: "user", content: "reply ok" }],
-      temperature: resolveAiTemperature(provider, textModel),
+      messages: [{
+        role: "user",
+        content: testVision
+          ? [
+              { type: "text", text: "Reply with OK if you can read this image." },
+              { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/Sc7u7QAAAABJRU5ErkJggg==" } }
+            ]
+          : "reply ok"
+      }],
+      temperature: resolveAiTemperature(provider, model),
       maxOutputTokens: 4,
       timeoutMs: 15_000,
       timeoutCode: "AI_CONNECTION_TEST_TIMEOUT",
@@ -384,7 +400,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
     await writeLog("warn", "ai-connection-test-failed", {
       provider,
       host: new URL(baseUrl).host,
-      model: textModel,
+      model,
       errorCode: code,
       detail: detail.slice(0, 600)
     });
@@ -413,5 +429,5 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
           : "NAS 无法连接 AI 服务，请检查外网连接、代理、DNS 和 API 地址";
     throw createError({ statusCode: timedOut ? 504 : 502, statusMessage });
   }
-  return { ok: true, provider, model: textModel, elapsedMs: Date.now() - started };
+    return { ok: true, provider, model, vision: testVision, elapsedMs: Date.now() - started };
 }

@@ -1925,6 +1925,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .settings-form > label:not(.toggle-row), .form-grid label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; }
 .settings-form label > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .settings-form .field-hint { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-form .field-warning { color: var(--warning, #a15c00); }
 .settings-form input:not([type="checkbox"]), .settings-form select, .member-form input, .member-form select {
   width: 100%; height: 44px; border: 1px solid var(--line-strong); border-radius: 10px;
   background: var(--surface); padding: 0 12px; outline: 0; color: var(--ink);
