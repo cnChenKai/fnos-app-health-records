@@ -127,7 +127,11 @@ function updateChangelog(path, currentVersion, targetVersion) {
   let content = readFileSync(path, "utf8");
   if (content.includes(`## ${targetVersion} - `)) return;
   if (content.includes(`## ${currentVersion} - Unreleased`)) {
-    content = content.replace(`## ${currentVersion} - Unreleased`, `## ${targetVersion} - Unreleased`);
+    // Freeze the version being released, then start a clean section for the next version.
+    content = content.replace(
+      `## ${currentVersion} - Unreleased`,
+      `## ${currentVersion}\n\n## ${targetVersion} - Unreleased\n\n### Added\n\n- 待补充本版本变更说明。\n\n### Changed\n\n### Fixed`,
+    );
   } else {
     content = content.replace(
       "本项目遵循语义化版本。\n",

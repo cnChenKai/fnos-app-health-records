@@ -166,6 +166,7 @@ schema v6 -> v7
    - `pnpm release` 会要求工作区干净，避免把未确认改动混进版本提交。
 2. `CHANGELOG.md`
    - 先在当前未发布章节写清楚变更内容。
+   - 发布后版本章节会冻结为 `## x.y.z`；下一个 `## x.y.z - Unreleased` 只承载下一版本的新内容，不会沿用已发布版本的条目。
    - 写明是否包含数据库迁移。
    - GitHub Release 的“本版本变更”会直接读取当前发布版本对应的 `CHANGELOG.md` 段落，发布前必须把用户可感知的功能、修复和升级注意事项写完整。
 3. `template.config.json`
