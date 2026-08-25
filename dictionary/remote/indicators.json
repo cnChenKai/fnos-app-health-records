@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 9,
+  "revision": 10,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -2164,7 +2164,7 @@
       "canonicalKey": "microscopy_yeast_like_fungi",
       "displayName": "类酵母菌",
       "categoryKey": "laboratory_other",
-      "order": 54,
+      "order": 55,
       "kind": "categorical",
       "valueType": "positive_negative",
       "specimen": "other",
@@ -2183,6 +2183,123 @@
         "微生物"
       ],
       "explanation": "显微镜检查中的类酵母菌描述，属于定性结果，应结合标本来源和原报告判读。"
+    },
+    {
+      "canonicalKey": "cbc_mid_count",
+      "displayName": "中值细胞绝对值",
+      "categoryKey": "blood_count",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "MID#",
+        "中值细胞绝对值",
+        "中值细胞绝对数",
+        "中间细胞绝对值",
+        "中间细胞计数",
+        "混合细胞绝对值",
+        "混合细胞数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "部分血液分析仪将单核细胞、嗜酸细胞和嗜碱细胞合并显示为中值细胞绝对数量，应按原报告检测系统解释。"
+    },
+    {
+      "canonicalKey": "cbc_mid_percentage",
+      "displayName": "中值细胞百分比",
+      "categoryKey": "blood_count",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "MID%",
+        "中值细胞百分数",
+        "中值细胞百分比",
+        "中值细胞百分率",
+        "中间细胞百分比",
+        "混合细胞百分比"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类",
+        "三分类"
+      ],
+      "explanation": "部分血液分析仪将单核细胞、嗜酸细胞和嗜碱细胞合并显示为中值细胞百分比，与中值细胞绝对值分开观察。"
+    },
+    {
+      "canonicalKey": "liver_alpha_hydroxybutyrate_dehydrogenase",
+      "displayName": "α-羟丁酸脱氢酶",
+      "categoryKey": "laboratory_other",
+      "order": 54,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "α-HBDH",
+        "α羟丁酸脱氢酶",
+        "α-羟丁酸脱氢酶",
+        "羟丁酸脱氢酶",
+        "HBDH"
+      ],
+      "allowedUnits": [
+        "U/L",
+        "IU/L"
+      ],
+      "sectionHints": [
+        "心肌酶",
+        "生化",
+        "检验"
+      ],
+      "explanation": "α-羟丁酸脱氢酶检测结果，应结合原报告参考范围及同批心肌酶或生化项目观察。"
+    },
+    {
+      "canonicalKey": "body_ideal_weight",
+      "displayName": "理想体重",
+      "categoryKey": "general_measurement",
+      "order": 50,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "kg",
+      "unitDimension": "mass",
+      "aliases": [
+        "理想体重",
+        "理想体重(kg)"
+      ],
+      "allowedUnits": [
+        "kg",
+        "千克",
+        "公斤"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "基础测量",
+        "体格检查",
+        "人体成分"
+      ],
+      "explanation": "记录原报告明确给出的理想体重，不根据身高或其他指标自行推算。"
     }
   ],
   "extensions": [

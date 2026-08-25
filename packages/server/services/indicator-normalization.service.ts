@@ -309,8 +309,11 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     if (compact) candidates.add(compact);
   };
   // 部分报告会把表格序号 OCR 到指标名称前，序号不是指标语义的一部分。
-  const withoutLeadingOrdinal = raw.replace(/^\d{1,3}\s*[.、)）:：]\s*/, "");
-  if (withoutLeadingOrdinal !== raw) add(withoutLeadingOrdinal);
+  // 同时覆盖「3.项目」「3、项目」「（3）项目」「No.3 项目」和「3 项目」等变体。
+  const withoutLeadingOrdinal = raw
+    .replace(/^\s*(?:no\.?\s*)?\d{1,3}\s*[.、)）:：]?\s*/, "")
+    .replace(/^\s*[（(]\s*\d{1,3}\s*[）)]\s*/, "");
+  if (withoutLeadingOrdinal !== raw && withoutLeadingOrdinal.length >= 2) add(withoutLeadingOrdinal);
   const brackets = [...raw.matchAll(/[（(]([^（）()]*)[）)]/g)];
   const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || ""));
   if (protectedBracket) candidates.add(compactQualifiedIndicatorKey(raw));

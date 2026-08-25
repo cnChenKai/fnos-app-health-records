@@ -41,6 +41,9 @@ test("removes OCR report ordinals before dictionary matching", () => {
   assert.ok(indicatorNameCandidates("3.谷草/谷丙").includes("谷草/谷丙"));
   assert.ok(indicatorNameCandidates("19.红细胞分布宽度(SD)").includes("红细胞分布宽度"));
   assert.ok(indicatorNameCandidates("23、TSH").includes("tsh"));
+  assert.ok(indicatorNameCandidates("（8）TSH").includes("tsh"));
+  assert.ok(indicatorNameCandidates("No.9 中性粒细胞绝对数").includes("中性粒细胞绝对数"));
+  assert.ok(indicatorNameCandidates("10 单核细胞绝对数").includes("单核细胞绝对数"));
 });
 
 test("normalizes English indicator separators consistently", () => {
