@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Bot, LoaderCircle, Save, TestTubeDiagonal, RefreshCw, CheckCircle, XCircle, AlertCircle } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
@@ -256,7 +256,23 @@ async function loadSettings() {
     loading.value = false;
   }
 }
-onMounted(() => { void loadSettings(); });
+// 点击外部关闭下拉框
+const handleClickOutside = (event: MouseEvent) => {
+  const target = event.target as HTMLElement;
+  if (!target.closest('.model-input-group')) {
+    showTextModelDropdown.value = false;
+    showVisionModelDropdown.value = false;
+  }
+};
+
+onMounted(() => {
+  void loadSettings();
+  document.addEventListener('click', handleClickOutside);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside);
+});
 </script>
 
 <template>
