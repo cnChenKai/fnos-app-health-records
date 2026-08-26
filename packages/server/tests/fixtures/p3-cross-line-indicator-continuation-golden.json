@@ -45,7 +45,7 @@
   "expected": {
     "mergedSourceLineIds": ["line_8", "line_9"],
     "mergedTextFragment": "低密度脂蛋白胆固醇值偏高(3.76mmol/L)",
-    "dictionaryKeys": ["lipid_ldl_c", "lipid_tc", "lipid_tg"],
+    "dictionaryKeys": ["laboratory_lipoprotein_a", "lipid_ldl_c", "lipid_tc", "lipid_tg"],
     "observations": [
       {
         "normalizedName": "总胆固醇",

@@ -506,6 +506,8 @@ function dictionaryFactsForText(
 ) {
   const firstCell = text.split(/[|｜]/)[0]?.trim() || text;
   const tableRow = /[|｜]/.test(text);
+  // 章节标题可能包含“脂蛋白/载脂蛋白”等字典词，但没有当前结果，不能生成候选指标。
+  if (!tableRow && /^【[^】]+】$/.test(firstCell.trim())) return [];
   const compact = compactDictionaryText(tableRow ? firstCell : text);
   if (!compact) return [];
   /*
