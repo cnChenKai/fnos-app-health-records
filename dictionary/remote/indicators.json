@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 10,
+  "revision": 11,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -2300,6 +2300,341 @@
         "人体成分"
       ],
       "explanation": "记录原报告明确给出的理想体重，不根据身高或其他指标自行推算。"
+    },
+    {
+      "canonicalKey": "cbc_nucleated_rbc_percentage",
+      "displayName": "有核红细胞比率",
+      "categoryKey": "blood_count",
+      "order": 29,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "有核红细胞比率",
+        "有核红细胞百分比",
+        "NRBC%",
+        "NRBC百分比"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
+      ],
+      "explanation": "有核红细胞在白细胞中的比例，应结合血常规原报告观察。"
+    },
+    {
+      "canonicalKey": "tumor_ca125",
+      "displayName": "糖类抗原 125",
+      "categoryKey": "laboratory_other",
+      "order": 56,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "CA125",
+        "CA-125",
+        "糖类抗原125",
+        "糖类抗原 125",
+        "糖链抗原CA125"
+      ],
+      "allowedUnits": [
+        "U/mL",
+        "kU/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测",
+        "生化"
+      ],
+      "explanation": "糖类抗原 125 定量结果，检测方法不同可能导致参考范围不同。"
+    },
+    {
+      "canonicalKey": "tumor_progrp",
+      "displayName": "胃泌素释放肽前体",
+      "categoryKey": "laboratory_other",
+      "order": 57,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "pg/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "ProGRP",
+        "胃泌素释放肽前体",
+        "胃泌素释放肽前体(蛋白芯片法)"
+      ],
+      "allowedUnits": [
+        "pg/mL",
+        "ng/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ],
+      "explanation": "胃泌素释放肽前体定量结果，应结合检测方法和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "tumor_troponin_i",
+      "displayName": "肌钙蛋白 I",
+      "categoryKey": "laboratory_other",
+      "order": 58,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "TnI",
+        "cTnI",
+        "肌钙蛋白I",
+        "肌钙蛋白 I"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "pg/mL"
+      ],
+      "sectionHints": [
+        "心肌酶",
+        "心脏标志物",
+        "生化"
+      ],
+      "explanation": "肌钙蛋白 I 定量结果，应以本次报告的检测方法和参考范围为准。"
+    },
+    {
+      "canonicalKey": "laboratory_serum_amyloid_a",
+      "displayName": "血清淀粉样蛋白 A",
+      "categoryKey": "laboratory_other",
+      "order": 59,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "SAA",
+        "血清淀粉样蛋白A",
+        "血清淀粉样蛋白 A"
+      ],
+      "allowedUnits": [
+        "mg/L"
+      ],
+      "sectionHints": [
+        "炎症",
+        "感染",
+        "生化"
+      ],
+      "explanation": "血清淀粉样蛋白 A 定量结果，需结合原报告参考范围和临床背景观察。"
+    },
+    {
+      "canonicalKey": "laboratory_ammonia",
+      "displayName": "血氨",
+      "categoryKey": "laboratory_other",
+      "order": 60,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "血氨",
+        "氨",
+        "NH3"
+      ],
+      "allowedUnits": [
+        "μmol/L",
+        "umol/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化",
+        "血氨"
+      ],
+      "explanation": "血浆氨定量结果，标本处理和检测方法会影响结果，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "laboratory_cholic_acid",
+      "displayName": "甘胆酸",
+      "categoryKey": "liver_function",
+      "order": 40,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "CG",
+        "甘胆酸",
+        "甘胆酸(CG)"
+      ],
+      "allowedUnits": [
+        "mg/L",
+        "μmol/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "肝胆酸",
+        "生化"
+      ],
+      "explanation": "甘胆酸定量结果，应结合肝功能相关项目和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "infectious_mycoplasma_pneumoniae_igm",
+      "displayName": "肺炎支原体抗体 IgM",
+      "categoryKey": "infection_immunity",
+      "order": 76,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "肺炎支原体抗体IgM",
+        "肺炎支原体IgM",
+        "MP-IgM",
+        "MP-IgM抗体"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "感染",
+        "呼吸道病原体",
+        "肺炎支原体"
+      ],
+      "explanation": "肺炎支原体抗体 IgM 定性结果，不默认进入数值折线趋势。"
+    },
+    {
+      "canonicalKey": "laboratory_lipoprotein_a",
+      "displayName": "脂蛋白(a)",
+      "categoryKey": "lipids",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "脂蛋白(a)",
+        "脂蛋白a",
+        "脂蛋白a(LPa)",
+        "Lp(a)",
+        "LPa"
+      ],
+      "allowedUnits": [
+        "mg/L",
+        "mg/dL",
+        "nmol/L"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "脂蛋白(a)定量结果，mg/L、mg/dL 与 nmol/L 不在没有方法学依据时强行换算。"
+    },
+    {
+      "canonicalKey": "laboratory_apolipoprotein_a1",
+      "displayName": "载脂蛋白 A1",
+      "categoryKey": "lipids",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "载脂蛋白A1",
+        "载脂蛋白 A1",
+        "ApoA1"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "载脂蛋白 A1 定量结果，应结合血脂报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "laboratory_apolipoprotein_b",
+      "displayName": "载脂蛋白 B",
+      "categoryKey": "lipids",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "载脂蛋白B",
+        "载脂蛋白 B",
+        "ApoB"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "载脂蛋白 B 定量结果，应结合血脂报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "laboratory_gastrin_17",
+      "displayName": "胃泌素 17",
+      "categoryKey": "laboratory_other",
+      "order": 61,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "pmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "胃泌素17",
+        "胃泌素 17",
+        "G-17"
+      ],
+      "allowedUnits": [
+        "pmol/L"
+      ],
+      "sectionHints": [
+        "胃功能",
+        "消化道",
+        "生化"
+      ],
+      "explanation": "胃泌素 17 定量结果，检测前状态和方法会影响参考范围。"
+    },
+    {
+      "canonicalKey": "laboratory_superoxide_dismutase",
+      "displayName": "超氧化物歧化酶",
+      "categoryKey": "laboratory_other",
+      "order": 62,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/mL",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "超氧化物歧化酶",
+        "SOD"
+      ],
+      "allowedUnits": [
+        "U/mL",
+        "U/L"
+      ],
+      "sectionHints": [
+        "氧化应激",
+        "生化",
+        "检验"
+      ],
+      "explanation": "超氧化物歧化酶定量结果，检测方法差异较大，应以原报告为准。"
     }
   ],
   "extensions": [
@@ -2440,6 +2775,147 @@
         "全血细胞",
         "五分类",
         "三分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_mcv",
+      "aliases": [
+        "红细胞平均体积",
+        "红细胞平均容积"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
+    },
+    {
+      "canonicalKey": "liver_ast",
+      "aliases": [
+        "天冬氨酸氨基转移酶",
+        "天门冬氨酸氨基转氨酶",
+        "天冬氨酸氨基转氨酶"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "lipid_hdl_c",
+      "aliases": [
+        "血清高密度脂蛋白胆固醇"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "lipid_ldl_c",
+      "aliases": [
+        "血清低密度脂蛋白胆固醇"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "lipid_tc",
+      "aliases": [
+        "血清总胆固醇"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "lipid_tg",
+      "aliases": [
+        "血清甘油三酯"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_nucleated_rbc_count",
+      "aliases": [
+        "有核红细胞计数",
+        "有核红细胞"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_cea",
+      "aliases": [
+        "癌胚抗原(定量)",
+        "(N)癌胚抗原"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_ca19_9",
+      "aliases": [
+        "糖链抗原19-9",
+        "糖链抗原CA19-9"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_ca15_3",
+      "aliases": [
+        "糖链抗原15-3",
+        "糖链抗原CA15-3"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_ca50",
+      "aliases": [
+        "糖链抗原50",
+        "糖链抗原CA50"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_ca72_4",
+      "aliases": [
+        "糖链抗原72-4",
+        "糖链抗原CA72-4"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "tumor_ca242",
+      "aliases": [
+        "糖链抗原242",
+        "糖链抗原CA242"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
       ]
     }
   ],

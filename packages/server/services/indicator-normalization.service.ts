@@ -314,6 +314,9 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     .replace(/^\s*(?:no\.?\s*)?\d{1,3}\s*[.、)）:：]?\s*/, "")
     .replace(/^\s*[（(]\s*\d{1,3}\s*[）)]\s*/, "");
   if (withoutLeadingOrdinal !== raw && withoutLeadingOrdinal.length >= 2) add(withoutLeadingOrdinal);
+  // 报告常把“正常”标记放在项目名前：(N)癌胚抗原。它是状态标记，不是名称的一部分。
+  const withoutNormalMarker = raw.replace(/^\s*[（(]\s*N\s*[）)]\s*/i, "");
+  if (withoutNormalMarker !== raw && withoutNormalMarker.length >= 2) add(withoutNormalMarker);
   const brackets = [...raw.matchAll(/[（(]([^（）()]*)[）)]/g)];
   const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || ""));
   if (protectedBracket) candidates.add(compactQualifiedIndicatorKey(raw));
@@ -354,11 +357,29 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     add(suffixCode[2]);
   }
   if (indicatorCodePattern.test(raw)) add(raw);
+  // 结构化结果偶尔被拼进项目名，例如“RV5+SV1:1.75mV”。仅在冒号右侧明显是
+  // 数值/单位或异常状态时取左侧，避免破坏真正带冒号的医学名称。
+  const cleanedSources = new Set([raw, withoutLeadingOrdinal, withoutNormalMarker]);
+  for (const source of cleanedSources) {
+    const resultSuffix = source.match(/^(.+?)\s*[：:]\s*[-+]?\d+(?:\.\d+)?\s*[A-Za-zμµ%°/²³^0-9·.*]*\s*$/);
+    if (resultSuffix?.[1]) add(resultSuffix[1]);
+    const reportConclusionPrefix = source.replace(/^您本次体检(?:一般检查)?示\s*/u, "").trim();
+    if (reportConclusionPrefix !== source && reportConclusionPrefix.length >= 2) add(reportConclusionPrefix);
+    // “血清尿素测定减低”是项目名与异常状态粘连，异常状态不参与字典匹配。
+    const abnormalSuffix = source.replace(/(?:结果)?(?:偏高|偏低|升高|降低|增高|减少|减低|异常|正常)$/, "").trim();
+    if (abnormalSuffix !== source && abnormalSuffix.length >= 2) {
+      add(abnormalSuffix);
+      const abnormalMeasurementStripped = abnormalSuffix.replace(/(?:测定|检测)(?:值)?$/, "").trim();
+      if (abnormalMeasurementStripped.length >= 2) add(abnormalMeasurementStripped);
+    }
+    const measurementSuffix = source.replace(/(?:测定|检测)(?:值)?$/, "").trim();
+    if (measurementSuffix !== source && measurementSuffix.length >= 2) add(measurementSuffix);
+  }
   /**
    * 「血清尿酸值」「pH值」「尿酸测定值」这类命名里的「值/测定值」只是结果占位后缀，
    * 剥掉后才能命中字典别名（如「血清尿酸」）。只追加候选不替换原名，误伤面为零。
    */
-  const valueSuffixStripped = raw.replace(/(?:测定|检测)?值$/, "").trim();
+  const valueSuffixStripped = raw.replace(/(?:测定|检测)(?:值)?$|值$/, "").trim();
   if (valueSuffixStripped.length >= 2 && valueSuffixStripped !== raw) {
     add(valueSuffixStripped);
   }

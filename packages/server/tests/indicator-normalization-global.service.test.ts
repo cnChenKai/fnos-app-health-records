@@ -46,6 +46,13 @@ test("removes OCR report ordinals before dictionary matching", () => {
   assert.ok(indicatorNameCandidates("10 单核细胞绝对数").includes("单核细胞绝对数"));
 });
 
+test("removes report status, result suffixes and conclusion prefixes without losing the raw name", () => {
+  assert.ok(indicatorNameCandidates("(N)癌胚抗原").includes("癌胚抗原"));
+  assert.ok(indicatorNameCandidates("RV5+SV1:1.75mV").includes("rv5+sv1"));
+  assert.ok(indicatorNameCandidates("4、血清尿素测定减低").includes("血清尿素"));
+  assert.ok(indicatorNameCandidates("您本次体检一般检查示体重指数").includes("体重指数"));
+});
+
 test("normalizes English indicator separators consistently", () => {
   assert.deepEqual(
     indicatorNameCandidates("anti_thyroid_peroxidase antibody"),
