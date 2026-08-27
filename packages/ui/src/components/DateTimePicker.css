@@ -9,7 +9,7 @@
 
 .datetime-picker-panel {
   width: 100%;
-  background: var(--surface, #ffffff);
+  background: #ffffff;
   border-radius: 16px 16px 0 0;
   padding: 0 0 env(safe-area-inset-bottom, 0px);
   animation: slide-up .2s ease;
@@ -60,7 +60,7 @@
 .datetime-picker-wheels {
   display: flex; gap: 8px; padding: 16px 12px;
   height: 280px; overflow: hidden;
-  background: var(--surface, #ffffff);
+  background: #ffffff;
 }
 
 .datetime-picker-wheel {
@@ -93,15 +93,15 @@
 
 .wheel-scroll {
   height: 100%;
-  overflow-y: auto; scroll-snap-type: y mandatory;
+  overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  padding-top: 4px;
 }
 
 .wheel-item {
   height: 40px; display: flex; align-items: center; justify-content: center;
   font-size: 18px;
   color: var(--ink-2, #55554f);
-  scroll-snap-align: center;
   transition: color .15s, transform .15s;
 }
 
