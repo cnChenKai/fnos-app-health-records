@@ -74,8 +74,27 @@
   text-align: center;
 }
 
+.wheel-scroll-wrapper {
+  flex: 1; position: relative; overflow: hidden;
+}
+
+.wheel-highlight {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  right: 4px;
+  height: 40px;
+  transform: translateY(-50%);
+  border: 2px solid var(--brand, #16a34a);
+  border-radius: 8px;
+  background: var(--fill-2, #f7f7f5);
+  pointer-events: none;
+  z-index: 1;
+}
+
 .wheel-scroll {
-  flex: 1; overflow-y: auto; scroll-snap-type: y mandatory;
+  height: 100%;
+  overflow-y: auto; scroll-snap-type: y mandatory;
   -webkit-overflow-scrolling: touch;
 }
 

@@ -191,33 +191,48 @@ onBeforeUnmount(() => {
             <div class="datetime-picker-wheels">
               <div class="datetime-picker-wheel">
                 <span class="wheel-label">年</span>
-                <div class="wheel-scroll" @scroll="onScroll($event, 'year')">
-                  <div class="wheel-item" v-for="y in years" :key="y" :class="{ selected: y === selectedYear }">{{ y }}</div>
+                <div class="wheel-scroll-wrapper">
+                  <div class="wheel-highlight"></div>
+                  <div class="wheel-scroll" @scroll="onScroll($event, 'year')">
+                    <div class="wheel-item" v-for="y in years" :key="y" :class="{ selected: y === selectedYear }">{{ y }}</div>
+                  </div>
                 </div>
               </div>
               <div class="datetime-picker-wheel">
                 <span class="wheel-label">月</span>
-                <div class="wheel-scroll" @scroll="onScroll($event, 'month')">
-                  <div class="wheel-item" v-for="m in months" :key="m" :class="{ selected: m === selectedMonth }">{{ padZero(m) }}</div>
+                <div class="wheel-scroll-wrapper">
+                  <div class="wheel-highlight"></div>
+                  <div class="wheel-scroll" @scroll="onScroll($event, 'month')">
+                    <div class="wheel-item" v-for="m in months" :key="m" :class="{ selected: m === selectedMonth }">{{ padZero(m) }}</div>
+                  </div>
                 </div>
               </div>
               <div class="datetime-picker-wheel">
                 <span class="wheel-label">日</span>
-                <div class="wheel-scroll" @scroll="onScroll($event, 'day')">
-                  <div class="wheel-item" v-for="d in days" :key="d" :class="{ selected: d === selectedDay }">{{ padZero(d) }}</div>
+                <div class="wheel-scroll-wrapper">
+                  <div class="wheel-highlight"></div>
+                  <div class="wheel-scroll" @scroll="onScroll($event, 'day')">
+                    <div class="wheel-item" v-for="d in days" :key="d" :class="{ selected: d === selectedDay }">{{ padZero(d) }}</div>
+                  </div>
                 </div>
               </div>
               <template v-if="showTime">
                 <div class="datetime-picker-wheel">
                   <span class="wheel-label">时</span>
-                  <div class="wheel-scroll" @scroll="onScroll($event, 'hour')">
-                    <div class="wheel-item" v-for="h in hours" :key="h" :class="{ selected: h === selectedHour }">{{ padZero(h) }}</div>
+                  <div class="wheel-scroll-wrapper">
+                    <div class="wheel-highlight"></div>
+                    <div class="wheel-scroll" @scroll="onScroll($event, 'hour')">
+                      <div class="wheel-item" v-for="h in hours" :key="h" :class="{ selected: h === selectedHour }">{{ padZero(h) }}</div>
+                    </div>
                   </div>
                 </div>
                 <div class="datetime-picker-wheel">
                   <span class="wheel-label">分</span>
-                  <div class="wheel-scroll" @scroll="onScroll($event, 'minute')">
-                    <div class="wheel-item" v-for="min in minutes" :key="min" :class="{ selected: min === selectedMinute }">{{ padZero(min) }}</div>
+                  <div class="wheel-scroll-wrapper">
+                    <div class="wheel-highlight"></div>
+                    <div class="wheel-scroll" @scroll="onScroll($event, 'minute')">
+                      <div class="wheel-item" v-for="min in minutes" :key="min" :class="{ selected: min === selectedMinute }">{{ padZero(min) }}</div>
+                    </div>
                   </div>
                 </div>
               </template>
