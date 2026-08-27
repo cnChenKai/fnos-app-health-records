@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Check, X } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
 
@@ -61,6 +61,10 @@ watch(open, (value) => {
       selectedHour.value = now.getHours();
       selectedMinute.value = now.getMinutes();
     }
+    // 等待 DOM 更新后滚动到选中位置
+    nextTick(() => {
+      scrollToSelected();
+    });
   }
 });
 
@@ -121,6 +125,31 @@ function onScroll(e: Event, type: "year" | "month" | "day" | "hour" | "minute") 
 // 滚动到指定位置
 function scrollToItem(el: HTMLElement, index: number) {
   el.scrollTop = index * 40;
+}
+
+// 滚动到选中位置
+function scrollToSelected() {
+  const wheelScrolls = document.querySelectorAll('.wheel-scroll');
+  if (wheelScrolls.length === 0) return;
+
+  // 计算各滚轮的选中索引
+  const yearIndex = years.value.indexOf(selectedYear.value);
+  const monthIndex = months.value.indexOf(selectedMonth.value);
+  const dayIndex = days.value.indexOf(selectedDay.value);
+  const hourIndex = hours.value.indexOf(selectedHour.value);
+  const minuteIndex = minutes.value.indexOf(selectedMinute.value);
+
+  const indices = [yearIndex, monthIndex, dayIndex];
+  if (props.showTime) {
+    indices.push(hourIndex, minuteIndex);
+  }
+
+  // 滚动到对应位置
+  wheelScrolls.forEach((el, i) => {
+    if (indices[i] >= 0) {
+      scrollToItem(el as HTMLElement, indices[i]);
+    }
+  });
 }
 
 // 确认选择

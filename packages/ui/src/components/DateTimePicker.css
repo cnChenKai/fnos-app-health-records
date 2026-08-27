@@ -80,14 +80,13 @@
 
 .wheel-highlight {
   position: absolute;
-  top: 50%;
+  top: 4px;
   left: 4px;
   right: 4px;
   height: 40px;
-  transform: translateY(-50%);
   border: 2px solid var(--brand, #16a34a);
   border-radius: 8px;
-  background: var(--fill-2, #f7f7f5);
+  background: transparent;
   pointer-events: none;
   z-index: 1;
 }
