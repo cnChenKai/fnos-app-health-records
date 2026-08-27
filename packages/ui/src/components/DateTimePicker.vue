@@ -26,7 +26,7 @@ useScrollLock(computed(() => open.value && lockScroll.value));
 // 解析当前值
 const parsedDate = computed(() => {
   if (!props.modelValue) return null;
-  const match = props.modelValue.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/);
+  const match = props.modelValue.match(/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!match) return null;
   return {
     year: parseInt(match[1]),
