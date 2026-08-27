@@ -106,13 +106,20 @@ function displayValue(): string {
   return `${year}-${padZero(month)}-${padZero(day)} ${padZero(hour)}:${padZero(minute)}`;
 }
 
-// 滚轮滚动处理
+// 滚轮滚动处理（带自动吸附）
+let scrollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const ITEM_HEIGHT = 40;
+const HIGHLIGHT_TOP = 4; // 高亮框距离顶部的距离
+
 function onScroll(e: Event, type: "year" | "month" | "day" | "hour" | "minute") {
   const el = e.target as HTMLElement;
   const scrollTop = el.scrollTop;
-  const itemHeight = 40;
-  const index = Math.round(scrollTop / itemHeight);
 
+  // 计算当前选中的索引（考虑高亮框偏移）
+  const adjustedScrollTop = scrollTop - HIGHLIGHT_TOP;
+  const index = Math.round(adjustedScrollTop / ITEM_HEIGHT);
+
+  // 更新选中值
   switch (type) {
     case "year": selectedYear.value = years.value[index]; break;
     case "month": selectedMonth.value = months.value[index]; break;
@@ -120,11 +127,45 @@ function onScroll(e: Event, type: "year" | "month" | "day" | "hour" | "minute") 
     case "hour": selectedHour.value = hours.value[index]; break;
     case "minute": selectedMinute.value = minutes.value[index]; break;
   }
+
+  // 清除之前的定时器
+  if (scrollTimers[type]) {
+    clearTimeout(scrollTimers[type]);
+  }
+
+  // 设置新的定时器，滚动停止后自动吸附
+  scrollTimers[type] = setTimeout(() => {
+    snapToNearest(el, type);
+  }, 100);
 }
 
-// 滚动到指定位置
+// 自动吸附到最近的选项
+function snapToNearest(el: HTMLElement, type: "year" | "month" | "day" | "hour" | "minute") {
+  let currentValue: number;
+  let options: number[];
+
+  switch (type) {
+    case "year": currentValue = selectedYear.value; options = years.value; break;
+    case "month": currentValue = selectedMonth.value; options = months.value; break;
+    case "day": currentValue = selectedDay.value; options = days.value; break;
+    case "hour": currentValue = selectedHour.value; options = hours.value; break;
+    case "minute": currentValue = selectedMinute.value; options = minutes.value; break;
+  }
+
+  const index = options.indexOf(currentValue);
+  if (index >= 0) {
+    // 计算目标滚动位置，使选项居中在高亮框内
+    const targetScrollTop = index * ITEM_HEIGHT + HIGHLIGHT_TOP;
+    el.scrollTo({
+      top: targetScrollTop,
+      behavior: 'smooth'
+    });
+  }
+}
+
+// 滚动到指定位置（考虑高亮框偏移）
 function scrollToItem(el: HTMLElement, index: number) {
-  el.scrollTop = index * 40;
+  el.scrollTop = index * ITEM_HEIGHT + HIGHLIGHT_TOP;
 }
 
 // 滚动到选中位置
