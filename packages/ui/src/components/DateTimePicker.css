@@ -1,0 +1,98 @@
+/* DateTimePicker 手机端滚轮样式 */
+
+.datetime-picker-layer {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0, 0, 0, .4);
+  display: flex; align-items: flex-end;
+  animation: fade-in .15s ease;
+}
+
+.datetime-picker-panel {
+  width: 100%; background: var(--bg);
+  border-radius: 16px 16px 0 0;
+  padding: 0 0 env(safe-area-inset-bottom, 0px);
+  animation: slide-up .2s ease;
+}
+
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 头部 */
+.datetime-picker-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid var(--line);
+}
+
+.datetime-picker-cancel,
+.datetime-picker-confirm {
+  width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: transparent; color: var(--ink); cursor: pointer;
+  display: grid; place-items: center; transition: background .15s;
+}
+.datetime-picker-cancel:hover,
+.datetime-picker-confirm:hover { background: var(--fill-2); }
+.datetime-picker-confirm { color: var(--brand); font-weight: 600; }
+
+.datetime-picker-title {
+  font-size: 16px; font-weight: 600; color: var(--ink);
+}
+
+/* 滚轮容器 */
+.datetime-picker-wheels {
+  display: flex; gap: 8px; padding: 16px 12px;
+  height: 280px; overflow: hidden;
+}
+
+.datetime-picker-wheel {
+  flex: 1; display: flex; flex-direction: column; gap: 4px;
+  position: relative;
+}
+
+.wheel-label {
+  font-size: 12px; color: var(--muted); text-align: center;
+}
+
+.wheel-scroll {
+  flex: 1; overflow-y: auto; scroll-snap-type: y mandatory;
+  -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 25%,
+    black 75%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0%,
+    black 25%,
+    black 75%,
+    transparent 100%
+  );
+}
+
+.wheel-item {
+  height: 40px; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; color: var(--ink-2); scroll-snap-align: center;
+  transition: color .15s, transform .15s;
+}
+
+.wheel-item.selected {
+  color: var(--brand-strong); font-weight: 600; transform: scale(1.1);
+}
+
+/* 滚动条隐藏 */
+.wheel-scroll::-webkit-scrollbar { display: none; }
+.wheel-scroll { scrollbar-width: none; }
+
+/* 桌面端覆盖 */
+@media (min-width: 761px) {
+  .datetime-picker-layer { display: none; }
+}
