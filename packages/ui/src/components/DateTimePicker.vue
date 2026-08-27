@@ -115,17 +115,29 @@ function onScroll(e: Event, type: "year" | "month" | "day" | "hour" | "minute") 
   const el = e.target as HTMLElement;
   const scrollTop = el.scrollTop;
 
+  // 获取选项数组和当前选中值
+  let options: number[];
+  switch (type) {
+    case "year": options = years.value; break;
+    case "month": options = months.value; break;
+    case "day": options = days.value; break;
+    case "hour": options = hours.value; break;
+    case "minute": options = minutes.value; break;
+  }
+
   // 计算当前选中的索引（考虑高亮框偏移）
   const adjustedScrollTop = scrollTop - HIGHLIGHT_TOP;
-  const index = Math.round(adjustedScrollTop / ITEM_HEIGHT);
+  let index = Math.round(adjustedScrollTop / ITEM_HEIGHT);
+  // 边界检查
+  index = Math.max(0, Math.min(index, options.length - 1));
 
   // 更新选中值
   switch (type) {
-    case "year": selectedYear.value = years.value[index]; break;
-    case "month": selectedMonth.value = months.value[index]; break;
-    case "day": selectedDay.value = days.value[index] ?? 1; break;
-    case "hour": selectedHour.value = hours.value[index]; break;
-    case "minute": selectedMinute.value = minutes.value[index]; break;
+    case "year": selectedYear.value = options[index]; break;
+    case "month": selectedMonth.value = options[index]; break;
+    case "day": selectedDay.value = options[index]; break;
+    case "hour": selectedHour.value = options[index]; break;
+    case "minute": selectedMinute.value = options[index]; break;
   }
 
   // 清除之前的定时器
@@ -152,15 +164,28 @@ function snapToNearest(el: HTMLElement, type: "year" | "month" | "day" | "hour" 
     case "minute": currentValue = selectedMinute.value; options = minutes.value; break;
   }
 
-  const index = options.indexOf(currentValue);
-  if (index >= 0) {
-    // 计算目标滚动位置，使选项居中在高亮框内
-    const targetScrollTop = index * ITEM_HEIGHT + HIGHLIGHT_TOP;
-    el.scrollTo({
-      top: targetScrollTop,
-      behavior: 'smooth'
-    });
+  let index = options.indexOf(currentValue);
+  // 如果找不到，使用当前滚动位置计算最近的索引
+  if (index < 0) {
+    const adjustedScrollTop = el.scrollTop - HIGHLIGHT_TOP;
+    index = Math.round(adjustedScrollTop / ITEM_HEIGHT);
+    index = Math.max(0, Math.min(index, options.length - 1));
+    // 更新选中值
+    switch (type) {
+      case "year": selectedYear.value = options[index]; break;
+      case "month": selectedMonth.value = options[index]; break;
+      case "day": selectedDay.value = options[index]; break;
+      case "hour": selectedHour.value = options[index]; break;
+      case "minute": selectedMinute.value = options[index]; break;
+    }
   }
+
+  // 计算目标滚动位置，使选项居中在高亮框内
+  const targetScrollTop = index * ITEM_HEIGHT + HIGHLIGHT_TOP;
+  el.scrollTo({
+    top: targetScrollTop,
+    behavior: 'smooth'
+  });
 }
 
 // 滚动到指定位置（考虑高亮框偏移）
