@@ -19,6 +19,7 @@ import {
   X
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import DateTimePicker from "../components/DateTimePicker.vue";
 import FormSelect from "../components/FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import MorphologyFindingEditor from "../components/MorphologyFindingEditor.vue";
@@ -698,7 +699,7 @@ async function editorSaved() {
       <div v-if="reminderSeries" class="modal-backdrop compact-action-backdrop" @click.self="reminderSeries = null">
         <section class="modal-panel compact-action-modal" role="dialog" aria-modal="true" aria-label="创建复查提醒">
           <header><div><BellPlus :size="19" /><span><strong>创建复查提醒</strong><small>{{ reminderSeries.name }}</small></span></div><button class="plain-icon-button" type="button" @click="reminderSeries = null"><X :size="18" /></button></header>
-          <div class="compact-action-body"><label class="settings-form"><span>提醒日期</span><input v-model="reminderDueAt" type="date" /></label><p>提醒将关联最近一次来源报告，可从提醒卡片直接打开原报告。</p><p v-if="actionError" class="inline-panel-error">{{ actionError }}</p></div>
+          <div class="compact-action-body"><label class="settings-form"><span>提醒日期</span><DateTimePicker v-model="reminderDueAt" aria-label="提醒日期" /></label><p>提醒将关联最近一次来源报告，可从提醒卡片直接打开原报告。</p><p v-if="actionError" class="inline-panel-error">{{ actionError }}</p></div>
           <footer class="compact-action-footer"><button type="button" @click="reminderSeries = null">取消</button><button class="primary-button" type="button" :disabled="actionLoading || !reminderDueAt" @click="createFollowupReminder"><LoaderCircle v-if="actionLoading" class="spin-icon" :size="16" />创建提醒</button></footer>
         </section>
       </div>

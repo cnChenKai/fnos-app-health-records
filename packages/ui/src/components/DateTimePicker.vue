@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { Check, X } from "@lucide/vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { CalendarDays, Check, X } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
 
 const props = defineProps<{
@@ -12,14 +12,10 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string | null] }>();
 
-const isMobile = ref(false);
-onMounted(() => {
-  isMobile.value = window.matchMedia("(max-width: 760px)").matches;
-});
-
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const layer = ref<HTMLElement | null>(null);
+const panelStyle = ref<Record<string, string>>({});
 const lockScroll = ref(false);
 useScrollLock(computed(() => open.value && lockScroll.value));
 
@@ -58,6 +54,8 @@ const selectedMonth = ref(1);
 const selectedDay = ref(1);
 const selectedHour = ref(0);
 const selectedMinute = ref(0);
+const displayedYear = ref(selectedYear.value);
+const displayedMonth = ref(selectedMonth.value);
 
 watch(open, (value) => {
   if (value) {
@@ -76,6 +74,8 @@ watch(open, (value) => {
       selectedHour.value = now.getHours();
       selectedMinute.value = now.getMinutes();
     }
+    displayedYear.value = selectedYear.value;
+    displayedMonth.value = selectedMonth.value;
     // 等待 DOM 更新后滚动到选中位置
     nextTick(() => {
       scrollToSelected();
@@ -92,7 +92,7 @@ const years = computed(() => {
 const months = computed(() => Array.from({ length: 12 }, (_, i) => i + 1));
 
 const days = computed(() => {
-  const daysInMonth = new Date(selectedYear.value, selectedMonth.value, 0).getDate();
+  const daysInMonth = new Date(displayedYear.value, displayedMonth.value, 0).getDate();
   return Array.from({ length: daysInMonth }, (_, i) => i + 1);
 });
 
@@ -238,6 +238,26 @@ function snapToNearest(type: "year" | "month" | "day" | "hour" | "minute") {
   // 计算目标滚动位置，使选项居中在高亮框内
   const bufferedIndex = originalIndex + bufSize;
   const targetScrollTop = bufferedIndex * ITEM_HEIGHT + HIGHLIGHT_TOP;
+
+  // 月份滚动完成后才刷新日列，避免日列跟随每个滚动事件反复重排。
+  if (type === "year" || type === "month") {
+    const nextYear = type === "year" ? currentValue : selectedYear.value;
+    const nextMonth = type === "month" ? currentValue : selectedMonth.value;
+    displayedYear.value = nextYear;
+    displayedMonth.value = nextMonth;
+    const daysInMonth = new Date(nextYear, nextMonth, 0).getDate();
+    const dayWasClamped = selectedDay.value > daysInMonth;
+    if (dayWasClamped) {
+      selectedDay.value = daysInMonth;
+      nextTick(() => {
+        const dayEl = wheelDay.value;
+        if (!dayEl) return;
+        const dayIndex = days.value.indexOf(selectedDay.value);
+        const dayBufSize = getBufSize("day");
+        dayEl.scrollTop = (dayIndex + dayBufSize) * ITEM_HEIGHT + HIGHLIGHT_TOP;
+      });
+    }
+  }
   
   // 平滑滚动到目标位置
   el.scrollTo({
@@ -282,6 +302,17 @@ function cancel() {
   open.value = false;
 }
 
+function updatePanelPosition() {
+  if (!open.value || !root.value) return;
+  const trigger = root.value.getBoundingClientRect();
+  const panelWidth = Math.min(460, window.innerWidth - 32);
+  const left = Math.max(16, Math.min(trigger.left, window.innerWidth - panelWidth - 16));
+  panelStyle.value = {
+    top: `${trigger.bottom + 8}px`,
+    left: `${left}px`,
+  };
+}
+
 // 点击外部关闭
 function onDocPointerDown(event: Event) {
   const target = event.target as Node;
@@ -293,40 +324,34 @@ watch(open, (value) => {
   const action = value ? "addEventListener" : "removeEventListener";
   document[action]("mousedown", onDocPointerDown);
   document[action]("touchstart", onDocPointerDown);
+  window[action]("resize", updatePanelPosition);
+  window[action]("scroll", updatePanelPosition, true);
+  if (value) nextTick(updatePanelPosition);
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocPointerDown);
   document.removeEventListener("touchstart", onDocPointerDown);
+  window.removeEventListener("resize", updatePanelPosition);
+  window.removeEventListener("scroll", updatePanelPosition, true);
 });
 </script>
 
 <template>
   <div ref="root" class="datetime-picker" :class="{ disabled }">
-    <!-- 桌面端：原生输入框 -->
-    <input
-      v-if="!isMobile"
-      type="datetime-local"
-      :value="modelValue || ''"
+    <button
+      type="button"
+      class="datetime-picker-trigger"
       :disabled="disabled"
       :aria-label="ariaLabel"
-      @input="emit('update:modelValue', ($event.target as HTMLInputElement).value || null)"
-    />
-
-    <!-- 手机端：自定义滚轮 -->
-    <template v-else>
-      <button
-        type="button"
-        class="datetime-picker-trigger"
-        :disabled="disabled"
-        :aria-label="ariaLabel"
-        @click="open = true"
-      >
-        <span :class="{ placeholder: !modelValue }">{{ displayValue() }}</span>
-      </button>
-      <Teleport to="body">
-        <div v-if="open" ref="layer" class="datetime-picker-layer" @mousedown.self="cancel" @touchstart.self.prevent="cancel">
-          <div class="datetime-picker-panel">
+      @click="open = true"
+    >
+      <CalendarDays class="datetime-picker-trigger-icon" :size="17" aria-hidden="true" />
+      <span :class="{ placeholder: !modelValue }">{{ displayValue() }}</span>
+    </button>
+    <Teleport to="body">
+      <div v-if="open" ref="layer" class="datetime-picker-layer" @mousedown.self="cancel" @touchstart.self.prevent="cancel">
+        <div class="datetime-picker-panel" :style="panelStyle" role="dialog" aria-modal="true" :aria-label="label || '请选择时间'">
             <div class="datetime-picker-header">
               <button type="button" class="datetime-picker-cancel" @click="cancel">
                 <X :size="18" />
@@ -338,62 +363,57 @@ onBeforeUnmount(() => {
             </div>
             <div class="datetime-picker-wheels">
               <div class="datetime-picker-wheel">
-                <span class="wheel-label">年</span>
+                <span class="datetime-wheel-label">年</span>
                 <div class="wheel-scroll-wrapper">
-                  <div class="wheel-highlight"></div>
                   <div ref="wheelYear" class="wheel-scroll" @scroll="onScroll($event, 'year')">
-                    <div class="wheel-item" v-for="(y, idx) in getBufferedOptions('year')" :key="`year-${idx}-${y}`" :class="{ selected: y === selectedYear }">{{ y }}</div>
+                    <div class="datetime-wheel-item" v-for="(y, idx) in getBufferedOptions('year')" :key="`year-${idx}`" :class="{ selected: y === selectedYear }">{{ y }}</div>
                   </div>
                 </div>
               </div>
               <div class="datetime-picker-wheel">
-                <span class="wheel-label">月</span>
+                <span class="datetime-wheel-label">月</span>
                 <div class="wheel-scroll-wrapper">
-                  <div class="wheel-highlight"></div>
                   <div ref="wheelMonth" class="wheel-scroll" @scroll="onScroll($event, 'month')">
-                    <div class="wheel-item" v-for="(m, idx) in getBufferedOptions('month')" :key="`month-${idx}-${m}`" :class="{ selected: m === selectedMonth }">{{ padZero(m) }}</div>
+                    <div class="datetime-wheel-item" v-for="(m, idx) in getBufferedOptions('month')" :key="`month-${idx}`" :class="{ selected: m === selectedMonth }">{{ padZero(m) }}</div>
                   </div>
                 </div>
               </div>
               <div class="datetime-picker-wheel">
-                <span class="wheel-label">日</span>
+                <span class="datetime-wheel-label">日</span>
                 <div class="wheel-scroll-wrapper">
-                  <div class="wheel-highlight"></div>
                   <div ref="wheelDay" class="wheel-scroll" @scroll="onScroll($event, 'day')">
-                    <div class="wheel-item" v-for="(d, idx) in getBufferedOptions('day')" :key="`day-${idx}-${d}`" :class="{ selected: d === selectedDay }">{{ padZero(d) }}</div>
+                    <div class="datetime-wheel-item" v-for="(d, idx) in getBufferedOptions('day')" :key="`day-${idx}`" :class="{ selected: d === selectedDay }">{{ padZero(d) }}</div>
                   </div>
                 </div>
               </div>
               <template v-if="showTime">
                 <div class="datetime-picker-wheel">
-                  <span class="wheel-label">时</span>
+                  <span class="datetime-wheel-label">时</span>
                   <div class="wheel-scroll-wrapper">
-                    <div class="wheel-highlight"></div>
                     <div ref="wheelHour" class="wheel-scroll" @scroll="onScroll($event, 'hour')">
-                      <div class="wheel-item" v-for="(h, idx) in getBufferedOptions('hour')" :key="`hour-${idx}-${h}`" :class="{ selected: h === selectedHour }">{{ padZero(h) }}</div>
+                      <div class="datetime-wheel-item" v-for="(h, idx) in getBufferedOptions('hour')" :key="`hour-${idx}`" :class="{ selected: h === selectedHour }">{{ padZero(h) }}</div>
                     </div>
                   </div>
                 </div>
                 <div class="datetime-picker-wheel">
-                  <span class="wheel-label">分</span>
+                  <span class="datetime-wheel-label">分</span>
                   <div class="wheel-scroll-wrapper">
-                    <div class="wheel-highlight"></div>
                     <div ref="wheelMinute" class="wheel-scroll" @scroll="onScroll($event, 'minute')">
-                      <div class="wheel-item" v-for="(min, idx) in getBufferedOptions('minute')" :key="`minute-${idx}-${min}`" :class="{ selected: min === selectedMinute }">{{ padZero(min) }}</div>
+                      <div class="datetime-wheel-item" v-for="(min, idx) in getBufferedOptions('minute')" :key="`minute-${idx}`" :class="{ selected: min === selectedMinute }">{{ padZero(min) }}</div>
                     </div>
                   </div>
                 </div>
               </template>
             </div>
-          </div>
         </div>
-      </Teleport>
-    </template>
+      </div>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 .datetime-picker { display: block; width: 100%; min-width: 0; }
+.datetime-picker.compact-filter { width: auto; min-width: 0; padding: 0; background: transparent; box-shadow: none; }
 
 .datetime-picker input {
   display: block; width: 100%; min-height: 44px; padding-block: 0;
@@ -406,6 +426,14 @@ onBeforeUnmount(() => {
   background: var(--surface); color: var(--ink); font-size: 15px;
   text-align: left; cursor: pointer; transition: border-color .15s;
 }
+.datetime-picker-trigger-icon { flex: 0 0 auto; margin-right: 8px; color: var(--muted); }
 .datetime-picker-trigger:focus { border-color: var(--brand); outline: none; }
 .datetime-picker-trigger .placeholder { color: var(--muted); }
+.datetime-picker.compact-filter .datetime-picker-trigger {
+  min-height: 38px;
+  padding-inline: 10px;
+  border: 0;
+  box-shadow: var(--shadow-s);
+  font-size: 13px;
+}
 </style>
