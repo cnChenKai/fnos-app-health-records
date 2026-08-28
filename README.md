@@ -30,17 +30,28 @@
 
 ### 触屏端
 
-![触屏概览](./snapshot/touch-01-overview.png)
-
-![触屏报告详情](./snapshot/touch-09-report-detail.png)
-
-![触屏趋势来源原图](./snapshot/touch-10-trend-source-image.png)
+<table>
+  <tr>
+    <td align="center">
+      <img src="./snapshot/touch-01-overview.png" alt="触屏概览" width="280"><br>
+      触屏概览
+    </td>
+    <td align="center">
+      <img src="./snapshot/touch-09-report-detail.png" alt="触屏报告详情" width="280"><br>
+      触屏报告详情
+    </td>
+    <td align="center">
+      <img src="./snapshot/touch-10-trend-source-image.png" alt="触屏趋势来源原图" width="280"><br>
+      触屏趋势来源原图
+    </td>
+  </tr>
+</table>
 
 ## 部署方式
 
 | 方式 | 适合场景 | 身份认证 | 入口 |
 | --- | --- | --- | --- |
-| fnOS 应用 | 使用飞牛应用中心、系统账号和目录授权 | fnOS 网关账号 | [fnOS 安装文档](./docs/INSTALL_FNOS.md) |
+| fnOS 应用 | **优先通过飞牛应用中心安装和更新** | fnOS 网关账号 | [fnOS 安装与升级](./docs/INSTALL_FNOS.md) |
 | Docker | 普通 Linux/NAS、无 fnOS 网关或需要独立部署 | Docker 本地账号 | [Docker 部署文档](./docs/DOCKER_DEPLOYMENT.md) |
 
 ### Docker 快速开始
@@ -91,6 +102,8 @@ npm run build
 - QQ 交流群：`1085626763`
 
 交流群用于安装问题、功能建议和指标字典反馈。反馈时请只提供脱敏后的错误信息和未命中指标名称，不要发送报告原件、OCR 正文、结果值或成员信息。
+
+<img src="./snapshot/qq-group-qr.jpeg" alt="健康档案 QQ 交流群二维码" width="260">
 
 ## 项目目录
 
