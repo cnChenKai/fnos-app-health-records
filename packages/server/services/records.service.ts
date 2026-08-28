@@ -1570,6 +1570,7 @@ export function getReportDetail(
   `,
     )
     .all(reportId) as unknown as ReportPage[];
+  const detailOcrLineCache = new Map<string, Array<{ id: string; text: string }>>();
   const observations = suppressDuplicateMeasurementCandidates(getDatabase()
     .prepare(
       `
@@ -1601,7 +1602,7 @@ export function getReportDetail(
         normalizationMatchedBy: string | null;
         dictionaryReferenceJson: string | null;
       };
-      const evidence = parseJson<Array<{ quote?: string }> | null>(
+      const evidence = parseJson<Array<{ pageNumber?: number; quote?: string; confidence?: number }> | null>(
         row.evidenceJson,
         null,
       );
@@ -1637,6 +1638,39 @@ export function getReportDetail(
           row.dictionaryReferenceJson,
         ),
       });
+      const firstEvidence = Array.isArray(evidence) && evidence.length
+        ? evidence[0]
+        : null;
+      const evidencePageNumber = firstEvidence && Number.isInteger(firstEvidence.pageNumber)
+        ? Number(firstEvidence.pageNumber)
+        : null;
+      const evidencePage = evidencePageNumber
+        ? pages.find((page) => page.pageNumber === evidencePageNumber)
+        : null;
+      const tableEvidence = observationTableEvidence(row.evidenceJson);
+      const matchedEvidence = tableEvidence?.rowLineIds.length
+        ? { rowLineIds: tableEvidence.rowLineIds }
+        : evidencePageNumber && firstEvidence?.quote
+          ? matchQuoteToOcrLines(
+              firstEvidence.quote,
+              row.itemName,
+              row.resultText,
+              row.numericValue,
+              ocrLinesForTrendEvidence(
+                detailOcrLineCache,
+                row.reportId,
+                evidencePageNumber,
+              ),
+            )
+          : null;
+      const detailEvidence = evidencePage
+        ? {
+            pageId: evidencePage.id,
+            lineIds: matchedEvidence?.rowLineIds || [],
+            sourceText: firstEvidence?.quote || "",
+            confidence: null,
+          }
+        : null;
       const {
         normalizationMatchedBy: _normalizationMatchedBy,
         dictionaryReferenceJson: _dictionaryReferenceJson,
@@ -1656,7 +1690,7 @@ export function getReportDetail(
         abnormalStatus: interpretation.status,
         abnormalConflict: interpretation.conflict,
         abnormalReason: interpretation.reason,
-        evidence,
+        evidence: detailEvidence,
         evidenceJson: undefined,
         ...display,
       };

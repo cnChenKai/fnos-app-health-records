@@ -2173,10 +2173,18 @@ onActivated(() => {
           <section v-if="primaryObservations.length" class="observation-tier-section">
             <header><strong>标准化指标</strong><span>{{ primaryObservations.length }} 项，可参与趋势门禁判断</span></header>
             <div class="observation-list">
-              <article v-for="item in primaryObservations" :key="item.id" :class="{ 'is-selected': selectedObservationId === item.id }">
+              <article
+                v-for="item in primaryObservations"
+                :key="item.id"
+                :class="{ 'is-selected': selectedObservationId === item.id }"
+                tabindex="0"
+                @click="openObservationEditor(item)"
+                @keydown.enter.prevent="openObservationEditor(item)"
+                @keydown.space.prevent="openObservationEditor(item)"
+              >
                 <strong>{{ item.itemName }}</strong>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <button class="observation-edit-button" type="button" title="编辑指标" @click="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
                 <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
                 <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
@@ -2187,10 +2195,18 @@ onActivated(() => {
           <section v-if="pendingReviewObservations.length" class="observation-tier-section">
             <header><strong>待核对指标</strong><span>{{ pendingReviewObservations.length }} 项，已识别但暂不进入趋势</span></header>
             <div class="observation-list">
-              <article v-for="item in pendingReviewObservations" :key="item.id" :class="{ 'is-selected': selectedObservationId === item.id }">
+              <article
+                v-for="item in pendingReviewObservations"
+                :key="item.id"
+                :class="{ 'is-selected': selectedObservationId === item.id }"
+                tabindex="0"
+                @click="openObservationEditor(item)"
+                @keydown.enter.prevent="openObservationEditor(item)"
+                @keydown.space.prevent="openObservationEditor(item)"
+              >
                 <strong>{{ item.itemName }}</strong>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <button class="observation-edit-button" type="button" title="编辑指标" @click="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
                 <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
                 <small v-if="item.displayReason" class="observation-display-reason">{{ item.displayReason }}</small>
@@ -2437,7 +2453,7 @@ onActivated(() => {
 
   <Teleport to="body">
     <div v-if="ocrSheetOpen" class="sheet-backdrop ocr-text-sheet-backdrop" @click.self="closeOcrText">
-      <section class="sheet-panel ocr-text-sheet" :class="{ 'is-reviewing': diagnosticReviewItem }">
+      <section class="sheet-panel ocr-text-sheet" :class="{ 'is-reviewing': diagnosticReviewItem, 'is-comparing': ocrComparePageNumber !== null }">
         <span class="sheet-grabber"></span>
         <header class="sheet-header">
           <div>
