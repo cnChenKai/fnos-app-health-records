@@ -114,7 +114,8 @@ import {
   type ReportDuplicateRuleVersion,
 } from "./report-duplicate-rules.service";
 
-type ReportCursor = { issuedAt: string | null; id: string };
+type ReportCursor = { sortDate: string | null; id: string };
+export type ReportSort = "report_date_desc" | "report_date_asc" | "created_desc";
 export type ReportFilters = {
   memberId?: string;
   cursor?: string;
@@ -125,6 +126,7 @@ export type ReportFilters = {
   dateTo?: string;
   ocrQuery?: string;
   trash?: boolean;
+  sort?: ReportSort;
 };
 
 const displayDepartmentSql = `
@@ -158,9 +160,9 @@ function decodeCursor(value?: string): ReportCursor | null {
     const decoded = Buffer.from(value, "base64url").toString("utf8");
     const separator = decoded.lastIndexOf("|");
     if (separator < 0) return null;
-    const issuedAt = decoded.slice(0, separator) || null;
+    const sortDate = decoded.slice(0, separator) || null;
     const id = decoded.slice(separator + 1);
-    return id ? { issuedAt, id } : null;
+    return id ? { sortDate, id } : null;
   } catch {
     return null;
   }
@@ -1079,7 +1081,10 @@ export function listReports(
   const safeLimit = Math.min(50, Math.max(1, Math.round(limit)));
   const cursor = decodeCursor(filters.cursor);
   const cursorId = cursor?.id ?? null;
-  const cursorIssuedAt = cursor?.issuedAt ?? null;
+  const sort = filters.sort || "report_date_desc";
+  const sortDateSql = sort === "created_desc" ? "r.created_at" : `COALESCE(${reportDisplayDateSql}, r.created_at)`;
+  const sortDirection = sort === "report_date_asc" ? "ASC" : "DESC";
+  const cursorSortDate = cursor?.sortDate ?? null;
 
   const where = ["(? IS NULL OR r.member_id = ?)"];
   const params: Array<string | number | null> = [
@@ -1132,27 +1137,12 @@ export function listReports(
     )`);
     params.push(`%${ocrQuery}%`);
   }
-  where.push(`(
-    ? IS NULL
-    OR (
-      ? IS NOT NULL
-      AND (r.report_issued_at < ? OR r.report_issued_at IS NULL OR (r.report_issued_at = ? AND r.id < ?))
-    )
-    OR (
-      ? IS NULL
-      AND r.report_issued_at IS NULL
-      AND r.id < ?
-    )
-  )`);
-  params.push(
-    cursorId,
-    cursorIssuedAt,
-    cursorIssuedAt,
-    cursorIssuedAt,
-    cursorId,
-    cursorIssuedAt,
-    cursorId,
-  );
+  /* 游标必须与 ORDER BY 使用同一个有效日期，避免 NULL 报告日期跨页错位。 */
+  if (cursor) {
+    const comparison = sortDirection === "ASC" ? ">" : "<";
+    where.push(`(${sortDateSql} ${comparison} ? OR (${sortDateSql} = ? AND r.id ${comparison} ?))`);
+    params.push(cursorSortDate, cursorSortDate, cursorId);
+  }
   params.push(safeLimit + 1);
 
   const rows = getDatabase()
@@ -1163,25 +1153,26 @@ export function listReports(
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
       ${reportDisplayDateSql} AS reportIssuedAt,
+      ${sortDateSql} AS sortDate,
       ${reportAbnormalCountSql},
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount
     FROM reports r
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
     WHERE ${where.join(" AND ")}
-    ORDER BY r.report_issued_at DESC, r.id DESC
+    ORDER BY ${sortDateSql} ${sortDirection}, r.id ${sortDirection}
     LIMIT ?
   `,
     )
     .all(...params) as ReportSummary[];
   const hasMore = rows.length > safeLimit;
   const items = hasMore ? rows.slice(0, safeLimit) : rows;
-  const last = items.at(-1);
+  const last = items.at(-1) as (ReportSummary & { sortDate?: string | null }) | undefined;
   return {
     items,
     hasMore,
     nextCursor:
       hasMore && last
-        ? Buffer.from(`${last.reportIssuedAt || ""}|${last.id}`).toString(
+        ? Buffer.from(`${last.sortDate || ""}|${last.id}`).toString(
             "base64url",
           )
         : null,

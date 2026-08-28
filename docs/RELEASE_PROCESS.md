@@ -9,17 +9,17 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.4` | `package.json` |
-| fnOS manifest 版本 | `0.2.4` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.4` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | `0.2.4`、`v0.2.4` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | 以 `package.json` 为准 | `package.json` |
+| fnOS manifest 版本 | 与 `package.json` 一致 | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | 与 `package.json` 一致 | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 同时使用 `X.Y.Z`、`vX.Y.Z` 等标签 | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v16` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
-当前 `0.2.0` 的目标数据库版本为 v16。v16 包含指标字典运行时、独立形态发现表、分类专属领域表、报告专属章节表、AI 解析单元/尝试表和 AI 提取候选追踪表；开发期的 v17-v19 仅存在于预发布阶段，已折叠回 v16 并在启动时幂等补齐。发布 v16 安装包、tag 或对外测试包后，v16 即冻结；此后任何表、字段、索引或约束变化都必须新增 v17。
+当前目标数据库版本为 v16。v16 包含指标字典运行时、独立形态发现表、分类专属领域表、报告专属章节表、AI 解析单元/尝试表和 AI 提取候选追踪表；开发期的 v17-v19 仅存在于预发布阶段，已折叠回 v16 并在启动时幂等补齐。发布 v16 安装包、tag 或对外测试包后，v16 即冻结；此后任何表、字段、索引或约束变化都必须新增 v17。
 
 ## 记录什么时候建立
 
@@ -235,9 +235,9 @@ npm run release:notes
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
 - Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、应用版本、应用 ID、目标 schema 和数据库升级说明。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。
-- `vX.Y.Z` Tag 先构建 fnOS `.fpk`，再通过 Buildx 发布 `linux/amd64`、`linux/arm64` 的 GHCR 多架构镜像，最后创建同时包含 `.fpk`、镜像地址和 digest 的 GitHub Release。
+- `vX.Y.Z` Tag 先构建 fnOS `.fpk`，再通过 Buildx 发布 `linux/amd64`、`linux/arm64` 的 Docker Hub 多架构镜像，最后创建同时包含 `.fpk`、镜像地址和 digest 的 GitHub Release。
 - Docker 镜像标签包含精确版本 `X.Y.Z`、`vX.Y.Z`、`X.Y` 和短提交 SHA；稳定版本额外更新 `latest`。镜像版本与 `.fpk` 版本都只取自同一个 `package.json`。
-- 镜像发布启用 OCI 源码、版本、许可证标签、SBOM 和 GitHub Actions provenance。发布前应确认仓库 Packages 权限允许 Actions 写入 GHCR。
+- 镜像发布启用 OCI 源码、版本、许可证标签、SBOM 和 GitHub Actions provenance。发布前应确认 Docker Hub Access Token 和 GitHub Actions Secrets 配置正确。
 
 本地完整发布：
 

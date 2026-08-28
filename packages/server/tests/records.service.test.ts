@@ -1780,12 +1780,40 @@ test("falls back to other report timestamps for display when reportIssuedAt is m
       INSERT INTO reports (id, member_id, created_by, report_type, title, status)
       VALUES ('display-date-empty', 'display-date-member', ?, 'laboratory', '无时间报告', 'ready')
     `).run(manager.id);
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, report_issued_at)
+      VALUES ('display-date-issued', 'display-date-member', ?, 'laboratory', '报告日期明确', 'ready', '2023-01-01')
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, examined_at)
+      VALUES ('display-date-fallback-later', 'display-date-member', ?, 'laboratory', '检查日期较晚', 'ready', '2025-01-01')
+    `).run(manager.id);
 
     const list = listReports(manager, 30, 'display-date-member');
     const fallback = list.items.find((item) => item.id === 'display-date-fallback');
     const empty = list.items.find((item) => item.id === 'display-date-empty');
     assert.equal(fallback?.reportIssuedAt, '2024-01-09 11:11:00');
     assert.equal(empty?.reportIssuedAt, null);
+    assert.deepEqual(list.items.map((item) => item.id), [
+      'display-date-empty',
+      'display-date-fallback-later',
+      'display-date-fallback',
+      'display-date-issued'
+    ]);
+
+    const ascending = listReports(manager, 30, { memberId: 'display-date-member', sort: 'report_date_asc' });
+    assert.deepEqual(ascending.items.map((item) => item.id), [
+      'display-date-issued',
+      'display-date-fallback',
+      'display-date-fallback-later',
+      'display-date-empty'
+    ]);
+    const firstPage = listReports(manager, 2, { memberId: 'display-date-member' });
+    const secondPage = listReports(manager, 2, {
+      memberId: 'display-date-member',
+      cursor: firstPage.nextCursor || undefined
+    });
+    assert.deepEqual([...firstPage.items, ...secondPage.items].map((item) => item.id), list.items.map((item) => item.id));
 
     const detail = getReportDetail(manager, 'display-date-fallback');
     assert.equal(detail.reportIssuedAt, '2024-01-09 11:11:00');

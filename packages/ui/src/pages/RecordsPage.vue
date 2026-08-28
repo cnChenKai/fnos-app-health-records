@@ -36,6 +36,7 @@ const typeFilter = ref("all");
 const statusFilter = ref("all");
 const dateFrom = ref("");
 const dateTo = ref("");
+const sortFilter = ref("report_date_desc");
 const selectedId = ref("");
 const mobileDetailOpen = ref(false);
 useScrollLock(computed(() => mobileDetailOpen.value));
@@ -87,6 +88,11 @@ const statusOptions = [
   { value: "queued", label: "排队中" },
   { value: "failed", label: "识别失败" }
 ];
+const sortOptions = [
+  { value: "report_date_desc", label: "报告日期从新到旧" },
+  { value: "report_date_asc", label: "报告日期从旧到新" },
+  { value: "created_desc", label: "上传时间从新到旧" }
+];
 const allowedStatusFilters = new Set(statusOptions.map((item) => item.value));
 
 function typeLabel(reportType: string) {
@@ -106,6 +112,7 @@ function buildReportParams(memberId: string, cursor?: string | null, limit = PAG
   if (statusFilter.value !== "all") params.set("status", statusFilter.value);
   if (dateFrom.value) params.set("dateFrom", dateFrom.value);
   if (dateTo.value) params.set("dateTo", dateTo.value);
+  if (sortFilter.value !== "report_date_desc") params.set("sort", sortFilter.value);
   return params;
 }
 
@@ -340,6 +347,7 @@ useRefreshOnActivate(() => { void reloadList(); });
       <input v-model="ocrQuery" class="compact-filter advanced-filter" placeholder="OCR 全文" @keydown.enter="applyFilters" />
       <FormSelect v-model="typeFilter" class="records-filter-select advanced-filter" :options="typeOptions" aria-label="报告类型" @change="applyFilters" />
       <FormSelect v-model="statusFilter" class="records-filter-select advanced-filter" :options="statusOptions" aria-label="归档状态" @change="applyFilters" />
+      <FormSelect v-model="sortFilter" class="records-sort-select advanced-filter" :options="sortOptions" aria-label="报告排序" @change="applyFilters" />
       <DateTimePicker v-model="dateFrom" class="compact-filter date-filter advanced-filter" label="开始日期" aria-label="开始日期" @update:model-value="applyFilters" />
       <DateTimePicker v-model="dateTo" class="compact-filter date-filter advanced-filter" label="结束日期" aria-label="结束日期" @update:model-value="applyFilters" />
       <button class="soft-action-button advanced-filter" type="button" @click="applyFilters">筛选</button>

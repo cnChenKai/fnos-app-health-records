@@ -187,15 +187,15 @@ TRUST_PROXY=1 docker compose up -d
 正式环境建议固定版本，不要长期依赖 `latest`：
 
 ```bash
-HEALTH_RECORDS_VERSION=0.2.2 docker compose pull
-HEALTH_RECORDS_VERSION=0.2.2 docker compose up -d
+HEALTH_RECORDS_VERSION=<version> docker compose pull
+HEALTH_RECORDS_VERSION=<version> docker compose up -d
 ```
 
 升级到新版本：
 
 ```bash
-HEALTH_RECORDS_VERSION=0.2.3 docker compose pull
-HEALTH_RECORDS_VERSION=0.2.3 docker compose up -d
+HEALTH_RECORDS_VERSION=<version> docker compose pull
+HEALTH_RECORDS_VERSION=<version> docker compose up -d
 ```
 
 应用启动时会按数据库 schema 自动迁移，并在需要时创建迁移前备份。升级前仍建议在“我的 -> 备份与恢复”创建并下载一份完整备份。

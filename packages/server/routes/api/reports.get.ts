@@ -1,5 +1,5 @@
 import { defineEventHandler, getQuery } from "h3";
-import { listReports } from "../../services/records.service";
+import { listReports, type ReportSort } from "../../services/records.service";
 import { ok } from "../../utils/api-response";
 import { getRequestUser } from "../../utils/request-user";
 
@@ -14,6 +14,9 @@ export default defineEventHandler((event) => {
     status: typeof query.status === "string" ? query.status : undefined,
     dateFrom: typeof query.dateFrom === "string" ? query.dateFrom : undefined,
     dateTo: typeof query.dateTo === "string" ? query.dateTo : undefined,
-    trash: query.trash === "1"
+    trash: query.trash === "1",
+    sort: query.sort === "report_date_asc" || query.sort === "created_desc" || query.sort === "report_date_desc"
+      ? query.sort as ReportSort
+      : undefined
   }));
 });
