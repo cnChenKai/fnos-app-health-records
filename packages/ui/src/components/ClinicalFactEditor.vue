@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { LoaderCircle, Pencil, X } from "@lucide/vue";
+import DateTimePicker from "./DateTimePicker.vue";
 import FormSelect from "./FormSelect.vue";
 import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
@@ -257,7 +258,7 @@ async function save() {
             <label class="field-wide"><span>操作名称</span><input v-model="form.procedureName" required /></label>
             <label><span>操作编码</span><input v-model="form.procedureCode" /></label>
             <label><span>部位</span><input v-model="form.bodyPart" /></label>
-            <label><span>执行时间</span><input v-model="form.performedAt" type="datetime-local" step="1" /></label>
+            <label><span>执行时间</span><DateTimePicker v-model="form.performedAt" show-time aria-label="执行时间" /></label>
             <label class="field-wide"><span>结果原文</span><textarea v-model="form.resultText" rows="3"></textarea></label>
           </div>
           <div v-else-if="type === 'vaccination'" class="form-grid">
@@ -265,9 +266,9 @@ async function save() {
             <label><span>剂次</span><input v-model="form.doseNumber" /></label>
             <label><span>厂家</span><input v-model="form.manufacturer" /></label>
             <label><span>批号</span><input v-model="form.lotNumber" /></label>
-            <label><span>接种时间</span><input v-model="form.administeredAt" type="datetime-local" step="1" /></label>
+            <label><span>接种时间</span><DateTimePicker v-model="form.administeredAt" show-time aria-label="接种时间" /></label>
             <label><span>接种部位</span><input v-model="form.administrationSite" /></label>
-            <label><span>下次接种时间</span><input v-model="form.nextDueAt" type="datetime-local" step="1" /></label>
+            <label><span>下次接种时间</span><DateTimePicker v-model="form.nextDueAt" show-time aria-label="下次接种时间" /></label>
           </div>
           <div v-else-if="type === 'billingSummary'" class="form-grid">
             <label><span>票据号</span><input v-model="form.invoiceNumber" /></label>

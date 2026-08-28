@@ -3,6 +3,7 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, 
 import { useRoute, useRouter } from "vue-router";
 import { CalendarDays, ChevronRight, CircleAlert, LoaderCircle, RefreshCw, Search } from "@lucide/vue";
 import BackToTop from "../components/BackToTop.vue";
+import DateTimePicker from "../components/DateTimePicker.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import PullIndicator from "../components/PullIndicator.vue";
@@ -339,8 +340,8 @@ useRefreshOnActivate(() => { void reloadList(); });
       <input v-model="ocrQuery" class="compact-filter advanced-filter" placeholder="OCR 全文" @keydown.enter="applyFilters" />
       <FormSelect v-model="typeFilter" class="records-filter-select advanced-filter" :options="typeOptions" aria-label="报告类型" @change="applyFilters" />
       <FormSelect v-model="statusFilter" class="records-filter-select advanced-filter" :options="statusOptions" aria-label="归档状态" @change="applyFilters" />
-      <input v-model="dateFrom" class="compact-filter date-filter advanced-filter" type="date" title="开始日期" @change="applyFilters" />
-      <input v-model="dateTo" class="compact-filter date-filter advanced-filter" type="date" title="结束日期" @change="applyFilters" />
+      <DateTimePicker v-model="dateFrom" class="compact-filter date-filter advanced-filter" label="开始日期" aria-label="开始日期" @update:model-value="applyFilters" />
+      <DateTimePicker v-model="dateTo" class="compact-filter date-filter advanced-filter" label="结束日期" aria-label="结束日期" @update:model-value="applyFilters" />
       <button class="soft-action-button advanced-filter" type="button" @click="applyFilters">筛选</button>
     </div>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />

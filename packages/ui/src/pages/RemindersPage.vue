@@ -2,6 +2,7 @@
 import { ref, watch } from "vue";
 import { BellRing, CheckCircle2, Clock3, Plus, X } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import DateTimePicker from "../components/DateTimePicker.vue";
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { request } from "../utils/api";
@@ -173,7 +174,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
     <form v-if="formOpen" class="settings-band reminder-form" @submit.prevent="createManualReminder">
       <div class="form-grid">
         <label><span>提醒标题</span><input v-model="form.title" placeholder="例如 复查甲状腺彩超" /></label>
-        <label><span>到期日期</span><input v-model="form.dueAt" type="date" /></label>
+        <label><span>到期日期</span><DateTimePicker v-model="form.dueAt" aria-label="到期日期" /></label>
       </div>
       <p v-if="error" class="inline-panel-error">{{ error }}</p>
       <div class="form-actions"><button type="button" @click="formOpen = false">取消</button><button class="primary-button" :disabled="saving">保存</button></div>

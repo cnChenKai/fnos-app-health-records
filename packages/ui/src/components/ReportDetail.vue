@@ -6,6 +6,7 @@ import {
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
+import DateTimePicker from "./DateTimePicker.vue";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
 import ReportStructuredSectionEditor from "./ReportStructuredSectionEditor.vue";
 import FormSelect from "./FormSelect.vue";
@@ -2402,8 +2403,8 @@ onActivated(() => {
               <div class="form-grid">
                 <label><span>标题<em v-if="isManualField('title')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.title" /></label>
                 <label><span>报告类型<em v-if="isManualField('reportType')" class="manual-field-chip">人工校对</em></span><FormSelect v-model="editForm.reportType" :options="typeOptions.filter((option) => option.value !== 'all')" aria-label="报告类型" /></label>
-                <label><span>报告生成时间<em v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportIssuedAt" type="datetime-local" step="1" /></label>
-                <label><span>检查时间<em v-if="isManualField('examinedAt')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.examinedAt" type="datetime-local" step="1" /></label>
+                <label><span>报告生成时间<em v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</em></span><DateTimePicker v-model="editForm.reportIssuedAt" show-time aria-label="报告生成时间" /></label>
+                <label><span>检查时间<em v-if="isManualField('examinedAt')" class="manual-field-chip">人工校对</em></span><DateTimePicker v-model="editForm.examinedAt" show-time aria-label="检查时间" /></label>
                 <label><span>医院<em v-if="isManualField('hospitalName')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalName" /></label>
                 <label><span>院区/分院<em v-if="isManualField('hospitalBranch')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.hospitalBranch" /></label>
                 <label><span>城市<em v-if="isManualField('city')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.city" /></label>
