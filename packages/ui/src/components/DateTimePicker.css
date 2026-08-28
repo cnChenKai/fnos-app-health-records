@@ -30,7 +30,7 @@
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line, #e0e0dc);
-  background: var(--surface, #ffffff);
+  background: #ffffff;
 }
 
 .datetime-picker-cancel,
@@ -80,7 +80,7 @@
 
 .wheel-highlight {
   position: absolute;
-  top: 4px;
+  top: 0;
   left: 4px;
   right: 4px;
   height: 40px;
@@ -95,7 +95,6 @@
   height: 100%;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding-top: 4px;
 }
 
 .wheel-item {

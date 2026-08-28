@@ -124,7 +124,7 @@ function displayValue(): string {
 // 滚轮滚动处理（带自动吸附）
 let scrollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 const ITEM_HEIGHT = 40;
-const HIGHLIGHT_TOP = 4; // 高亮框距离顶部的距离
+const HIGHLIGHT_TOP = 0; // 高亮框距离顶部的距离
 const BUFFER_SIZE = 100; // 循环缓冲项数量（足够大以实现平滑循环）
 
 // 获取缓冲后的选项数组
@@ -325,7 +325,7 @@ onBeforeUnmount(() => {
         <span :class="{ placeholder: !modelValue }">{{ displayValue() }}</span>
       </button>
       <Teleport to="body">
-        <div v-if="open" ref="layer" class="datetime-picker-layer" @mousedown.self="cancel" @touchstart.self="cancel">
+        <div v-if="open" ref="layer" class="datetime-picker-layer" @mousedown.self="cancel" @touchstart.self.prevent="cancel">
           <div class="datetime-picker-panel">
             <div class="datetime-picker-header">
               <button type="button" class="datetime-picker-cancel" @click="cancel">
@@ -393,7 +393,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.datetime-picker { display: block; width: 100%; }
+.datetime-picker { display: block; width: 100%; min-width: 0; }
 
 .datetime-picker input {
   display: block; width: 100%; min-height: 44px; padding-block: 0;
@@ -403,7 +403,7 @@ onBeforeUnmount(() => {
 .datetime-picker-trigger {
   display: flex; align-items: center; width: 100%; min-height: 44px;
   padding: 0 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--fill-1); color: var(--ink); font-size: 15px;
+  background: var(--surface); color: var(--ink); font-size: 15px;
   text-align: left; cursor: pointer; transition: border-color .15s;
 }
 .datetime-picker-trigger:focus { border-color: var(--brand); outline: none; }
