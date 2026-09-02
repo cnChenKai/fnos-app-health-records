@@ -17,6 +17,7 @@ export type ProcessingJobQueuedDetail = {
   batchId: string | null;
   source: string | null;
   previousReportStatus: string | null;
+  remoteScope: "source" | "page" | null;
   ocrMode: OcrRecognitionMode;
   remoteProcessingAccepted: boolean;
 };
@@ -34,6 +35,7 @@ export function parseProcessingJobQueuedDetail(value: string | undefined): Proce
       batchId?: unknown;
       source?: unknown;
       previousReportStatus?: unknown;
+      remoteScope?: unknown;
       ocrMode?: unknown;
       remoteProcessingAccepted?: unknown;
     };
@@ -41,6 +43,7 @@ export function parseProcessingJobQueuedDetail(value: string | undefined): Proce
       batchId: typeof detail.batchId === "string" && detail.batchId.trim() ? detail.batchId.trim() : null,
       source: typeof detail.source === "string" ? detail.source : null,
       previousReportStatus: typeof detail.previousReportStatus === "string" ? detail.previousReportStatus : null,
+      remoteScope: detail.remoteScope === "source" || detail.remoteScope === "page" ? detail.remoteScope : null,
       ocrMode: normalizeOcrRecognitionMode(detail.ocrMode),
       remoteProcessingAccepted: detail.remoteProcessingAccepted === true
     };
@@ -49,6 +52,7 @@ export function parseProcessingJobQueuedDetail(value: string | undefined): Proce
       batchId: null,
       source: null,
       previousReportStatus: null,
+      remoteScope: null,
       ocrMode: "local",
       remoteProcessingAccepted: false
     };
@@ -76,6 +80,7 @@ export function deriveProcessingJobBatches(
       batchId: null,
       source: null,
       previousReportStatus: null,
+      remoteScope: null,
       ocrMode: "local" as const,
       remoteProcessingAccepted: false
     };

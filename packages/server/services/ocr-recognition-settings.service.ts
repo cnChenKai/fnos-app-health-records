@@ -173,7 +173,7 @@ export function validateOcrBatchSelection(input: OcrBatchSelectionInput = {}) {
   if (ocrRecognitionModeCatalog[current.mode].externalProcessing && !remoteProcessingAccepted) {
     throw createError({
       statusCode: 400,
-      statusMessage: "使用 MinerU 前需要确认完整页面副本将发送至外部服务"
+      statusMessage: "使用 MinerU 前需要确认原始 PDF/图片内容将发送至外部服务"
     });
   }
   if (current.mode === "mineru_precise" && !current.apiToken) {

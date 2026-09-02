@@ -8,6 +8,7 @@ import type { RequestUser } from "../domain/request-user.ts";
 import {
   listProcessingJobEvents,
   cleanupStaleMineruTemporaryFiles,
+  claimNextJob,
   processNextJob,
   reprocessReportOcrAndAi,
   type WorkerExecutor,
@@ -98,6 +99,186 @@ function successfulMineru(engine: "mineru-agent" | "mineru-precise" = "mineru-ag
   });
 }
 
+function successfulPrecisePdf(): MinerURecognitionExecutor {
+  return async () => ({
+    ok: true,
+    engine: "mineru-precise",
+    modelVersion: "vlm",
+    lines: [{ id: "mineru-line-1", text: "第一页" }],
+    remotePages: [
+      { pageNumber: 1, lines: [{ id: "mineru-page-1", text: "第一页" }] },
+      { pageNumber: 2, lines: [{ id: "mineru-page-2", text: "第二页" }] },
+    ],
+    pageMappingAvailable: true,
+    elapsedMs: 12,
+    engineElapsed: { source: "mineru_markdown", coordinateAvailable: false },
+  });
+}
+
+test("remote source OCR runs without a local OCR runtime and queues one task per source", async () => {
+  await withDatabase(async () => {
+    saveOcrRecognitionSettings({ mode: "mineru_precise", apiToken: "precise-test-token" });
+    const upload = createUpload(manager, "mineru-runner-member", [
+      { originalName: "remote-source.png", data: pngBytes() },
+    ], { ocrMode: "mineru_precise", remoteProcessingAccepted: true });
+
+    assert.equal(upload.jobCount, 1);
+    const queued = getDatabase().prepare(
+      "SELECT job_type AS jobType FROM processing_jobs WHERE report_id = ? ORDER BY rowid",
+    ).all(upload.reportId) as Array<{ jobType: string }>;
+    assert.deepEqual(queued.map((job) => job.jobType), ["ocr"]);
+
+    /* Use the production worker reference (rather than a fake worker) so the
+       scheduler still performs its local-runtime capability filter. The
+       injected MinerU executor is the only engine invoked for this batch. */
+    assert.equal(
+      await processNextJob(undefined, undefined, successfulMineru("mineru-precise")),
+      true,
+    );
+    const jobs = listProcessingJobs(manager, upload.reportId);
+    assert.equal(jobs.some((job) => job.jobType === "thumbnail" || job.jobType === "pdf_extract"), false);
+    const ocrJob = jobs.find((job) => job.jobType === "ocr");
+    assert.equal(ocrJob?.status, "completed");
+    assert.equal(ocrJob?.ocrMode, "mineru_precise");
+    const result = getDatabase().prepare(
+      "SELECT engine FROM ocr_results WHERE job_id = ?",
+    ).get(ocrJob?.id) as { engine: string } | undefined;
+    assert.equal(result?.engine, "mineru-precise");
+  });
+});
+
+test("deleting the first page keeps an active precise source task resumable", async () => {
+  await withDatabase(async () => {
+    saveOcrRecognitionSettings({ mode: "mineru_precise", apiToken: "precise-test-token" });
+    const upload = createUpload(manager, "mineru-runner-member", [
+      { originalName: "source.pdf", data: Buffer.from("%PDF-1.4\n%%EOF") },
+    ], { ocrMode: "mineru_precise", remoteProcessingAccepted: true });
+    const db = getDatabase();
+    const first = db.prepare(`
+      SELECT id, original_name AS originalName, storage_path AS storagePath,
+        mime_type AS mimeType, file_size AS fileSize, sha256, rotation
+      FROM report_pages WHERE id = ?
+    `).get(upload.pages[0]!.id) as {
+      id: string; originalName: string; storagePath: string; mimeType: string;
+      fileSize: number; sha256: string; rotation: number;
+    };
+    db.prepare("UPDATE report_pages SET source_page_count = 2 WHERE id = ?").run(first.id);
+    db.prepare(`
+      INSERT INTO report_pages (
+        id, report_id, page_number, original_name, storage_path, mime_type,
+        file_size, sha256, rotation, source_page_number, source_page_count
+      ) VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, 2, 2)
+    `).run(
+      "mineru-second-source-page", upload.reportId, first.originalName, first.storagePath,
+      first.mimeType, first.fileSize, first.sha256, first.rotation,
+    );
+
+    const claimed = claimNextJob();
+    assert.equal(claimed?.jobType, "ocr");
+    assert.equal(claimed?.pageId, first.id);
+
+    deleteReportPage(manager, upload.reportId, first.id, {
+      ocrMode: "mineru_precise",
+      remoteProcessingAccepted: true,
+    });
+
+    const survivingJob = db.prepare(`
+      SELECT j.page_id AS pageId, j.status
+      FROM processing_jobs j
+      WHERE j.id = ?
+    `).get(claimed!.id) as { pageId: string | null; status: string };
+    assert.equal(survivingJob.pageId, "mineru-second-source-page");
+    assert.equal(survivingJob.status, "processing");
+    const cancelled = db.prepare(`
+      SELECT 1 AS found FROM processing_job_events
+      WHERE job_id = ? AND event_type = 'cancelled'
+    `).get(claimed!.id);
+    assert.equal(Boolean(cancelled), false);
+  });
+});
+
+test("precise source PDF expands validated remote pages without local worker tasks", async () => {
+  await withDatabase(async () => {
+    saveOcrRecognitionSettings({ mode: "mineru_precise", apiToken: "precise-test-token" });
+    const upload = createUpload(manager, "mineru-runner-member", [
+      { originalName: "source.pdf", data: Buffer.from("%PDF-1.4\n%%EOF") },
+    ], { ocrMode: "mineru_precise", remoteProcessingAccepted: true });
+
+    assert.equal(
+      await processNextJob(undefined, undefined, successfulPrecisePdf()),
+      true,
+    );
+    const db = getDatabase();
+    const pages = db.prepare(`
+      SELECT page_number AS pageNumber, source_page_number AS sourcePageNumber,
+        source_page_count AS sourcePageCount
+      FROM report_pages WHERE report_id = ? ORDER BY page_number
+    `).all(upload.reportId) as Array<{
+      pageNumber: number;
+      sourcePageNumber: number | null;
+      sourcePageCount: number | null;
+    }>;
+    assert.deepEqual(pages.map((page) => ({ ...page })), [
+      { pageNumber: 1, sourcePageNumber: 1, sourcePageCount: 2 },
+      { pageNumber: 2, sourcePageNumber: 2, sourcePageCount: 2 },
+    ]);
+    const jobs = listProcessingJobs(manager, upload.reportId).filter((job) => job.jobType === "ocr");
+    assert.equal(jobs.length, 2);
+    assert.equal(jobs.every((job) => job.status === "completed"), true);
+    assert.equal(jobs.every((job) => job.ocrMode === "mineru_precise"), true);
+    assert.deepEqual(
+      (db.prepare(`
+        SELECT o.page_id AS pageId, o.engine, o.lines_json AS linesJson
+        FROM ocr_results o JOIN report_pages p ON p.id = o.page_id
+        ORDER BY p.page_number
+      `).all() as Array<{ pageId: string; engine: string; linesJson: string }>).map((row) => ({
+        engine: row.engine,
+        text: JSON.parse(row.linesJson)[0]?.text,
+      })),
+      [
+        { engine: "mineru-precise", text: "第一页" },
+        { engine: "mineru-precise", text: "第二页" },
+      ],
+    );
+  });
+});
+
+test("Agent source PDF stays a single logical page with no reliable internal page mapping", async () => {
+  await withDatabase(async () => {
+    saveOcrRecognitionSettings({ mode: "mineru_agent" });
+    const upload = createUpload(manager, "mineru-runner-member", [
+      { originalName: "agent-source.pdf", data: Buffer.from("%PDF-1.4\n%%EOF") },
+    ], { ocrMode: "mineru_agent", remoteProcessingAccepted: true });
+    const response: MinerURecognitionExecutor = async () => ({
+      ok: true,
+      engine: "mineru-agent",
+      modelVersion: "agent",
+      lines: [{ id: "agent-logical", text: "整份文档文字" }],
+      elapsedMs: 8,
+      engineElapsed: { source: "mineru_markdown", coordinateAvailable: false },
+    });
+    assert.equal(await processNextJob(undefined, undefined, response), true);
+    const db = getDatabase();
+    const pages = db.prepare(`
+      SELECT page_number AS pageNumber, source_page_number AS sourcePageNumber,
+        source_page_count AS sourcePageCount
+      FROM report_pages WHERE report_id = ? ORDER BY page_number
+    `).all(upload.reportId) as Array<{
+      pageNumber: number;
+      sourcePageNumber: number | null;
+      sourcePageCount: number | null;
+    }>;
+    assert.deepEqual(pages.map((page) => ({ ...page })), [{ pageNumber: 1, sourcePageNumber: 1, sourcePageCount: null }]);
+    const ocr = db.prepare("SELECT engine, lines_json AS linesJson FROM ocr_results").get() as {
+      engine: string;
+      linesJson: string;
+    };
+    assert.equal(ocr.engine, "mineru-agent");
+    assert.equal(JSON.parse(ocr.linesJson)[0]?.text, "整份文档文字");
+    assert.equal(listProcessingJobs(manager, upload.reportId).some((job) => job.jobType === "thumbnail"), false);
+  });
+});
+
 test("snapshots the selected mode per upload batch even after the global setting changes", async () => {
   await withDatabase(async () => {
     saveOcrRecognitionSettings({ mode: "mineru_agent" });
@@ -116,14 +297,13 @@ test("snapshots the selected mode per upload batch even after the global setting
     const modes: string[] = [];
     const mineru: MinerURecognitionExecutor = async (input) => {
       modes.push(input.mode);
-      assert.match(input.remoteFileName, /^page-[A-Za-z0-9_-]+\.jpg$/);
+      assert.match(input.remoteFileName, /^source-[A-Za-z0-9_-]+\.png$/);
       assert.equal(input.remoteFileName.includes("health-page"), false);
       return (await successfulMineru()(input));
     };
     assert.equal(await processNextJob(workerRecorder(actions), undefined, mineru), true);
-    assert.equal(await processNextJob(workerRecorder(actions), undefined, mineru), true);
     assert.deepEqual(modes, ["mineru_agent"]);
-    assert.deepEqual(actions, ["thumbnail", "thumbnail"]);
+    assert.deepEqual(actions, []);
 
     const jobs = listProcessingJobs(manager, upload.reportId);
     const ocrJob = jobs.find((job) => job.jobType === "ocr")!;
@@ -154,25 +334,29 @@ test("snapshots the selected mode per upload batch even after the global setting
   });
 });
 
-test("PDF expansion makes every page inherit the original batch mode and consent", async () => {
+test("remote Agent PDF stays source-scoped without local PDF expansion", async () => {
   await withDatabase(async () => {
     saveOcrRecognitionSettings({ mode: "mineru_agent" });
     const upload = createUpload(manager, "mineru-runner-member", [
       { originalName: "multi-page.pdf", data: Buffer.from("%PDF-1.4\n%%EOF") },
     ], { ocrMode: "mineru_agent", remoteProcessingAccepted: true });
 
-    assert.equal(await processNextJob(workerRecorder()), true);
+    assert.equal(await processNextJob(undefined, undefined, successfulMineru()), true);
     const jobs = listProcessingJobs(manager, upload.reportId);
     const ocrJobs = jobs.filter((job) => job.jobType === "ocr");
-    assert.equal(ocrJobs.length, 2);
+    assert.equal(ocrJobs.length, 1);
     assert.equal(ocrJobs.every((job) => job.ocrMode === "mineru_agent"), true);
     assert.equal(ocrJobs.every((job) => job.remoteProcessingAccepted), true);
-    const pageNumbers = getDatabase().prepare(`
-      SELECT p.page_number AS pageNumber FROM processing_jobs j
-      JOIN report_pages p ON p.id = j.page_id
-      WHERE j.report_id = ? AND j.job_type = 'ocr' ORDER BY p.page_number
-    `).all(upload.reportId) as Array<{ pageNumber: number }>;
-    assert.deepEqual(pageNumbers.map((page) => page.pageNumber), [1, 2]);
+    assert.equal(jobs.some((job) => job.jobType === "pdf_extract" || job.jobType === "thumbnail"), false);
+    const queued = getDatabase().prepare(`
+      SELECT detail_json AS detailJson FROM processing_job_events
+      WHERE report_id = ? AND event_type = 'queued'
+    `).all(upload.reportId) as Array<{ detailJson: string }>;
+    assert.equal(queued.length, 1);
+    const detail = JSON.parse(queued[0]!.detailJson) as Record<string, unknown>;
+    assert.equal(detail.remoteScope, "source");
+    assert.equal(detail.ocrMode, "mineru_agent");
+    assert.equal(detail.remoteProcessingAccepted, true);
   });
 });
 
@@ -197,9 +381,8 @@ test("legacy queued jobs without a mode always use local OCR", async () => {
       return successfulMineru()({} as never);
     };
     assert.equal(await processNextJob(workerRecorder(actions), undefined, mineru), true);
-    assert.equal(await processNextJob(workerRecorder(actions), undefined, mineru), true);
     assert.equal(mineruCalls, 0);
-    assert.deepEqual(actions, ["thumbnail", "ocr"]);
+    assert.deepEqual(actions, ["ocr"]);
     const result = getDatabase().prepare(
       "SELECT engine FROM ocr_results WHERE job_id = ?",
     ).get(ocrJob.id) as { engine: string };
@@ -214,7 +397,6 @@ test("automatic retries resume an already uploaded remote task without persistin
       { originalName: "resume.png", data: pngBytes() },
     ], { ocrMode: "mineru_agent", remoteProcessingAccepted: true });
     const worker = workerRecorder();
-    assert.equal(await processNextJob(worker), true);
 
     const remoteId = "resume-remote-task";
     const first: MinerURecognitionExecutor = async (input) => {
@@ -273,6 +455,7 @@ test("official source and upstream limits fall back locally while auth errors re
     };
     assert.equal(await processNextJob(workerRecorder(sourceActions), undefined, neverMineru), true);
     assert.equal(await processNextJob(workerRecorder(sourceActions), undefined, neverMineru), true);
+    assert.equal(await processNextJob(workerRecorder(sourceActions), undefined, neverMineru), true);
     assert.equal(sourceMineruCalls, 0);
     assert.deepEqual(sourceActions, ["thumbnail", "ocr"]);
     const sourceEvents = getDatabase().prepare(`
@@ -290,7 +473,8 @@ test("official source and upstream limits fall back locally while auth errors re
     };
     assert.equal(await processNextJob(workerRecorder(upstreamActions), undefined, upstreamLimit), true);
     assert.equal(await processNextJob(workerRecorder(upstreamActions), undefined, upstreamLimit), true);
-    assert.deepEqual(upstreamActions, ["thumbnail", "thumbnail", "ocr"]);
+    assert.equal(await processNextJob(workerRecorder(upstreamActions), undefined, upstreamLimit), true);
+    assert.deepEqual(upstreamActions, ["thumbnail", "ocr"]);
 
     const authUpload = createUpload(manager, "mineru-runner-member", [
       { originalName: "auth-error.png", data: pngBytes() },
@@ -299,12 +483,18 @@ test("official source and upstream limits fall back locally while auth errors re
     const authFailure: MinerURecognitionExecutor = async () => {
       throw Object.assign(new Error("authentication failed"), { code: "MINERU_AUTH_FAILED" });
     };
-    assert.equal(await processNextJob(workerRecorder(authActions), undefined, authFailure), true);
     await assert.rejects(
       () => processNextJob(workerRecorder(authActions), undefined, authFailure),
       (error: unknown) => (error as { code?: string }).code === "MINERU_AUTH_FAILED",
     );
-    assert.deepEqual(authActions, ["thumbnail", "thumbnail"]);
+    getDatabase().prepare(
+      "UPDATE processing_jobs SET next_retry_at = CURRENT_TIMESTAMP WHERE report_id = ? AND job_type = 'ocr'",
+    ).run(authUpload.reportId);
+    await assert.rejects(
+      () => processNextJob(workerRecorder(authActions), undefined, authFailure),
+      (error: unknown) => (error as { code?: string }).code === "MINERU_AUTH_FAILED",
+    );
+    assert.deepEqual(authActions, []);
     const authOcrCount = getDatabase().prepare(`
       SELECT COUNT(*) AS count FROM ocr_results o
       JOIN report_pages p ON p.id = o.page_id WHERE p.report_id = ?
@@ -353,11 +543,7 @@ test("page rotation, reorder and deletion require confirmation and snapshot the 
       WHERE e.report_id = ? AND e.event_type = 'queued' AND j.pipeline_version = 'manual-page-v1'
       ORDER BY e.rowid
     `).all(upload.reportId) as Array<{ detailJson: string }>;
-    assert.equal(pageEditDetails.length, 4);
-    assert.equal(pageEditDetails.every((row) => {
-      const detail = JSON.parse(row.detailJson) as Record<string, unknown>;
-      return detail.ocrMode === "mineru_agent" && detail.remoteProcessingAccepted === true;
-    }), true);
+    assert.equal(pageEditDetails.length, 0);
 
     assert.throws(
       () => deleteReportPage(manager, upload.reportId, pages[0]!.id, {
@@ -453,7 +639,7 @@ test("NAS imports enforce the same per-batch mode and remote-processing confirma
       SELECT detail_json AS detailJson FROM processing_job_events
       WHERE report_id = ? AND event_type = 'queued'
     `).all(imported.reportId) as Array<{ detailJson: string }>;
-    assert.equal(details.length, 2);
+    assert.equal(details.length, 1);
     assert.equal(details.every((row) => {
       const detail = JSON.parse(row.detailJson) as Record<string, unknown>;
       return detail.ocrMode === "mineru_agent" && detail.remoteProcessingAccepted === true;

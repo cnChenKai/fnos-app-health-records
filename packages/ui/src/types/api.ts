@@ -497,6 +497,7 @@ export type OcrPageText = {
   qualityScore: number | null;
   qualityLevel: "good" | "weak" | "poor" | null;
   qualityReason: string | null;
+  pageMappingAvailable: boolean;
   lineCount: number;
   text: string;
 };

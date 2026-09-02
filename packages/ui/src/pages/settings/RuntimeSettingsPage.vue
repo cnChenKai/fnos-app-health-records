@@ -280,7 +280,7 @@ onActivated(syncStatusPolling);
             <ShieldAlert :size="18" />
             <div>
               <strong>会向 MinerU 外发健康报告页面</strong>
-              <span>每个新批次都需要用户再次确认。处理后的完整页面副本会发送至 MinerU；原始文件名和本地路径不会发送。</span>
+              <span>每个新批次都需要用户再次确认。原始 PDF/图片内容会发送至 MinerU；原始文件名和本地路径不会发送。</span>
             </div>
           </div>
           <p class="preview-hint">{{ selectedRecognitionMode.description }}</p>
@@ -288,7 +288,7 @@ onActivated(syncStatusPolling);
             官方单源文件限额：{{ selectedRecognitionMode.limits.maxFileMegabytes }} MB / {{ selectedRecognitionMode.limits.maxPages }} 页；超限时该源文件改用本地 OCR。
           </p>
           <p v-if="selectedRecognitionMode.externalProcessing" class="preview-hint">
-            PDF 拆页、旋转、缩略图和 2400px 页面预处理仍在本地 Worker 中完成，因此远程模式也需要安装本地 OCR 环境。
+            远程模式直接上传原始 PDF/图片；本地 OCR 环境只在官方限额降级或使用本地识别时需要。无本地环境时，远程批次仍可正常提交和轮询。
           </p>
           <label v-if="recognitionSettings.mode === 'mineru_precise'">
             <span><KeyRound :size="15" /> MinerU API Token</span>

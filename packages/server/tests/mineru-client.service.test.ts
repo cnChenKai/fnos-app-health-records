@@ -208,13 +208,24 @@ test("precise parsing confines Bearer auth to control endpoints and streams only
     assert.equal(calls[1]?.headers.get("authorization"), null);
     assert.equal(calls[4]?.headers.get("authorization"), null);
     assert.equal(calls[1]?.headers.get("content-type"), "");
-    const requestBody = JSON.parse(String(calls[0]?.init.body)) as {
+    const requestBody = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown> & {
       files: Array<Record<string, unknown>>;
       model_version: string;
     };
     assert.deepEqual(requestBody.files, [{ name: "page-safe-precise.jpg" }]);
     assert.equal(requestBody.model_version, "vlm");
-    assert.deepEqual(Object.keys(requestBody).sort(), ["files", "model_version"]);
+    assert.deepEqual(Object.keys(requestBody).sort(), [
+      "enable_formula",
+      "enable_table",
+      "files",
+      "is_ocr",
+      "language",
+      "model_version",
+    ]);
+    assert.equal(requestBody.language, "ch");
+    assert.equal(requestBody.is_ocr, true);
+    assert.equal(requestBody.enable_table, true);
+    assert.equal(requestBody.enable_formula, true);
   });
 });
 

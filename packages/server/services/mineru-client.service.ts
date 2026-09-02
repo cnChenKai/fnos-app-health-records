@@ -28,9 +28,13 @@ export type MinerURemoteReference = {
 
 export type MinerURecognitionInput = {
   mode: Exclude<OcrRecognitionMode, "local">;
-  imagePath: string;
+  /** Source file sent to MinerU. `imagePath` is accepted for old callers/tests. */
+  filePath?: string;
+  imagePath?: string;
+  mimeType?: string | null;
   remoteFileName: string;
   apiToken?: string;
+  pageRanges?: string | null;
   resume?: MinerURemoteReference | null;
   remoteStartedAtMs?: number | null;
   shouldContinue?: () => boolean;
@@ -38,7 +42,18 @@ export type MinerURecognitionInput = {
   onState?: (reference: MinerURemoteReference, state: string) => void;
 };
 
-export type MinerURecognitionExecutor = (input: MinerURecognitionInput) => Promise<WorkerResponse>;
+export type MinerUPageResult = {
+  pageNumber: number;
+  lines: Array<Record<string, unknown>>;
+};
+
+export type MinerURecognitionResult = WorkerResponse & {
+  /** Precise API page output. Agent results intentionally omit this mapping. */
+  remotePages?: MinerUPageResult[];
+  pageMappingAvailable?: boolean;
+};
+
+export type MinerURecognitionExecutor = (input: MinerURecognitionInput) => Promise<MinerURecognitionResult>;
 
 type MinerUClientDependencies = {
   fetch: typeof fetch;
@@ -87,10 +102,16 @@ function safeRemoteFileName(value: unknown) {
   const name = typeof value === "string" ? value.trim() : "";
   return name
     && name.length <= 200
-    && /^[A-Za-z0-9][A-Za-z0-9._-]*\.jpg$/i.test(name)
+    && /^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:pdf|jpe?g|png|webp|heic|heif)$/i.test(name)
     && basename(name) === name
     ? name
     : "";
+}
+
+function inputFilePath(input: MinerURecognitionInput) {
+  const path = input.filePath || input.imagePath || "";
+  if (!path) throw clientError("MINERU_PAGE_PREPARATION_FAILED", "MinerU 源文件路径缺失");
+  return path;
 }
 
 function allowedAssetUrl(value: unknown) {
@@ -264,7 +285,7 @@ async function requestJson(
 
 async function uploadSignedFile(
   urlValue: unknown,
-  imagePath: string,
+  filePath: string,
   dependencies: MinerUClientDependencies,
   timeoutMs = 5 * 60_000
 ) {
@@ -272,9 +293,9 @@ async function uploadSignedFile(
   if (!url) throw clientError("MINERU_INVALID_RESULT", "MinerU 返回了无效上传地址");
   let body: Buffer;
   try {
-    body = readFileSync(imagePath);
+    body = readFileSync(filePath);
   } catch (cause) {
-    throw clientError("MINERU_PAGE_PREPARATION_FAILED", "无法读取 MinerU 临时页面", cause);
+    throw clientError("MINERU_PAGE_PREPARATION_FAILED", "无法读取 MinerU 源文件", cause);
   }
   const response = await fetchWithMinerUError(url, {
     method: "PUT",
@@ -398,6 +419,15 @@ async function readEntryText(entry: Entry) {
   }
 }
 
+async function readEntryJson(entry: Entry) {
+  const text = await readEntryText(entry);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (cause) {
+    throw clientError("MINERU_INVALID_RESULT", "MinerU content_list.json 无效", cause);
+  }
+}
+
 async function downloadFullMarkdownFromZip(
   urlValue: unknown,
   dependencies: MinerUClientDependencies,
@@ -431,6 +461,7 @@ async function downloadFullMarkdownFromZip(
   source.pipe(limiter).pipe(parser);
   let entryCount = 0;
   let markdown: string | null = null;
+  let contentList: unknown = null;
   try {
     for await (const value of parser as unknown as AsyncIterable<Entry>) {
       const entry = value as Entry;
@@ -441,6 +472,12 @@ async function downloadFullMarkdownFromZip(
       }
       if (entry.type === "File" && basename(entry.path).toLowerCase() === "full.md" && markdown === null) {
         markdown = await readEntryText(entry);
+      } else if (
+        entry.type === "File"
+        && /(?:^|_)content_list\.json$/i.test(basename(entry.path))
+        && contentList === null
+      ) {
+        contentList = await readEntryJson(entry);
       } else {
         entry.autodrain();
       }
@@ -453,7 +490,7 @@ async function downloadFullMarkdownFromZip(
     throw clientError("MINERU_INVALID_RESULT", "MinerU ZIP 结果损坏", cause);
   }
   if (markdown === null) throw clientError("MINERU_INVALID_RESULT", "MinerU ZIP 缺少 full.md");
-  return markdown;
+  return { markdown, contentList };
 }
 
 function ensureStillProcessable(input: MinerURecognitionInput) {
@@ -511,7 +548,7 @@ async function submitAgent(
   if (!id) throw clientError("MINERU_INVALID_RESULT", "MinerU Agent 未返回有效任务 ID");
   await uploadSignedFile(
     data.file_url,
-    input.imagePath,
+    inputFilePath(input),
     dependencies,
     boundedOperationTimeout(deadline, 5 * 60_000, dependencies)
   );
@@ -533,7 +570,12 @@ async function submitPrecise(
     method: "POST",
     body: JSON.stringify({
       files: [{ name: remoteFileName }],
-      model_version: "vlm"
+      model_version: "vlm",
+      language: "ch",
+      is_ocr: true,
+      enable_table: true,
+      enable_formula: true,
+      ...(input.pageRanges ? { page_ranges: input.pageRanges } : {})
     })
   }, dependencies, token, boundedOperationTimeout(deadline, dependencies.requestTimeoutMs, dependencies));
   const data = isRecord(result.data) ? result.data : {};
@@ -544,7 +586,7 @@ async function submitPrecise(
   }
   await uploadSignedFile(
     fileUrls[0],
-    input.imagePath,
+    inputFilePath(input),
     dependencies,
     boundedOperationTimeout(deadline, 5 * 60_000, dependencies)
   );
@@ -644,10 +686,77 @@ async function pollPrecise(
   }
 }
 
+function contentListItems(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) return value.filter(isRecord);
+  if (!isRecord(value)) return [];
+  for (const key of ["content_list", "contentList", "items", "contents"]) {
+    if (Array.isArray(value[key])) return value[key].filter(isRecord);
+  }
+  return [];
+}
+
+function tableBodyToMarkdown(value: string) {
+  return value
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(?:td|th)\s*>/gi, " | ")
+    .replace(/<\/(?:tr)\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ");
+}
+
+function contentItemText(item: Record<string, unknown>) {
+  const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+  if (["image", "img", "figure"].includes(type)) return "";
+  if (typeof item.table_body === "string") return tableBodyToMarkdown(item.table_body);
+  if (typeof item.tableBody === "string") return tableBodyToMarkdown(item.tableBody);
+  for (const key of ["text", "content", "latex", "equation", "value"]) {
+    if (typeof item[key] === "string") return item[key] as string;
+  }
+  return "";
+}
+
+function contentListToRemotePages(value: unknown) {
+  const items = contentListItems(value);
+  if (!items.length) throw clientError("MINERU_INVALID_RESULT", "MinerU 精准结果缺少有效页级内容");
+  const grouped = new Map<number, string[]>();
+  const pageIndexes = new Set<number>();
+  for (const item of items) {
+    const rawPage = item.page_idx ?? item.pageIndex ?? item.page_number ?? item.pageNumber;
+    const pageIndex = Number(rawPage);
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex > 500) {
+      throw clientError("MINERU_INVALID_RESULT", "MinerU 精准结果缺少有效页码");
+    }
+    /* Image-only pages still count.  Record the index before filtering their
+       non-text content so a missing tail page cannot be silently dropped. */
+    pageIndexes.add(pageIndex);
+    const text = contentItemText(item).trim();
+    if (!text) continue;
+    grouped.set(pageIndex, [...(grouped.get(pageIndex) || []), text]);
+  }
+  const maxPageIndex = Math.max(...pageIndexes);
+  if (!Number.isInteger(maxPageIndex) || maxPageIndex < 0 || maxPageIndex >= 500) {
+    throw clientError("MINERU_INVALID_RESULT", "MinerU 精准结果页数无效");
+  }
+  for (let index = 0; index <= maxPageIndex; index += 1) {
+    if (!pageIndexes.has(index)) {
+      throw clientError("MINERU_INVALID_RESULT", "MinerU 精准结果页码不连续");
+    }
+  }
+  const pages: MinerUPageResult[] = [];
+  for (let index = 0; index <= maxPageIndex; index += 1) {
+    const markdown = (grouped.get(index) || []).join("\n");
+    const lines = markdownToOcrLines(markdown).map((line, lineIndex) => ({
+      ...line,
+      id: `mineru_page_${index + 1}_line_${lineIndex + 1}`
+    }));
+    pages.push({ pageNumber: index + 1, lines });
+  }
+  return pages;
+}
+
 export async function recognizePageWithMinerU(
   input: MinerURecognitionInput,
   overrides: Partial<MinerUClientDependencies> = {}
-): Promise<WorkerResponse> {
+): Promise<MinerURecognitionResult> {
   if (input.mode !== "mineru_agent" && input.mode !== "mineru_precise") {
     throw clientError("MINERU_INVALID_MODE", "MinerU 识别方式无效");
   }
@@ -673,21 +782,36 @@ export async function recognizePageWithMinerU(
       ? await submitAgent(input, deadline, dependencies)
       : await submitPrecise(input, deadline, dependencies);
   }
+  const preciseResult = input.mode === "mineru_precise"
+    ? await pollPrecise(input, reference, deadline, dependencies)
+    : null;
   const markdown = input.mode === "mineru_agent"
     ? await pollAgent(input, reference, deadline, dependencies)
-    : await pollPrecise(input, reference, deadline, dependencies);
+    : preciseResult!.markdown;
   ensureStillProcessable(input);
-  const lines = markdownToOcrLines(markdown);
+  const remotePages = preciseResult?.contentList
+    ? contentListToRemotePages(preciseResult.contentList)
+    : undefined;
+  if (input.mode === "mineru_precise" && input.mimeType === "application/pdf" && !remotePages) {
+    throw clientError("MINERU_INVALID_RESULT", "MinerU 精准 PDF 结果缺少页级内容列表");
+  }
+  const lines = remotePages?.[0]?.lines || markdownToOcrLines(markdown);
   return {
     ok: true,
     engine: input.mode === "mineru_agent" ? "mineru-agent" : "mineru-precise",
     modelVersion: input.mode === "mineru_agent" ? "agent" : "vlm",
     lines,
+    remotePages,
+    pageMappingAvailable: Boolean(remotePages?.length),
     elapsedMs: Math.max(0, Math.round(dependencies.now() - startedAt)),
     engineElapsed: {
       source: "mineru_markdown",
       requestedMode: input.mode,
-      coordinateAvailable: false
+      coordinateAvailable: false,
+      pageMappingAvailable: Boolean(remotePages?.length)
     }
   };
 }
+
+/** New source-file naming retained alongside the old export for compatibility. */
+export const recognizeSourceWithMinerU = recognizePageWithMinerU;

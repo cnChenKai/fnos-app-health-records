@@ -6233,7 +6233,13 @@ export function buildAiExtractionPlan(reportId: string) {
         WHERE o.page_id = p.id
         ORDER BY o.created_at DESC, o.id DESC
         LIMIT 1
-      ) AS linesJson
+      ) AS linesJson,
+      (
+        SELECT o.engine FROM ocr_results o
+        WHERE o.page_id = p.id
+        ORDER BY o.created_at DESC, o.id DESC
+        LIMIT 1
+      ) AS ocrEngine
     FROM report_pages p
     WHERE p.report_id = ?
     ORDER BY p.page_number
@@ -6247,6 +6253,7 @@ export function buildAiExtractionPlan(reportId: string) {
     sourcePageNumber: number | null;
     sourcePageCount: number | null;
     linesJson: string | null;
+    ocrEngine: string | null;
   }>;
   if (!rows.length) {
     throw Object.assign(new Error("报告没有可用于 AI 整理的页面"), {
@@ -6268,6 +6275,18 @@ export function buildAiExtractionPlan(reportId: string) {
     ]);
   }
   for (const sourceRows of pdfSources.values()) {
+    /* MinerU Agent deliberately stores a multi-page PDF as one logical OCR
+       page.  There is no local PDF inspection result (and therefore no
+       source_page_count) to validate in that shape; treating it as an
+       incomplete local split would prevent the completed remote batch from
+       reaching AI planning. */
+    if (
+      sourceRows.length === 1
+      && sourceRows[0]?.ocrEngine === "mineru-agent"
+      && sourceRows[0].sourcePageCount === null
+    ) {
+      continue;
+    }
     const expected = sourceRows[0]?.sourcePageCount || 0;
     const sourcePageNumbers = sourceRows
       .map((row) => row.sourcePageNumber)

@@ -487,7 +487,7 @@ test("recovers OCR, AI units, persisted extraction, and orphaned report state ac
       for (let index = 0; index < fixture.expected.pages; index += 1) {
         assert.equal(await processNextJob(worker, initialAi), true);
       }
-      const claimedOcr = claimNextJob();
+      const claimedOcr = claimNextJob({ ignoreLocalRuntime: true });
       assert.ok(claimedOcr);
       assert.equal(claimedOcr.jobType, "ocr");
       expireProcessingJob(claimedOcr.id);

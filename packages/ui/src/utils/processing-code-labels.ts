@@ -37,6 +37,7 @@ const processingCodeLabels: Record<string, string> = {
   MINERU_UPSTREAM_ERROR: "MinerU 拒绝请求",
   MINERU_UPSTREAM_FAILED: "MinerU 解析失败",
   MINERU_LIMIT_EXCEEDED: "超过 MinerU 官方限额",
+  MINERU_LIMIT_EXCEEDED_LOCAL_RUNTIME_UNAVAILABLE: "超过 MinerU 限额且本地 OCR 不可用",
   MINERU_INVALID_RESULT: "MinerU 结果损坏",
   MINERU_RESPONSE_LIMIT_EXCEEDED: "MinerU 结果超过安全限制",
   MINERU_PAGE_PREPARATION_FAILED: "MinerU 页面预处理失败",

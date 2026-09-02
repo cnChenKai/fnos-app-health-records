@@ -258,17 +258,31 @@ const processingRecoveryState = computed(() => resolveProcessingRecoveryState({
   reportStatus: source.value?.status
 }));
 const processingDelayNotice = computed(() => resolveProcessingDelayNotice(currentJobs.value));
+/* Cancelled local prerequisites from a pre-upgrade remote batch must not make
+ * the report look blocked on the local runtime. */
+const currentBatchNeedsLocalRuntime = computed(() => currentJobs.value.some((job) =>
+  job.ocrMode === "local"
+  && !["completed", "cancelled"].includes(job.status)
+  && ["pdf_extract", "thumbnail", "ocr"].includes(job.jobType)
+));
 const needsOcrRuntime = computed(() =>
-  !runtimeAvailable.value && currentJobs.value.some((job) => job.jobType === "ocr" && job.status !== "completed")
+  !runtimeAvailable.value
+  && currentBatchNeedsLocalRuntime.value
+  && currentJobs.value.some((job) => {
+    if (job.jobType === "ocr") return job.ocrMode === "local" && job.status !== "completed";
+    return (job.jobType === "pdf_extract" || job.jobType === "thumbnail") && job.status !== "completed";
+  })
 );
 const viewerImagePages = computed<ImageViewerPage[]>(() =>
   (detail.value?.pages || []).map((page) => ({
     key: page.id,
-    fullUrl: viewerFullUrl(page),
+    fullUrl: page.mimeType === "application/pdf" && !page.hasThumbnail ? "" : viewerFullUrl(page),
     previewUrl: page.hasThumbnail ? thumbnailUrl(page) : undefined,
     label: `第 ${page.pageNumber} 页`,
     downloadUrl: originalUrl(page),
-    downloadName: page.originalName
+    downloadName: page.originalName,
+    isDocument: page.mimeType === "application/pdf" && !page.hasThumbnail,
+    documentUrl: page.mimeType === "application/pdf" && !page.hasThumbnail ? originalUrl(page) : undefined
   }))
 );
 const firstPdfPage = computed(() => detail.value?.pages.find((page) => page.mimeType === "application/pdf") || null);
@@ -573,7 +587,7 @@ function ocrBatchSelection() {
 
 function remoteProcessingConfirmationText() {
   if (!recognitionMode.value.externalProcessing) return "";
-  return `\n\n本批次将使用${recognitionMode.value.label}。处理后的完整页面副本会发送至 MinerU，页面可能包含健康信息；原始文件名和本地路径不会发送。`;
+  return `\n\n本批次使用${recognitionMode.value.label}；如产生新的远程识别，原始 PDF/图片内容会发送至 MinerU，页面可能包含健康信息。上传使用随机文件名，不会发送原始文件名或本地路径。`;
 }
 
 function handleRecognitionModeConflict(cause: unknown) {
@@ -691,7 +705,9 @@ function previewUrl(page: ReportPage) {
 }
 
 function viewerFullUrl(page: ReportPage) {
-  return page.mimeType === "application/pdf" ? previewUrl(page) : originalUrl(page);
+  return page.mimeType === "application/pdf"
+    ? page.hasThumbnail ? previewUrl(page) : ""
+    : originalUrl(page);
 }
 
 function handleOriginalClick(index: number) {
@@ -706,7 +722,8 @@ function openOriginalViewer(index: number) {
   viewerOpen.value = true;
 }
 
-function openPdfOriginalViewer(page: ReportPage) {
+function openPdfOriginalViewer(page: ReportPage | null | undefined) {
+  if (!page) return;
   pdfViewerPage.value = page;
   pdfViewerOpen.value = true;
 }
@@ -1130,10 +1147,15 @@ async function performSavePageLayout(pages: ReportPage[]) {
         ...ocrBatchSelection()
       })
     });
-    pageRefreshAwaitingJobs.value = true;
+    /* Remote OCR is source-file scoped.  Page order/rotation/deletion only
+       changes local presentation and evidence numbering, so there is no new
+       remote or thumbnail job to wait for in that mode. */
+    pageRefreshAwaitingJobs.value = !recognitionMode.value.externalProcessing;
     await refreshJobs(true);
     emit("updated");
-    toast.show("页面调整已保存，正在重新生成缩略图/OCR");
+    toast.show(recognitionMode.value.externalProcessing
+      ? "页面调整已保存，当前 MinerU OCR 结果继续使用"
+      : "页面调整已保存，正在重新生成缩略图/OCR");
   } catch (cause) {
     handleRecognitionModeConflict(cause);
     detailError.value = cause instanceof Error ? cause.message : "页面调整失败";
@@ -1149,7 +1171,9 @@ async function savePageLayout(pages: ReportPage[]) {
   }
   confirmDialog.ask({
     title: "调整页面并重新识别",
-    message: `保存页面调整后会重新生成缩略图和 OCR。${remoteProcessingConfirmationText()}`,
+    message: recognitionMode.value.externalProcessing
+      ? `保存页面顺序和旋转只影响本地显示及证据页码，不会重新上传或调用 MinerU。${remoteProcessingConfirmationText()}`
+      : "保存页面调整后会重新生成缩略图和 OCR。",
     confirmText: "确认并重新识别",
     run: () => performSavePageLayout(pages)
   });
@@ -1183,10 +1207,12 @@ async function deleteSavedPage(page: ReportPage) {
           method: "DELETE",
           body: JSON.stringify(ocrBatchSelection())
         });
-        pageRefreshAwaitingJobs.value = true;
-        await refreshJobs(true);
-        emit("updated");
-        toast.show("页面已删除，正在重新生成缩略图/OCR");
+         pageRefreshAwaitingJobs.value = !recognitionMode.value.externalProcessing;
+         await refreshJobs(true);
+         emit("updated");
+         toast.show(recognitionMode.value.externalProcessing
+           ? "页面已删除，当前 MinerU OCR 结果继续使用"
+           : "页面已删除，正在重新生成缩略图/OCR");
       } catch (cause) {
         handleRecognitionModeConflict(cause);
         detailError.value = cause instanceof Error ? cause.message : "页面删除失败";
@@ -1271,6 +1297,14 @@ function reviewIssueLabel(issueType: ProcessingDiagnosticReviewItem["issueType"]
 
 function reportPageByNumber(pageNumber: number) {
   return detail.value?.pages.find((page) => page.pageNumber === pageNumber) || null;
+}
+
+function isUnmappedPdfPage(page: ReportPage | null | undefined) {
+  return Boolean(page && page.mimeType === "application/pdf" && page.sourcePageCount === null);
+}
+
+function reviewOriginalPage(pageNumber: number) {
+  return reportPageByNumber(pageNumber);
 }
 
 function reviewOriginalUrl(pageNumber: number) {
@@ -2316,7 +2350,13 @@ onActivated(() => {
                 <button v-if="observationSourcePage" class="plain-icon-button" type="button" title="打开原件" @click="openOriginalViewer(observationSourcePageIndex)"><Maximize2 :size="16" /></button>
               </header>
               <div v-if="observationSourcePage" class="observation-source-stage">
-                <div class="observation-source-image-wrapper">
+                <div v-if="isUnmappedPdfPage(observationSourcePage)" class="edit-document-placeholder observation-source-document-placeholder">
+                  <FileText :size="42" />
+                  <strong>PDF 原件</strong>
+                  <span>当前没有本地页面预览，MinerU Agent 的整份文档页也没有可靠的内部页码映射。</span>
+                  <button class="soft-action-button" type="button" @click="openPdfOriginalViewer(observationSourcePage)">打开 PDF 原件</button>
+                </div>
+                <div v-else class="observation-source-image-wrapper">
                   <img
                     ref="observationOriginalImage"
                     :src="viewerFullUrl(observationSourcePage)"
@@ -2338,6 +2378,7 @@ onActivated(() => {
                 <span>第 {{ observationSourcePage.pageNumber }} 页</span>
                 <small v-if="selectedObservation && !selectedObservation.evidence" class="observation-source-hint">这条指标暂无可定位的原件证据</small>
                 <small v-else-if="ocrDetailLoading" class="observation-source-hint">正在读取证据位置...</small>
+                <small v-else-if="isUnmappedPdfPage(observationSourcePage)" class="observation-source-hint">当前 MinerU Agent 结果按整份文档保存，无法可靠定位到 PDF 内部页码</small>
                 <small v-else-if="ocrDetailCoordinateUnavailable" class="observation-source-hint">当前 MinerU 结果无可用定位坐标，可按页查看和校对文字</small>
                 <small v-else-if="selectedObservation && !observationEvidenceLineIds.length" class="observation-source-hint">已定位页面，但暂无可高亮的 OCR 行</small>
               </div>
@@ -2459,7 +2500,13 @@ onActivated(() => {
                     @keydown.enter="openOriginalViewer(editOriginalIndex)"
                     @keydown.space.prevent="openOriginalViewer(editOriginalIndex)"
                   >
-                    <div class="edit-original-image-wrapper">
+                    <div v-if="currentOriginalPage.mimeType === 'application/pdf' && !currentOriginalPage.hasThumbnail" class="edit-document-placeholder">
+                      <FileText :size="42" />
+                      <strong>PDF 原件</strong>
+                      <span>当前没有本地页面预览，OCR 文本仍可在右侧校对。</span>
+                      <button class="soft-action-button" type="button" @click.stop="openPdfOriginalViewer(currentOriginalPage)">打开 PDF 原件</button>
+                    </div>
+                    <div v-else class="edit-original-image-wrapper">
                       <img
                         ref="editOriginalImage"
                         :src="viewerFullUrl(currentOriginalPage)"
@@ -2621,6 +2668,7 @@ onActivated(() => {
                 </button>
               </header>
               <p v-if="isMineruEngine(page.engine)" class="preview-hint">当前 MinerU 结果无可用定位坐标；文字校对和证据引用仍可使用，原图上不会伪造叠加位置。</p>
+              <p v-if="page.pageMappingAvailable === false" class="preview-hint">MinerU Agent 将整份 PDF 保存为一个逻辑页，无法可靠映射到内部页码。</p>
               <p v-if="page.qualityLevel && page.qualityLevel !== 'good'" class="preview-hint">{{ page.qualityReason || "OCR 文本质量不足，AI 整理可能不完整，可尝试重新 OCR 或启用视觉模型兜底。" }}</p>
               <div v-if="ocrComparePageNumber === page.pageNumber" class="ocr-page-compare">
                 <div class="ocr-page-compare__original">
@@ -2635,8 +2683,14 @@ onActivated(() => {
                       :highlight-line-ids="diagnosticSourceLineIds"
                     />
                   </div>
+                  <div v-else-if="isUnmappedPdfPage(reviewOriginalPage(page.pageNumber))" class="edit-document-placeholder ocr-page-compare__document-placeholder">
+                    <FileText :size="36" />
+                    <strong>PDF 原件</strong>
+                    <span>当前没有本地页面预览，原图仅作整份文档参考。</span>
+                    <button class="soft-action-button" type="button" @click="openPdfOriginalViewer(reviewOriginalPage(page.pageNumber))">打开 PDF 原件</button>
+                  </div>
                   <p v-if="ocrDetailPage?.pageId === page.pageId && ocrDetailCoordinateUnavailable" class="preview-hint">当前结果无可用定位坐标，原图仅作页面参考。</p>
-                  <p v-if="!reviewOriginalUrl(page.pageNumber)" class="preview-hint">未找到这一页的原件预览。</p>
+                  <p v-if="!reviewOriginalUrl(page.pageNumber) && !isUnmappedPdfPage(reviewOriginalPage(page.pageNumber))" class="preview-hint">未找到这一页的原件预览。</p>
                 </div>
                 <div class="ocr-page-compare__text">
                   <div v-if="ocrDetailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取页级 OCR</div>

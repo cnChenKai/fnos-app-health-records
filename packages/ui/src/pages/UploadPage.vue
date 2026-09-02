@@ -91,6 +91,16 @@ const finishedJobs = computed(() => completedJobs.value + failedJobs.value.lengt
 const progressPercent = computed(() => calculateProcessingJobProgress(currentJobs.value));
 const jobsSettled = computed(() => isProcessingJobBatchSettled(currentJobs.value));
 const uploadFinishedSuccessfully = computed(() => currentJobs.value.length > 0 && currentJobs.value.every((job) => job.status === "completed"));
+/* A cancelled legacy thumbnail/PDF prerequisite is not a local task anymore.
+ * Only jobs whose queued detail is local and which still need work should
+ * surface the installation prompt. This keeps migrated remote batches from
+ * inheriting the old global OCR warning. */
+const currentBatchNeedsLocalRuntime = computed(() => currentJobs.value.some((job) =>
+  job.ocrMode === "local"
+  && !["completed", "cancelled"].includes(job.status)
+  && ["pdf_extract", "thumbnail", "ocr"].includes(job.jobType)
+));
+const needsLocalRuntime = computed(() => !runtimeAvailable.value && currentBatchNeedsLocalRuntime.value);
 /* 全部任务结束且 OCR 全为空：原件大概率不是有效报告，需要明确告知用户而不是只发一条通知 */
 const ocrEmptyWarning = computed(() => {
   if (!jobsSettled.value || failedJobs.value.length) return false;
@@ -98,6 +108,10 @@ const ocrEmptyWarning = computed(() => {
   return ocrJobs.length > 0 && ocrJobs.every((job) => !job.ocrTextLength);
 });
 const accept = ".heic,.heif,.jpg,.jpeg,.png,.webp,.pdf,image/heic,image/heif,image/jpeg,image/png,image/webp,application/pdf";
+const clientMaxFileBytes = computed(() => recognitionMode.value.mode === "local"
+  ? 40 * 1024 * 1024
+  : 200 * 1024 * 1024);
+const clientMaxFileMegabytes = computed(() => Math.round(clientMaxFileBytes.value / 1024 / 1024));
 const localSelectionBytes = computed(() => selectedLocalFiles.value.reduce((sum, file) => sum + file.size, 0));
 const currentLocalRoot = computed(() => localRoots.value.find((root) => root.id === localCurrent.value?.rootId) || null);
 const localBreadcrumbs = computed(() => {
@@ -121,7 +135,7 @@ async function refreshRecognitionMode() {
 
 function assertRemoteProcessingAccepted(target: "browser" | "local") {
   if (!remoteSubmissionBlocked.value) return true;
-  const message = "请先确认处理后的完整页面副本将发送至 MinerU";
+  const message = "请先确认原始 PDF/图片内容将发送至 MinerU";
   if (target === "local") localError.value = message;
   else error.value = message;
   return false;
@@ -174,8 +188,8 @@ function addFiles(files: File[]) {
     error.value = "一次最多上传 24 个文件";
     return;
   }
-  if (files.some((file) => file.size > 40 * 1024 * 1024)) {
-    error.value = "单个文件不能超过 40 MB";
+  if (files.some((file) => file.size > clientMaxFileBytes.value)) {
+    error.value = `当前识别方式单个文件不能超过 ${clientMaxFileMegabytes.value} MB`;
     return;
   }
   if (totalBytes.value + files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) {
@@ -305,8 +319,8 @@ function toggleLocalFile(entry: LocalImportEntry) {
     localError.value = "一次最多导入 24 个文件";
     return;
   }
-  if ((entry.size || 0) > 40 * 1024 * 1024) {
-    localError.value = "单个文件不能超过 40 MB";
+  if ((entry.size || 0) > clientMaxFileBytes.value) {
+    localError.value = `当前识别方式单个文件不能超过 ${clientMaxFileMegabytes.value} MB`;
     return;
   }
   if (localSelectionBytes.value + (entry.size || 0) > 200 * 1024 * 1024) {
@@ -379,7 +393,11 @@ async function refreshJobs(includeRuntime = false) {
     jobs.value = nextJobs;
     if (ocr) runtimeAvailable.value = ocr.available;
     const nextCurrentJobs = groupProcessingJobBatches(nextJobs).currentJobs;
-    if (nextCurrentJobs.some((job) => job.status === "cancelled")) {
+    /* A migrated remote batch may contain cancelled local prerequisites while
+       its source-scoped MinerU job is still queued or processing.  Do not
+       clear the upload panel until every job in the current batch is settled;
+       otherwise the user loses the only visible progress for the remote task. */
+    if (nextCurrentJobs.length > 0 && nextCurrentJobs.every((job) => job.status === "cancelled")) {
       app.notifyDataChanged();
       clearFinishedUpload();
       return;
@@ -504,11 +522,11 @@ onActivated(() => {
       <CircleAlert :size="18" />
       <div>
         <strong>本批次将使用 {{ recognitionMode.label }}</strong>
-        <span>处理后的完整页面副本将发送至 MinerU，页面可能包含健康信息；原始文件名和本地路径不会发送。PDF 拆页、旋转和缩略图仍在本地完成。</span>
-        <small v-if="recognitionMode.limits.maxFileMegabytes">官方单源文件限额 {{ recognitionMode.limits.maxFileMegabytes }} MB / {{ recognitionMode.limits.maxPages }} 页，超限源文件会改用本地 OCR。</small>
+        <span>原始 PDF/图片内容将发送至 MinerU，页面可能包含健康信息；上传使用随机文件名，不会发送原始文件名或本地路径。</span>
+        <small v-if="recognitionMode.limits.maxFileMegabytes">官方单源文件限额 {{ recognitionMode.limits.maxFileMegabytes }} MB / {{ recognitionMode.limits.maxPages }} 页，超限时尝试改用本地 OCR。</small>
         <label class="checkbox-row">
           <input v-model="remoteProcessingAccepted" type="checkbox" />
-          <span>我确认本批次的完整页面副本可以发送至 MinerU 处理</span>
+          <span>我确认本批次的原始 PDF/图片内容可以发送至 MinerU 处理</span>
         </label>
       </div>
     </div>
@@ -532,7 +550,7 @@ onActivated(() => {
       <div class="job-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
         <span :style="{ width: `${progressPercent}%` }"></span>
       </div>
-      <div v-if="!runtimeAvailable" class="runtime-warning">
+      <div v-if="needsLocalRuntime" class="runtime-warning">
         <CircleAlert :size="18" />
         <div><strong>等待安装本地 OCR 环境</strong><span>{{ app.session.value?.isAdmin ? "原件已安全保存，安装后任务会自动继续。" : `原件已安全保存，请联系${deploymentCopy.administrator}安装 OCR 环境。` }}</span></div>
         <RouterLink v-if="app.session.value?.isAdmin" to="/me/runtime">前往运行与识别</RouterLink>
@@ -634,10 +652,10 @@ onActivated(() => {
             <CircleAlert :size="18" />
             <div>
               <strong>{{ recognitionMode.label }} 外部处理确认</strong>
-              <span>导入后，处理出的完整页面副本将发送至 MinerU，页面可能包含健康信息。</span>
+              <span>导入后，原始 PDF/图片内容将发送至 MinerU，页面可能包含健康信息；不会发送原始文件名或本地路径。</span>
               <label class="checkbox-row">
                 <input v-model="remoteProcessingAccepted" type="checkbox" />
-                <span>我确认本批次可以发送至 MinerU</span>
+                <span>我确认本批次的原始 PDF/图片内容可以发送至 MinerU</span>
               </label>
             </div>
           </div>

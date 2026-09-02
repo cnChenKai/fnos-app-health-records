@@ -78,6 +78,7 @@ import {
   validateOcrBatchSelection,
   type OcrBatchSelectionInput,
 } from "./ocr-recognition-settings.service";
+import { parseProcessingJobQueuedDetail } from "./processing-job-batches.service";
 import {
   captureRestoringAdministratorCredential,
   rebindRestoredAdministrator,
@@ -2328,6 +2329,7 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
     .prepare(
       `
     SELECT p.id AS pageId, p.page_number AS pageNumber, p.original_name AS originalName,
+      p.mime_type AS mimeType, p.source_page_count AS sourcePageCount,
       o.engine, o.model_version AS modelVersion, o.elapsed_ms AS elapsedMs, o.lines_json AS linesJson,
       o.quality_score AS qualityScore, o.quality_level AS qualityLevel, o.quality_reason AS qualityReason
     FROM report_pages p
@@ -2342,6 +2344,8 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
         pageId: string;
         pageNumber: number;
         originalName: string;
+        mimeType: string;
+        sourcePageCount: number | null;
         engine: string | null;
         modelVersion: string | null;
         elapsedMs: number | null;
@@ -2370,6 +2374,11 @@ export function listReportOcrText(user: RequestUser, reportId: string) {
         qualityScore: item.qualityScore,
         qualityLevel: item.qualityLevel,
         qualityReason: item.qualityReason,
+        pageMappingAvailable: !(
+          item.engine === "mineru-agent"
+          && item.mimeType === "application/pdf"
+          && item.sourcePageCount === null
+        ),
         lineCount: lines.length,
         text: lines.join("\n"),
       };
@@ -4207,6 +4216,20 @@ function cancelActivePageChangeJobs(
     )
     .all(reportId) as Array<{ id: string; jobType: string; attempts: number }>;
   for (const job of jobs) {
+    /* Remote OCR is source-file scoped and page order/rotation changes only
+       local presentation. Keep the submitted task alive; cancelling it here
+       would lose the result and there is no safe way to cancel the upstream
+       MinerU task. A deleted page is removed by its FK cascade below. */
+    if (job.jobType === "ocr") {
+      const queued = db
+        .prepare(
+          `SELECT detail_json AS detailJson FROM processing_job_events
+           WHERE job_id = ? AND event_type = 'queued'
+           ORDER BY created_at, rowid LIMIT 1`,
+        )
+        .get(job.id) as { detailJson: string | undefined } | undefined;
+      if (parseProcessingJobQueuedDetail(queued?.detailJson).ocrMode !== "local") continue;
+    }
     db.prepare(
       `
       UPDATE processing_jobs
@@ -4234,6 +4257,59 @@ function cancelActivePageChangeJobs(
   }
 }
 
+function rebindRemoteSourceJobsBeforePageDelete(
+  db: DatabaseSync,
+  reportId: string,
+  pageId: string,
+  remaining: Array<{ id: string; storagePath: string; pageNumber: number }>,
+) {
+  /* A source-scoped MinerU task is attached to the first report_pages row
+   * created for a source file.  Deleting that row while the remote task is
+   * still queued/processing would let the page FK cascade delete the local
+   * task, losing the only resumable task ID.  Reattach it to another page of
+   * the same source before deleting the page.  Once a task has completed its
+   * result pages are independent and the normal FK cleanup is intentional. */
+  const jobs = db
+    .prepare(
+      `
+      SELECT id, status, page_id AS pageId
+      FROM processing_jobs
+      WHERE report_id = ? AND page_id = ? AND job_type = 'ocr'
+        AND status IN ('queued', 'processing')
+    `,
+    )
+    .all(reportId, pageId) as Array<{
+      id: string;
+      status: string;
+      pageId: string;
+    }>;
+  if (!jobs.length) return;
+  const deleted = db
+    .prepare(
+      `SELECT storage_path AS storagePath FROM report_pages WHERE id = ? AND report_id = ?`,
+    )
+    .get(pageId, reportId) as { storagePath: string } | undefined;
+  if (!deleted) return;
+  const replacement = remaining
+    .filter((page) => page.storagePath === deleted.storagePath)
+    .sort((left, right) => left.pageNumber - right.pageNumber || left.id.localeCompare(right.id))[0];
+  if (!replacement) return;
+  for (const job of jobs) {
+    const queued = db
+      .prepare(
+        `SELECT detail_json AS detailJson FROM processing_job_events
+         WHERE job_id = ? AND event_type = 'queued'
+         ORDER BY created_at, rowid LIMIT 1`,
+      )
+      .get(job.id) as { detailJson: string | undefined } | undefined;
+    const detail = parseProcessingJobQueuedDetail(queued?.detailJson);
+    if (detail.ocrMode === "local" || detail.remoteScope !== "source") continue;
+    db.prepare(
+      `UPDATE processing_jobs SET page_id = ? WHERE id = ? AND status IN ('queued', 'processing')`,
+    ).run(replacement.id, job.id);
+  }
+}
+
 function queuePageRefreshJobs(
   db: DatabaseSync,
   reportId: string,
@@ -4243,6 +4319,10 @@ function queuePageRefreshJobs(
   source: "manual_page_edit" | "manual_page_delete",
   ocrSelection: ReturnType<typeof validateOcrBatchSelection>,
 ) {
+  /* Remote OCR consumes the original source file and has no local thumbnail
+   * prerequisite. Reordering/rotating pages only changes local presentation
+   * and evidence page numbers, so do not submit the same document again. */
+  if (ocrSelection.ocrMode !== "local") return;
   for (const jobType of ["thumbnail", "ocr"]) {
     const jobId = createId("job");
     db.prepare(
@@ -4345,8 +4425,8 @@ export function updateReportPages(
     }
     remapReportEvidencePageNumbers(db, reportId, pageNumberMapping);
     db.prepare(
-      "UPDATE reports SET status = 'processing', source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(reportId);
+      "UPDATE reports SET status = ?, source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(ocrSelection.ocrMode === "local" ? "processing" : report.status, reportId);
     db.prepare(
       `
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
@@ -4403,6 +4483,11 @@ export function deleteReportPage(
   db.exec("BEGIN IMMEDIATE");
   try {
     cancelActivePageChangeJobs(db, reportId, batchId, "manual_page_delete");
+    /* A queued/processing source-scoped MinerU task must survive deletion of
+       the page it was originally attached to.  Rebind it before the page FK
+       cascade removes the task, so the already-uploaded task/batch can still
+       be resumed and its result can be applied to the remaining source pages. */
+    rebindRemoteSourceJobsBeforePageDelete(db, reportId, pageId, remaining);
     db.prepare("DELETE FROM report_pages WHERE id = ? AND report_id = ?").run(
       pageId,
       reportId,
@@ -4435,8 +4520,8 @@ export function deleteReportPage(
       db,
     );
     db.prepare(
-      "UPDATE reports SET status = 'processing', source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(reportId);
+      "UPDATE reports SET status = ?, source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(ocrSelection.ocrMode === "local" ? "processing" : report.status, reportId);
     db.prepare(
       `
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)

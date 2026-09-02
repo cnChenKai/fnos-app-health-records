@@ -7,7 +7,7 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
@@ -35,6 +35,7 @@ import { rebuildMorphologyTrackingForReport } from "./morphology-finding.service
 import { normalizeReportObservations } from "./indicator-normalization.service";
 import { listManualReportFieldKeys } from "./report-field-overrides.service";
 import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
+import { enqueueFileGarbage } from "./file-gc.service";
 import {
   loadProcessingBatchForJob,
   loadReportProcessingBatchContext,
@@ -49,6 +50,7 @@ import {
 } from "./ocr-recognition-settings.service";
 import {
   recognizePageWithMinerU,
+  type MinerURecognitionResult,
   type MinerURecognitionExecutor,
   type MinerURemoteReference,
 } from "./mineru-client.service";
@@ -58,6 +60,7 @@ type JobRow = {
   reportId: string;
   pageId: string | null;
   jobType: "pdf_extract" | "thumbnail" | "ocr" | "ai_extract";
+  pipelineVersion: string;
   attempts: number;
   storagePath: string | null;
   fileSize: number | null;
@@ -73,12 +76,15 @@ export type WorkerExecutor = (
   request: WorkerRequest,
 ) => Promise<WorkerResponse>;
 
+type JobExecutionResponse = MinerURecognitionResult;
+
 const maxAttempts = 3;
 const retryDelays = [30, 120, 600];
 const permanentSourceErrorCodes = new Set([
   "INPUT_FORMAT_MISMATCH",
   "IMAGE_DECODE_FAILED",
   "PDF_DECODE_FAILED",
+  "MINERU_LIMIT_EXCEEDED_LOCAL_RUNTIME_UNAVAILABLE",
 ]);
 function leaseHeartbeatIntervalMs() {
   const value = Number(process.env.PROCESSING_JOB_LEASE_HEARTBEAT_INTERVAL_MS);
@@ -171,6 +177,183 @@ function appendJobEvent(input: {
     );
 }
 
+function queueRemoteSourceJob(
+  reportId: string,
+  pageId: string,
+  pipelineVersion: string,
+  detail: ProcessingJobQueuedDetail,
+  source: string,
+) {
+  const jobId = createId("job");
+  const batchId = detail.batchId || "initial-upload";
+  const result = getDatabase().prepare(
+    `
+    INSERT OR IGNORE INTO processing_jobs (
+      id, report_id, page_id, job_type, pipeline_version, deduplication_key
+    ) VALUES (?, ?, ?, 'ocr', ?, ?)
+  `,
+  ).run(
+    jobId,
+    reportId,
+    pageId,
+    pipelineVersion,
+    `${reportId}:${pageId}:ocr:remote-source:${batchId}`,
+  );
+  if (Number(result.changes) < 1) return false;
+  appendJobEvent({
+    jobId,
+    reportId,
+    eventType: "queued",
+    status: "queued",
+    message: "已恢复 MinerU 源文件识别任务",
+    detail: {
+      jobType: "ocr",
+      pageId,
+      source,
+      batchId,
+      remoteScope: "source",
+      ocrMode: detail.ocrMode,
+      remoteProcessingAccepted: detail.remoteProcessingAccepted,
+      previousReportStatus: detail.previousReportStatus,
+    },
+  });
+  return true;
+}
+
+function reconcileLegacyRemoteJobs() {
+  const db = getDatabase();
+  const candidates = db.prepare(
+    `
+    SELECT j.id, j.report_id AS reportId, j.page_id AS pageId, j.job_type AS jobType,
+      j.pipeline_version AS pipelineVersion, j.status, j.attempts,
+      p.storage_path AS storagePath, p.page_number AS pageNumber,
+      p.mime_type AS mimeType
+    FROM processing_jobs j
+    JOIN report_pages p ON p.id = j.page_id
+    WHERE j.job_type IN ('pdf_extract', 'thumbnail', 'ocr')
+      AND j.status IN ('queued', 'processing')
+      AND EXISTS (
+        SELECT 1 FROM processing_job_events queued
+        WHERE queued.job_id = j.id AND queued.event_type = 'queued'
+          AND queued.detail_json LIKE '%"ocrMode":"mineru_%'
+      )
+    ORDER BY j.report_id, p.storage_path, p.page_number, j.created_at, j.id
+  `,
+  ).all() as Array<{
+    id: string;
+    reportId: string;
+    pageId: string;
+    jobType: JobRow["jobType"];
+    pipelineVersion: string;
+    status: string;
+    attempts: number;
+    storagePath: string;
+    pageNumber: number;
+    mimeType: string;
+  }>;
+  const groups = new Map<string, {
+    reportId: string;
+    storagePath: string;
+    pageId: string;
+    pageNumber: number;
+    pipelineVersion: string;
+    detail: ProcessingJobQueuedDetail;
+    hasSourceJob: boolean;
+    submittedPageIds: Set<string>;
+  }>();
+  for (const candidate of candidates) {
+    const detail = readQueuedJobDetail(candidate.id);
+    if (detail.ocrMode === "local") continue;
+    /* Keep the source path as structured data.  NAS paths can contain `:`;
+       splitting a concatenated key would otherwise recover the wrong source. */
+    const key = `${candidate.reportId}\u0000${candidate.storagePath}`;
+    const group = groups.get(key) || {
+      reportId: candidate.reportId,
+      storagePath: candidate.storagePath,
+      pageId: candidate.pageId,
+      pageNumber: candidate.pageNumber,
+      pipelineVersion: candidate.pipelineVersion,
+      detail,
+      hasSourceJob: detail.remoteScope === "source",
+      submittedPageIds: new Set<string>(),
+    };
+    group.hasSourceJob ||= candidate.jobType === "ocr" && detail.remoteScope === "source";
+    const resumeReference = candidate.jobType === "ocr" && detail.remoteScope !== "source"
+      ? readMineruResumeReference(candidate.id, detail.ocrMode).reference
+      : null;
+    if (resumeReference) group.submittedPageIds.add(candidate.pageId);
+    if (candidate.pageNumber < group.pageNumber) {
+      group.pageId = candidate.pageId;
+      group.pageNumber = candidate.pageNumber;
+    }
+    groups.set(key, group);
+    /* A legacy OCR page that already has a remote task must continue polling
+       that task.  Other legacy page OCR and all local prerequisites are no
+       longer useful for remote batches and can be cancelled safely. */
+    const preserveSubmittedPageJob = candidate.jobType === "ocr"
+      && detail.remoteScope !== "source"
+      && Boolean(resumeReference);
+    if (candidate.jobType === "ocr" && detail.remoteScope === "source") continue;
+    if (preserveSubmittedPageJob) continue;
+    const cancelled = db.prepare(
+      `
+      UPDATE processing_jobs SET status = 'cancelled', locked_at = NULL, lease_expires_at = NULL,
+        next_retry_at = NULL, error_code = 'MINERU_LEGACY_LOCAL_PREREQUISITE',
+        error_message = '远程 OCR 不再依赖本地拆页/缩略图任务', finished_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status IN ('queued', 'processing')
+    `,
+    ).run(candidate.id);
+    if (Number(cancelled.changes) < 1) continue;
+    appendJobEvent({
+      jobId: candidate.id,
+      reportId: candidate.reportId,
+      eventType: "cancelled",
+      status: "cancelled",
+      attempt: candidate.attempts,
+      message: "远程 OCR 批次已移除本地前置任务",
+      detail: {
+        jobType: candidate.jobType,
+        source: "legacy_remote_recovery",
+        code: "MINERU_LEGACY_LOCAL_PREREQUISITE",
+      },
+    });
+  }
+  for (const group of groups.values()) {
+    /* A submitted legacy page task is still valuable and must keep polling, but
+       it only covers that one page.  Inspect the source rows and add one
+       source-file task whenever another page has neither a completed OCR
+       result nor an already-submitted remote task.  This handles a process
+       restart in the middle of a PDF fan-out without leaving a partial report
+       permanently stuck.  A one-page image with an already-submitted task is
+       complete from the recovery scheduler's point of view and does not need a
+       duplicate upload. */
+    if (group.hasSourceJob) continue;
+    const sourcePages = db.prepare(
+      `
+      SELECT p.id,
+        EXISTS (
+          SELECT 1 FROM ocr_results o
+          JOIN processing_jobs completed ON completed.id = o.job_id
+          WHERE o.page_id = p.id AND completed.job_type = 'ocr'
+            AND completed.status = 'completed'
+        ) AS hasCompletedOcr
+      FROM report_pages p
+      WHERE p.report_id = ? AND p.storage_path = ?
+      ORDER BY p.page_number, p.id
+    `,
+    ).all(group.reportId, group.storagePath) as Array<{
+      id: string;
+      hasCompletedOcr: number;
+    }>;
+    const hasUncoveredPage = sourcePages.some((page) =>
+      !page.hasCompletedOcr && !group.submittedPageIds.has(page.id),
+    );
+    if (hasUncoveredPage) {
+      queueRemoteSourceJob(group.reportId, group.pageId, group.pipelineVersion, group.detail, "legacy_remote_recovery");
+    }
+  }
+}
+
 function appendDuplicateDetectedEvent(
   reportId: string,
   candidates: Array<{ reason: string }>,
@@ -225,10 +408,12 @@ function safeStoragePath(relativePath: string) {
   return path;
 }
 
-export function claimNextJob() {
+export function claimNextJob(options: { ignoreLocalRuntime?: boolean } = {}) {
   const db = getDatabase();
+  const localRuntimeAvailable = options.ignoreLocalRuntime === true || hasOcrRuntime();
   db.exec("BEGIN IMMEDIATE");
   try {
+    reconcileLegacyRemoteJobs();
     const expiredJobs = db
       .prepare(
         `
@@ -320,14 +505,36 @@ export function claimNextJob() {
     for (const reportId of reportsToReconcile)
       reconcileReportProcessingStatus(reportId);
 
-    const candidate = db
+    /* When the local runtime is unavailable, do the capability check in SQL
+       before applying the scheduling limit.  Filtering the first 100 rows in
+       JavaScript lets a large backlog of local PDF/thumbnail jobs hide a
+       runnable MinerU or AI job behind the limit.  Legacy jobs without an
+       explicit mode intentionally stay out of this lane and are handled by a
+       local runner once the runtime is installed. */
+    const runtimeFilter = localRuntimeAvailable
+      ? ""
+      : `
+        AND (
+          j.job_type = 'ai_extract'
+          OR (
+            j.job_type = 'ocr'
+            AND EXISTS (
+              SELECT 1 FROM processing_job_events remoteQueued
+              WHERE remoteQueued.job_id = j.id
+                AND remoteQueued.event_type = 'queued'
+                AND remoteQueued.detail_json LIKE '%\"ocrMode\":\"mineru_%'
+            )
+          )
+        )`;
+    const candidates = db
       .prepare(
         `
-      SELECT j.id FROM processing_jobs j
+      SELECT j.id, j.job_type AS jobType FROM processing_jobs j
       JOIN reports r ON r.id = j.report_id AND r.status <> 'trashed'
       LEFT JOIN report_pages p ON p.id = j.page_id
       WHERE j.status = 'queued'
         AND (j.next_retry_at IS NULL OR j.next_retry_at <= CURRENT_TIMESTAMP)
+        ${runtimeFilter}
       ORDER BY
         CASE j.job_type WHEN 'pdf_extract' THEN 0 WHEN 'thumbnail' THEN 1 WHEN 'ocr' THEN 2 ELSE 3 END,
         CASE
@@ -343,10 +550,11 @@ export function claimNextJob() {
         END,
         COALESCE(p.page_number, 2147483647),
         j.created_at, j.id
-      LIMIT 1
+      LIMIT 100
     `,
       )
-      .get() as { id: string } | undefined;
+      .all() as Array<{ id: string; jobType: JobRow["jobType"] }>;
+    const candidate = candidates[0];
     if (!candidate) {
       db.exec("COMMIT");
       return null;
@@ -369,7 +577,7 @@ export function claimNextJob() {
       .prepare(
         `
       SELECT j.id, j.report_id AS reportId, j.page_id AS pageId, j.job_type AS jobType,
-        j.attempts, p.storage_path AS storagePath, p.file_size AS fileSize,
+        j.pipeline_version AS pipelineVersion, j.attempts, p.storage_path AS storagePath, p.file_size AS fileSize,
         p.thumbnail_path AS thumbnailPath, p.mime_type AS mimeType,
         p.page_number AS pageNumber, p.source_page_number AS sourcePageNumber,
         p.source_page_count AS sourcePageCount, p.rotation
@@ -438,6 +646,7 @@ function queueJob(
   pageId: string,
   jobType: "thumbnail" | "ocr",
   inheritedDetail?: ProcessingJobQueuedDetail,
+  deduplicationSuffix = "",
 ) {
   const jobId = createId("job");
   const result = getDatabase()
@@ -453,7 +662,7 @@ function queueJob(
       reportId,
       pageId,
       jobType,
-      `${reportId}:${pageId}:${jobType}:worker-v1`,
+      `${reportId}:${pageId}:${jobType}:worker-v1${deduplicationSuffix ? `:${deduplicationSuffix}` : ""}`,
     );
   if (Number(result.changes) > 0) {
     appendJobEvent({
@@ -469,6 +678,7 @@ function queueJob(
         ...(inheritedDetail?.previousReportStatus
           ? { previousReportStatus: inheritedDetail.previousReportStatus }
           : {}),
+        ...(inheritedDetail?.remoteScope ? { remoteScope: inheritedDetail.remoteScope } : {}),
         ocrMode: inheritedDetail?.ocrMode || "local",
         remoteProcessingAccepted: inheritedDetail?.remoteProcessingAccepted === true,
       },
@@ -632,7 +842,12 @@ function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
   return Number(queued.changes) > 0;
 }
 
-function expandPdf(job: JobRow, response: WorkerResponse) {
+function expandPdf(
+  job: JobRow,
+  response: WorkerResponse,
+  inheritedDetailOverride?: ProcessingJobQueuedDetail,
+  deduplicationSuffix = "",
+) {
   if (!job.pageId || job.pageNumber === null)
     throw new Error("PDF 任务缺少页面信息");
   const pageCount = Math.round(Number(response.pageCount || 0));
@@ -658,7 +873,7 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
     );
   }
   const db = getDatabase();
-  const inheritedDetail = readQueuedJobDetail(job.id);
+  const inheritedDetail = inheritedDetailOverride || readQueuedJobDetail(job.id);
   const source = db
     .prepare(
       `
@@ -728,10 +943,13 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
           sourcePage,
           pageCount,
         );
-        queueJob(job.reportId, pageId, "thumbnail", inheritedDetail);
-        queueJob(job.reportId, pageId, "ocr", inheritedDetail);
+        queueJob(job.reportId, pageId, "thumbnail", inheritedDetail, deduplicationSuffix);
+        queueJob(job.reportId, pageId, "ocr", inheritedDetail, deduplicationSuffix);
       }
-      queueJob(job.reportId, job.pageId, "ocr", inheritedDetail);
+      if (inheritedDetail.source === "mineru_limit_fallback") {
+        queueJob(job.reportId, job.pageId, "thumbnail", inheritedDetail, deduplicationSuffix);
+      }
+      queueJob(job.reportId, job.pageId, "ocr", inheritedDetail, deduplicationSuffix);
     }
     const expandedPages = db
       .prepare(
@@ -812,7 +1030,550 @@ function scoreOcrQuality(lines: Array<Record<string, unknown>>) {
   return { score: bounded, level, reason, textLength };
 }
 
-function completeJob(job: JobRow, response: WorkerResponse) {
+function persistOcrResult(
+  db: ReturnType<typeof getDatabase>,
+  jobId: string,
+  pageId: string,
+  response: WorkerResponse,
+  lines: Array<Record<string, unknown>>,
+) {
+  const quality = scoreOcrQuality(lines);
+  const coordWidth =
+    typeof response.coordWidth === "number" &&
+    Number.isFinite(response.coordWidth) &&
+    response.coordWidth > 0
+      ? response.coordWidth
+      : null;
+  const coordHeight =
+    typeof response.coordHeight === "number" &&
+    Number.isFinite(response.coordHeight) &&
+    response.coordHeight > 0
+      ? response.coordHeight
+      : null;
+  db.prepare(
+    `
+    INSERT INTO ocr_results (
+      id, job_id, page_id, engine, model_version, lines_json,
+      quality_score, quality_level, quality_reason, text_length, elapsed_ms,
+      coord_width, coord_height
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(job_id) DO UPDATE SET
+      engine = excluded.engine, model_version = excluded.model_version,
+      lines_json = excluded.lines_json,
+      quality_score = excluded.quality_score,
+      quality_level = excluded.quality_level,
+      quality_reason = excluded.quality_reason,
+      text_length = excluded.text_length,
+      elapsed_ms = excluded.elapsed_ms,
+      coord_width = excluded.coord_width,
+      coord_height = excluded.coord_height
+  `,
+  ).run(
+    createId("ocr"),
+    jobId,
+    pageId,
+    response.engine || "rapidocr-openvino",
+    response.modelVersion || "unknown",
+    JSON.stringify(lines),
+    quality.score,
+    quality.level,
+    quality.reason,
+    quality.textLength,
+    response.elapsedMs || null,
+    coordWidth,
+    coordHeight,
+  );
+  db.prepare("DELETE FROM ocr_results WHERE page_id = ? AND job_id <> ?")
+    .run(pageId, jobId);
+}
+
+/*
+ * A report can contain pages from several source files, and an earlier
+ * precise/local run may have expanded one PDF into several report_pages.  An
+ * Agent rerun intentionally changes that source to one logical page.  Keep
+ * the old structured result usable while the replacement AI job is pending by
+ * remapping evidence references before removing the obsolete child pages.
+ */
+const remoteCollapseEvidenceTables = [
+  "observations",
+  "morphology_findings",
+  "report_diagnoses",
+  "report_medications",
+  "report_procedures",
+  "vaccination_records",
+  "billing_summaries",
+  "billing_items",
+  "report_structured_sections",
+] as const;
+
+function remapRemoteCollapseEvidence(value: unknown, pageMapping: Map<number, number>): unknown {
+  if (Array.isArray(value)) return value.map((entry) => remapRemoteCollapseEvidence(entry, pageMapping));
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  const pageNumber = Number(record.pageNumber);
+  const mappedPage = Number.isInteger(pageNumber) && pageNumber > 0
+    ? pageMapping.get(pageNumber)
+    : undefined;
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    output[key] = remapRemoteCollapseEvidence(entry, pageMapping);
+  }
+  if (mappedPage !== undefined) output.pageNumber = mappedPage;
+  return output;
+}
+
+function remapEvidenceForRemoteCollapse(
+  db: ReturnType<typeof getDatabase>,
+  reportId: string,
+  pageMapping: Map<number, number>,
+) {
+  for (const table of remoteCollapseEvidenceTables) {
+    const rows = db
+      .prepare(`SELECT id, evidence_json AS evidenceJson FROM ${table} WHERE report_id = ?`)
+      .all(reportId) as Array<{ id: string; evidenceJson: string }>;
+    const update = db.prepare(`UPDATE ${table} SET evidence_json = ? WHERE id = ?`);
+    for (const row of rows) {
+      try {
+        update.run(
+          JSON.stringify(remapRemoteCollapseEvidence(JSON.parse(row.evidenceJson), pageMapping)),
+          row.id,
+        );
+      } catch {
+        // Preserve malformed historical evidence rather than failing a valid OCR result.
+      }
+    }
+  }
+  const extractionRows = db
+    .prepare(
+      `
+      SELECT id, fields_json AS fieldsJson, evidence_json AS evidenceJson,
+        raw_response_json AS rawResponseJson
+      FROM report_extractions WHERE report_id = ?
+    `,
+    )
+    .all(reportId) as Array<{
+    id: string;
+    fieldsJson: string;
+    evidenceJson: string;
+    rawResponseJson: string;
+  }>;
+  const updateExtraction = db.prepare(
+    `UPDATE report_extractions SET fields_json = ?, evidence_json = ?, raw_response_json = ? WHERE id = ?`,
+  );
+  const remapJson = (json: string) => {
+    try {
+      return JSON.stringify(remapRemoteCollapseEvidence(JSON.parse(json), pageMapping));
+    } catch {
+      return json;
+    }
+  };
+  for (const row of extractionRows) {
+    updateExtraction.run(
+      remapJson(row.fieldsJson),
+      remapJson(row.evidenceJson),
+      remapJson(row.rawResponseJson),
+      row.id,
+    );
+  }
+}
+
+function completeRemoteAgentPdf(job: JobRow, response: MinerURecognitionResult) {
+  if (!job.pageId || !job.storagePath) {
+    throw Object.assign(new Error("MinerU Agent 结果缺少源文件页面"), { code: "MINERU_INVALID_RESULT" });
+  }
+  const db = getDatabase();
+  const inheritedDetail = readQueuedJobDetail(job.id);
+  const allPages = db
+    .prepare(
+      `
+      SELECT id, page_number AS pageNumber, storage_path AS storagePath,
+        thumbnail_path AS thumbnailPath
+      FROM report_pages WHERE report_id = ? ORDER BY page_number, id
+    `,
+    )
+    .all(job.reportId) as Array<{
+    id: string;
+    pageNumber: number;
+    storagePath: string;
+    thumbnailPath: string | null;
+  }>;
+  const sourcePages = allPages.filter((page) => page.storagePath === job.storagePath);
+  if (!sourcePages.length) {
+    throw Object.assign(new Error("MinerU Agent 源文件页面不存在"), { code: "MINERU_INVALID_RESULT" });
+  }
+  const survivor = sourcePages.reduce((current, page) =>
+    page.pageNumber < current.pageNumber ? page : current,
+  );
+  const retained = allPages.filter((page) =>
+    page.id === survivor.id || page.storagePath !== job.storagePath,
+  );
+  const pageMapping = new Map<number, number>();
+  const retainedPageNumbers = new Map<string, number>();
+  retained.forEach((page, index) => {
+    const pageNumber = index + 1;
+    retainedPageNumbers.set(page.id, pageNumber);
+    pageMapping.set(page.pageNumber, pageNumber);
+  });
+  const survivorPageNumber = retainedPageNumbers.get(survivor.id);
+  if (!survivorPageNumber) {
+    throw Object.assign(new Error("MinerU Agent 逻辑页排序失败"), { code: "MINERU_INVALID_RESULT" });
+  }
+  for (const page of sourcePages) pageMapping.set(page.pageNumber, survivorPageNumber);
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const oldThumbnails = sourcePages
+      .map((page) => page.thumbnailPath)
+      .filter((path): path is string => Boolean(path));
+    /* The claimed job may currently point at a child page that will be
+       removed. Repoint it before the FK cascade deletes that page. */
+    if (job.pageId !== survivor.id) {
+      db.prepare("UPDATE processing_jobs SET page_id = ? WHERE id = ?")
+        .run(survivor.id, job.id);
+    }
+    db.prepare("UPDATE report_pages SET page_number = -page_number WHERE report_id = ?")
+      .run(job.reportId);
+    const obsolete = sourcePages.filter((page) => page.id !== survivor.id);
+    if (obsolete.length) {
+      const placeholders = obsolete.map(() => "?").join(", ");
+      db.prepare(`DELETE FROM report_pages WHERE id IN (${placeholders})`).run(
+        ...obsolete.map((page) => page.id),
+      );
+    }
+    db.prepare(
+      `
+      UPDATE report_pages
+      SET page_number = ?, source_page_number = 1, source_page_count = NULL,
+        thumbnail_path = NULL, width = NULL, height = NULL
+      WHERE id = ? AND report_id = ?
+    `,
+    ).run(-survivorPageNumber, survivor.id, job.reportId);
+    for (const page of retained) {
+      if (page.id === survivor.id) continue;
+      const nextPageNumber = retainedPageNumbers.get(page.id);
+      if (!nextPageNumber) {
+        throw Object.assign(new Error("MinerU Agent 逻辑页排序失败"), { code: "MINERU_INVALID_RESULT" });
+      }
+      db.prepare("UPDATE report_pages SET page_number = ? WHERE id = ? AND report_id = ?")
+        .run(nextPageNumber, page.id, job.reportId);
+    }
+    db.prepare("UPDATE report_pages SET page_number = ? WHERE id = ? AND report_id = ?")
+      .run(survivorPageNumber, survivor.id, job.reportId);
+    remapEvidenceForRemoteCollapse(db, job.reportId, pageMapping);
+    persistOcrResult(db, job.id, survivor.id, response, response.lines || []);
+    db.prepare(
+      `
+      UPDATE processing_jobs SET status = 'completed', locked_at = NULL, lease_expires_at = NULL,
+        error_code = NULL, error_message = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?
+    `,
+    ).run(job.id);
+    if (oldThumbnails.length) {
+      enqueueFileGarbage(
+        oldThumbnails.map((storagePath) => ({ storagePath, fileKind: "thumbnail" as const })),
+        "mineru_agent_logical_pdf",
+        db,
+      );
+    }
+    appendJobEvent({
+      jobId: job.id,
+      reportId: job.reportId,
+      eventType: "completed",
+      status: "completed",
+      attempt: job.attempts,
+      message: "MinerU Agent 已保存为整份文档逻辑页",
+      detail: {
+        jobType: "ocr",
+        source: "mineru_agent",
+        remoteScope: "source",
+        pageId: survivor.id,
+        pageCount: 1,
+        pageMappingAvailable: false,
+        requestedOcrMode: inheritedDetail.ocrMode,
+        actualOcrEngine: response.engine,
+        coordinateAvailable: false,
+        elapsedMs: response.elapsedMs,
+      },
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  queueAiJobIfReady(job.reportId, job.id);
+}
+
+function createCompletedRemotePageJob(
+  db: ReturnType<typeof getDatabase>,
+  sourceJob: JobRow,
+  pageId: string,
+  pageNumber: number,
+  response: MinerURecognitionResult,
+  lines: Array<Record<string, unknown>>,
+  inheritedDetail: ProcessingJobQueuedDetail,
+) {
+  const jobId = createId("job");
+  db.prepare(
+    `
+    INSERT INTO processing_jobs (
+      id, report_id, page_id, job_type, status, attempts, pipeline_version,
+      deduplication_key, started_at, finished_at
+    ) VALUES (?, ?, ?, 'ocr', 'completed', 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `,
+  ).run(
+    jobId,
+    sourceJob.reportId,
+    pageId,
+    sourceJob.pipelineVersion,
+    `${sourceJob.reportId}:${pageId}:ocr:remote-result:${sourceJob.id}`,
+  );
+  appendJobEvent({
+    jobId,
+    reportId: sourceJob.reportId,
+    eventType: "queued",
+    status: "queued",
+    detail: {
+      jobType: "ocr",
+      pageId,
+      pageNumber,
+      source: "mineru_result_page",
+      sourceJobId: sourceJob.id,
+      batchId: inheritedDetail.batchId,
+      previousReportStatus: inheritedDetail.previousReportStatus,
+      ocrMode: inheritedDetail.ocrMode,
+      remoteProcessingAccepted: inheritedDetail.remoteProcessingAccepted,
+    },
+  });
+  persistOcrResult(db, jobId, pageId, response, lines);
+  appendJobEvent({
+    jobId,
+    reportId: sourceJob.reportId,
+    eventType: "completed",
+    status: "completed",
+    attempt: 1,
+    message: "MinerU 精准解析页已落库",
+    detail: {
+      jobType: "ocr",
+      pageId,
+      pageNumber,
+      source: "mineru_result_page",
+      sourceJobId: sourceJob.id,
+      requestedOcrMode: inheritedDetail.ocrMode,
+      actualOcrEngine: response.engine,
+      coordinateAvailable: false,
+    },
+  });
+}
+
+function completeRemotePrecisePdf(
+  job: JobRow,
+  response: MinerURecognitionResult,
+) {
+  if (!job.pageId || !job.storagePath) {
+    throw Object.assign(new Error("MinerU 精准结果缺少源文件页面"), { code: "MINERU_INVALID_RESULT" });
+  }
+  const remotePages = Array.isArray(response.remotePages) ? response.remotePages : [];
+  if (!remotePages.length || remotePages.some((page, index) => page.pageNumber !== index + 1)) {
+    throw Object.assign(new Error("MinerU 精准结果页码不连续"), { code: "MINERU_INVALID_RESULT" });
+  }
+  if (remotePages.length > 200) {
+    throw Object.assign(new Error("MinerU 精准结果超过 200 页"), { code: "MINERU_LIMIT_EXCEEDED" });
+  }
+  const db = getDatabase();
+  const inheritedDetail = readQueuedJobDetail(job.id);
+  const source = db.prepare(
+    `
+    SELECT original_name AS originalName, storage_path AS storagePath, mime_type AS mimeType,
+      file_size AS fileSize, sha256, rotation, page_number AS pageNumber,
+      source_page_count AS sourcePageCount
+    FROM report_pages WHERE id = ?
+  `,
+  ).get(job.pageId) as {
+    originalName: string;
+    storagePath: string;
+    mimeType: string;
+    fileSize: number;
+    sha256: string;
+    rotation: number;
+    pageNumber: number;
+    sourcePageCount: number | null;
+  } | undefined;
+  if (!source) throw Object.assign(new Error("MinerU 源文件页面不存在"), { code: "MINERU_INVALID_RESULT" });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const pageCount = remotePages.length;
+    if (source.sourcePageCount && source.sourcePageCount !== pageCount) {
+      throw Object.assign(new Error("MinerU 返回页数与历史页数不一致"), { code: "MINERU_INVALID_RESULT" });
+    }
+    const existingPages = db.prepare(
+      `
+      SELECT id, page_number AS pageNumber, source_page_number AS sourcePageNumber
+      FROM report_pages WHERE report_id = ? AND storage_path = ? ORDER BY source_page_number, page_number
+    `,
+    ).all(job.reportId, source.storagePath) as Array<{
+      id: string; pageNumber: number; sourcePageNumber: number | null;
+    }>;
+    if (!source.sourcePageCount) {
+      if (pageCount > 1) {
+        db.prepare("UPDATE report_pages SET page_number = -page_number WHERE report_id = ? AND page_number > ?")
+          .run(job.reportId, source.pageNumber);
+        db.prepare("UPDATE report_pages SET page_number = -page_number + ? WHERE report_id = ? AND page_number < 0")
+          .run(pageCount - 1, job.reportId);
+      }
+      db.prepare("UPDATE report_pages SET source_page_number = 1, source_page_count = ? WHERE id = ?")
+        .run(pageCount, job.pageId);
+      for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
+        const pageId = createId("page");
+        db.prepare(
+          `
+          INSERT INTO report_pages (
+            id, report_id, page_number, original_name, storage_path, mime_type, file_size,
+            sha256, rotation, source_page_number, source_page_count
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        ).run(
+          pageId,
+          job.reportId,
+          source.pageNumber + pageNumber - 1,
+          source.originalName,
+          source.storagePath,
+          source.mimeType,
+          source.fileSize,
+          source.sha256,
+          source.rotation,
+          pageNumber,
+          pageCount,
+        );
+      }
+    } else {
+      /* A user may have removed one or more precise source pages after the
+         previous run.  The source PDF is still submitted as a whole, so
+         match returned pages by their validated source_page_number and keep
+         the intentional deletions instead of recreating them. */
+      const pageRows = existingPages.filter((page) => page.sourcePageNumber !== null);
+      const sourceNumbers = pageRows.map((page) => page.sourcePageNumber as number);
+      if (
+        pageRows.some((page) =>
+          !Number.isInteger(page.sourcePageNumber)
+          || (page.sourcePageNumber as number) < 1
+          || (page.sourcePageNumber as number) > pageCount,
+        )
+        || new Set(sourceNumbers).size !== sourceNumbers.length
+      ) {
+        throw Object.assign(new Error("MinerU 精准结果无法匹配现有页面"), { code: "MINERU_INVALID_RESULT" });
+      }
+    }
+    const pageRows = db.prepare(
+      `
+      SELECT id, source_page_number AS sourcePageNumber
+      FROM report_pages WHERE report_id = ? AND storage_path = ?
+      ORDER BY source_page_number
+    `,
+    ).all(job.reportId, source.storagePath) as Array<{ id: string; sourcePageNumber: number | null }>;
+    if (
+      !pageRows.length
+      || pageRows.some((page) =>
+        !Number.isInteger(page.sourcePageNumber)
+        || (page.sourcePageNumber as number) < 1
+        || (page.sourcePageNumber as number) > pageCount,
+      )
+      || new Set(pageRows.map((page) => page.sourcePageNumber)).size !== pageRows.length
+    ) {
+      throw Object.assign(new Error("MinerU 精准结果页面记录不完整"), { code: "MINERU_INVALID_RESULT" });
+    }
+    const pageRowsBySourceNumber = new Map(
+      pageRows.map((page) => [page.sourcePageNumber as number, page]),
+    );
+    /* The source task is normally attached to source page 1.  If a user
+       deletes that page while the remote batch is running, the task is
+       rebound to the first surviving page before the FK cascade.  Persist
+       that page with the source task itself so a completed source task can
+       never be left without an OCR result.  Every other retained page gets
+       its own completed child task below. */
+    const sourceResultPage = pageRows[0];
+    if (!sourceResultPage) {
+      throw Object.assign(new Error("MinerU 精准结果没有可保存的页面"), { code: "MINERU_INVALID_RESULT" });
+    }
+    if (job.pageId !== sourceResultPage.id) {
+      db.prepare("UPDATE processing_jobs SET page_id = ? WHERE id = ?")
+        .run(sourceResultPage.id, job.id);
+    }
+    for (const page of remotePages) {
+      const pageRow = pageRowsBySourceNumber.get(page.pageNumber);
+      /* Missing source pages are explicit user deletions; do not recreate
+         them, but also do not treat the returned document as malformed. */
+      if (!pageRow) continue;
+      if (pageRow.id === sourceResultPage.id) {
+        persistOcrResult(db, job.id, pageRow.id, response, page.lines);
+      } else {
+        createCompletedRemotePageJob(
+          db,
+          job,
+          pageRow.id,
+          page.pageNumber,
+          response,
+          page.lines,
+          inheritedDetail,
+        );
+      }
+    }
+    db.prepare(
+      `
+      UPDATE processing_jobs SET status = 'completed', locked_at = NULL, lease_expires_at = NULL,
+        error_code = NULL, error_message = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?
+    `,
+    ).run(job.id);
+    appendJobEvent({
+      jobId: job.id,
+      reportId: job.reportId,
+      eventType: "completed",
+      status: "completed",
+      attempt: job.attempts,
+      message: "MinerU 精准解析已完成并恢复逐页结果",
+      detail: {
+        jobType: "ocr",
+        source: "mineru_precise",
+        pageCount,
+        pageMappingAvailable: true,
+        requestedOcrMode: inheritedDetail.ocrMode,
+        actualOcrEngine: response.engine,
+        coordinateAvailable: false,
+        elapsedMs: response.elapsedMs,
+      },
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  queueAiJobIfReady(job.reportId, job.id);
+}
+
+function completeJob(job: JobRow, response: JobExecutionResponse) {
+  const queuedDetail = job.jobType === "ocr" ? readQueuedJobDetail(job.id) : null;
+  if (
+    job.jobType === "ocr"
+    && job.mimeType === "application/pdf"
+    && response.engine === "mineru-agent"
+    && queuedDetail?.remoteScope === "source"
+  ) {
+    completeRemoteAgentPdf(job, response);
+    return;
+  }
+  /* Only the new source-file scoped precise task is allowed to expand a PDF.
+   * Legacy MinerU jobs were submitted one page at a time; their content list
+   * also contains page indexes, but those indexes describe the already
+   * selected page rather than the whole source document.  Treating such a
+   * result as a source expansion would reject a valid resumed task whenever
+   * the old local split had more than one page. */
+  if (
+    job.jobType === "ocr"
+    && job.mimeType === "application/pdf"
+    && queuedDetail?.remoteScope === "source"
+    && response.remotePages?.length
+  ) {
+    completeRemotePrecisePdf(job, response);
+    return;
+  }
   if (!job.pageId) throw new Error("页面任务缺少页面 ID");
   const db = getDatabase();
   const ocrMeta =
@@ -835,57 +1596,9 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       job.pageId,
     );
   } else if (job.jobType === "ocr") {
-    const quality = scoreOcrQuality(response.lines || []);
-    const coordWidth =
-      typeof response.coordWidth === "number" &&
-      Number.isFinite(response.coordWidth) &&
-      response.coordWidth > 0
-        ? response.coordWidth
-        : null;
-    const coordHeight =
-      typeof response.coordHeight === "number" &&
-      Number.isFinite(response.coordHeight) &&
-      response.coordHeight > 0
-        ? response.coordHeight
-        : null;
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.prepare(
-        `
-        INSERT INTO ocr_results (
-          id, job_id, page_id, engine, model_version, lines_json,
-          quality_score, quality_level, quality_reason, text_length, elapsed_ms,
-          coord_width, coord_height
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(job_id) DO UPDATE SET
-          engine = excluded.engine, model_version = excluded.model_version,
-          lines_json = excluded.lines_json,
-          quality_score = excluded.quality_score,
-          quality_level = excluded.quality_level,
-          quality_reason = excluded.quality_reason,
-          text_length = excluded.text_length,
-          elapsed_ms = excluded.elapsed_ms,
-          coord_width = excluded.coord_width,
-          coord_height = excluded.coord_height
-      `,
-      ).run(
-        createId("ocr"),
-        job.id,
-        job.pageId,
-        response.engine || "rapidocr-openvino",
-        response.modelVersion || "unknown",
-        JSON.stringify(response.lines || []),
-        quality.score,
-        quality.level,
-        quality.reason,
-        quality.textLength,
-        response.elapsedMs || null,
-        coordWidth,
-        coordHeight,
-      );
-      db.prepare(
-        "DELETE FROM ocr_results WHERE page_id = ? AND job_id <> ?",
-      ).run(job.pageId, job.id);
+      persistOcrResult(db, job.id, job.pageId, response, response.lines || []);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -925,6 +1638,10 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       coordinateAvailable:
         typeof ocrMeta.coordinateAvailable === "boolean"
           ? ocrMeta.coordinateAvailable
+          : undefined,
+      pageMappingAvailable:
+        typeof response.pageMappingAvailable === "boolean"
+          ? response.pageMappingAvailable
           : undefined,
       ocrSource:
         typeof ocrMeta.source === "string" ? ocrMeta.source : undefined,
@@ -1322,7 +2039,7 @@ function appendMineruSubmittedEvent(
     eventType: "started",
     status: "processing",
     attempt: job.attempts,
-    message: "MinerU 页面已上传，等待远程解析",
+    message: "MinerU 源文件已上传，等待远程解析",
     detail: {
       jobType: "ocr",
       stage: "mineru_submitted",
@@ -1393,7 +2110,7 @@ function appendMineruLimitFallbackEvent(
     eventType: "started",
     status: "processing",
     attempt: job.attempts,
-    message: "源文件超过 MinerU 官方限额，本页改用本地 OCR",
+    message: "源文件超过 MinerU 官方限额，准备改用本地 OCR",
     detail: {
       jobType: "ocr",
       stage: "mineru_limit_fallback",
@@ -1404,11 +2121,11 @@ function appendMineruLimitFallbackEvent(
   });
 }
 
-function annotateOcrResponse(
-  response: WorkerResponse,
+function annotateOcrResponse<T extends WorkerResponse>(
+  response: T,
   requestedMode: OcrRecognitionMode,
   limitFallbackReason?: string,
-) {
+): T {
   const current = typeof response.engineElapsed === "object" && response.engineElapsed !== null
     ? response.engineElapsed as Record<string, unknown>
     : {};
@@ -1429,48 +2146,48 @@ async function executeMineruOcr(
   executor: WorkerExecutor,
   mineruExecutor: MinerURecognitionExecutor,
 ) {
-  mkdirSync(mineruTemporaryDirectory(), { recursive: true });
-  const safeJobName = job.id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160);
-  const temporaryPath = safeStoragePath(join("tmp", "mineru", `${safeJobName}.jpg`));
-  try {
-    const preparation = await executor({
-      ...request,
-      action: "thumbnail",
-      outputPath: temporaryPath,
-      maxSize: 2400,
-      quality: 95,
-      renderScale: 3,
-      recycleAfterResponse: isLastActiveOcrJobForReport(job),
-    });
-    if (!preparation.ok) {
-      throw Object.assign(
-        new Error(preparation.errorMessage || "MinerU 页面预处理失败"),
-        { code: preparation.errorCode || "MINERU_PAGE_PREPARATION_FAILED" },
-      );
-    }
-    if (!isJobStillProcessable(job)) {
-      throw Object.assign(new Error("MinerU 任务已取消"), { code: "MINERU_CANCELLED" });
-    }
-    const resume = readMineruResumeReference(job.id, mode);
-    const settings = getOcrRecognitionSettings(true);
-    return await mineruExecutor({
-      mode,
-      imagePath: temporaryPath,
-      remoteFileName: `page-${safeJobName}.jpg`,
-      apiToken: mode === "mineru_precise" ? settings.apiToken : undefined,
-      resume: resume.reference,
-      remoteStartedAtMs: resume.remoteStartedAtMs,
-      shouldContinue: () => isJobStillProcessable(job),
-      onSubmitted: (reference) => appendMineruSubmittedEvent(job, mode, reference),
-      onState: (reference, state) => appendMineruStateEvent(job, mode, reference, state),
-    });
-  } finally {
-    try {
-      rmSync(temporaryPath, { force: true });
-    } catch {
-      // Startup orphan cleanup is the fallback when temporary storage is unavailable.
-    }
+  if (!job.storagePath || !job.mimeType) {
+    throw Object.assign(new Error("MinerU 源文件信息缺失"), { code: "MINERU_PAGE_PREPARATION_FAILED" });
   }
+  const sourcePath = safeStoragePath(job.storagePath);
+  assertSourceFileAvailable(job, sourcePath);
+  if (!isJobStillProcessable(job)) {
+    throw Object.assign(new Error("MinerU 任务已取消"), { code: "MINERU_CANCELLED" });
+  }
+  const safeJobName = job.id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160);
+  const extensionByMime: Record<string, string> = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+  };
+  const extension = extensionByMime[job.mimeType] || extname(sourcePath).toLowerCase();
+  if (!/^\.(?:pdf|jpe?g|png|webp|heic|heif)$/.test(extension)) {
+    throw Object.assign(new Error("MinerU 源文件格式无效"), { code: "MINERU_INVALID_RESULT" });
+  }
+  const queuedDetail = readQueuedJobDetail(job.id);
+  const pageRanges = mode === "mineru_precise"
+    && queuedDetail.remoteScope !== "source"
+    && job.sourcePageNumber
+    ? `${job.sourcePageNumber}--${job.sourcePageNumber}`
+    : null;
+  const resume = readMineruResumeReference(job.id, mode);
+  const settings = getOcrRecognitionSettings(true);
+  return await mineruExecutor({
+    mode,
+    filePath: sourcePath,
+    mimeType: job.mimeType,
+    remoteFileName: `source-${safeJobName}${extension}`,
+    pageRanges,
+    apiToken: mode === "mineru_precise" ? settings.apiToken : undefined,
+    resume: resume.reference,
+    remoteStartedAtMs: resume.remoteStartedAtMs,
+    shouldContinue: () => isJobStillProcessable(job),
+    onSubmitted: (reference) => appendMineruSubmittedEvent(job, mode, reference),
+    onState: (reference, state) => appendMineruStateEvent(job, mode, reference, state),
+  });
 }
 
 async function executeOcrJob(
@@ -1487,33 +2204,150 @@ async function executeOcrJob(
       code: "MINERU_CONSENT_MISSING",
     });
   }
-  const preflightFallback = sourceLimitFallback(job, mode);
-  if (preflightFallback) {
-    appendMineruLimitFallbackEvent(job, mode, preflightFallback);
-    return annotateOcrResponse(await executor(request), mode, preflightFallback.reason);
-  }
   try {
+    const preflightFallback = sourceLimitFallback(job, mode);
+    if (preflightFallback) {
+      throw Object.assign(new Error("源文件超过 MinerU 官方限额"), {
+        code: "MINERU_LIMIT_EXCEEDED",
+        fallbackDetail: preflightFallback,
+      });
+    }
     return annotateOcrResponse(
       await executeMineruOcr(job, request, mode, executor, mineruExecutor),
       mode,
     );
   } catch (error) {
     if ((error as { code?: string })?.code !== "MINERU_LIMIT_EXCEEDED") throw error;
-    appendMineruLimitFallbackEvent(job, mode, { reason: "upstream_document_limit" });
-    return annotateOcrResponse(await executor(request), mode, "upstream_document_limit");
+    const fallbackDetail = (error as { fallbackDetail?: Record<string, unknown> }).fallbackDetail || {};
+    appendMineruLimitFallbackEvent(job, mode, {
+      reason: typeof fallbackDetail.reason === "string" ? fallbackDetail.reason : "upstream_document_limit",
+      ...fallbackDetail,
+    });
+    throw error;
   }
+}
+
+function localFallbackDetail(job: JobRow) {
+  const current = readQueuedJobDetail(job.id);
+  return {
+    ...current,
+    source: "mineru_limit_fallback",
+    remoteScope: null,
+    ocrMode: "local" as const,
+    remoteProcessingAccepted: false,
+  } satisfies ProcessingJobQueuedDetail;
+}
+
+function completeMineruLimitFallbackJob(
+  job: JobRow,
+  mode: Exclude<OcrRecognitionMode, "local">,
+  detail: Record<string, unknown>,
+) {
+  const db = getDatabase();
+  db.prepare(
+    `
+    UPDATE processing_jobs SET status = 'completed', locked_at = NULL, lease_expires_at = NULL,
+      error_code = NULL, error_message = NULL, finished_at = CURRENT_TIMESTAMP WHERE id = ?
+  `,
+  ).run(job.id);
+  appendJobEvent({
+    jobId: job.id,
+    reportId: job.reportId,
+    eventType: "completed",
+    status: "completed",
+    attempt: job.attempts,
+    message: "MinerU 超限，已转入本地识别任务",
+    detail: {
+      jobType: "ocr",
+      stage: "mineru_limit_fallback_queued",
+      requestedOcrMode: mode,
+      actualOcrMode: "local",
+      ...detail,
+    },
+  });
+}
+
+function queueLocalJobsForSource(
+  reportId: string,
+  storagePath: string,
+  inheritedDetail: ProcessingJobQueuedDetail,
+  deduplicationSuffix = "",
+) {
+  const pages = getDatabase().prepare(
+    "SELECT id FROM report_pages WHERE report_id = ? AND storage_path = ? ORDER BY page_number",
+  ).all(reportId, storagePath) as Array<{ id: string }>;
+  for (const page of pages) {
+    queueJob(reportId, page.id, "thumbnail", inheritedDetail, deduplicationSuffix);
+    queueJob(reportId, page.id, "ocr", inheritedDetail, deduplicationSuffix);
+  }
+}
+
+async function fallbackMineruLimitToLocal(
+  job: JobRow,
+  request: WorkerRequest,
+  executor: WorkerExecutor,
+  error: unknown,
+) {
+  /* Test/in-process callers provide an explicit WorkerExecutor, which is the
+     worker capability itself.  The production runner uses requestWorker and
+     must still verify the installed runtime before a MinerU-limit fallback. */
+  if (executor === requestWorker && !hasOcrRuntime()) {
+    const failure = Object.assign(
+      new Error("源文件超过 MinerU 官方限额，当前未安装本地 OCR 环境，请安装后重试"),
+      { code: "MINERU_LIMIT_EXCEEDED_LOCAL_RUNTIME_UNAVAILABLE" },
+    );
+    throw failure;
+  }
+  const queued = readQueuedJobDetail(job.id);
+  const mode = queued.ocrMode;
+  if (mode === "local") return false;
+  const localDetail = localFallbackDetail(job);
+  const deduplicationSuffix = `mineru-fallback-${job.id}`;
+  const fallbackDetail = (error as { fallbackDetail?: Record<string, unknown> }).fallbackDetail || {
+    reason: "upstream_document_limit",
+  };
+  if (job.mimeType === "application/pdf") {
+    const inspection = await executor({
+      ...request,
+      action: "inspect_pdf",
+      recycleAfterResponse: isLastActiveOcrJobForReport(job),
+    });
+    if (!inspection.ok) {
+      throw Object.assign(
+        new Error(inspection.errorMessage || "本地 PDF 拆页失败"),
+        { code: inspection.errorCode || "PDF_DECODE_FAILED" },
+      );
+    }
+    expandPdf(job, inspection, localDetail, deduplicationSuffix);
+    queueLocalJobsForSource(job.reportId, job.storagePath!, localDetail, deduplicationSuffix);
+  } else if (job.pageId) {
+    queueJob(job.reportId, job.pageId, "thumbnail", localDetail, deduplicationSuffix);
+    queueJob(job.reportId, job.pageId, "ocr", localDetail, deduplicationSuffix);
+  } else {
+    throw Object.assign(new Error("MinerU 超限任务缺少页面信息"), { code: "MINERU_INVALID_RESULT" });
+  }
+  completeMineruLimitFallbackJob(job, mode, fallbackDetail);
+  return true;
 }
 
 export async function processNextJob(
   executor: WorkerExecutor = requestWorker,
   aiExecutor: AiExecutor = requestAiExtraction,
   mineruExecutor: MinerURecognitionExecutor = recognizePageWithMinerU,
+  options: { enforceLocalRuntime?: boolean } = {},
 ) {
-  const job = claimNextJob();
+  /* The timer-driven runner is the scheduler boundary and enforces the local
+   * runtime capability there. Direct in-process callers (including recovery
+   * tools and tests) may deliberately provide an executor and run a local job
+   * without installing the optional OCR runtime. */
+  const job = claimNextJob({
+    ignoreLocalRuntime: options.enforceLocalRuntime !== true,
+  });
   if (!job) return false;
   activeJob = { id: job.id, reportId: job.reportId };
   let rebuildMorphology = false;
   let thumbnailOutputPath: string | null = null;
+  let workerRequest: WorkerRequest | null = null;
   const cleanupPendingThumbnail = () => {
     if (!thumbnailOutputPath || job.thumbnailPath) return;
     try {
@@ -1645,6 +2479,7 @@ export async function processNextJob(
         rotation: job.rotation || 0,
         recycleAfterResponse: isLastActiveOcrJobForReport(job),
       };
+      workerRequest = request;
       if (job.jobType === "thumbnail") {
         const relativeThumbnail = `thumbnails/${job.reportId}/${job.pageId}.jpg`;
         const outputPath = safeStoragePath(relativeThumbnail);
@@ -1669,6 +2504,19 @@ export async function processNextJob(
   } catch (error) {
     cleanupPendingThumbnail();
     if (!isJobStillProcessable(job)) return true;
+    if (
+      job.jobType === "ocr"
+      && readQueuedJobDetail(job.id).ocrMode !== "local"
+      && (error as { code?: string })?.code === "MINERU_LIMIT_EXCEEDED"
+    ) {
+      try {
+        if (!workerRequest) throw error;
+        const switched = await fallbackMineruLimitToLocal(job, workerRequest, executor, error);
+        if (switched) return true;
+      } catch (fallbackError) {
+        error = fallbackError;
+      }
+    }
     failJob(job, error);
     throw error;
   } finally {
@@ -1691,13 +2539,11 @@ export async function processNextJob(
 
 async function tick() {
   if (busy) return;
-  const config = getAppConfig();
-  if (!hasOcrRuntime(config)) return;
   busy = true;
   try {
     lastRunAt = new Date().toISOString();
     lastError = null;
-    await processNextJob();
+    await processNextJob(undefined, undefined, undefined, { enforceLocalRuntime: true });
   } catch (error) {
     lastError = error instanceof Error ? error.message : "任务执行失败";
     await writeLog("warn", "processing-job-failed", { error: lastError });
@@ -1911,11 +2757,21 @@ export function reprocessReportOcrAndAi(
   const pages = db
     .prepare(
       `
-    SELECT id, page_number AS pageNumber FROM report_pages
+    SELECT id, page_number AS pageNumber, storage_path AS storagePath,
+      mime_type AS mimeType, source_page_number AS sourcePageNumber,
+      source_page_count AS sourcePageCount
+    FROM report_pages
     WHERE report_id = ? ORDER BY page_number
   `,
     )
-    .all(reportId) as Array<{ id: string; pageNumber: number }>;
+    .all(reportId) as Array<{
+      id: string;
+      pageNumber: number;
+      storagePath: string;
+      mimeType: string;
+      sourcePageNumber: number | null;
+      sourcePageCount: number | null;
+    }>;
   if (!pages.length)
     throw createError({
       statusCode: 409,
@@ -1952,6 +2808,14 @@ export function reprocessReportOcrAndAi(
   }>;
   const queuedOcrJobs: string[] = [];
   const manualFieldKeys = listManualReportFieldKeys(reportId);
+  const sourcePages = ocrSelection.ocrMode === "local"
+    ? pages
+    : [...new Map(
+      pages
+        .slice()
+        .sort((left, right) => (left.sourcePageNumber || 1) - (right.sourcePageNumber || 1))
+        .map((page) => [page.storagePath, page]),
+    ).values()];
 
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -1989,7 +2853,7 @@ export function reprocessReportOcrAndAi(
       WHERE id = ?
     `,
     ).run(reportId);
-    for (const page of pages) {
+    for (const page of sourcePages) {
       const jobId = createId("job");
       db.prepare(
         `
@@ -2011,12 +2875,13 @@ export function reprocessReportOcrAndAi(
         message: "用户重新识别报告",
         detail: {
           jobType: "ocr",
-          pageId: page.id,
-          pageNumber: page.pageNumber,
-          source: "manual_reprocess",
-          batchId,
-          previousReportStatus: report.status,
-          ...ocrSelection,
+        pageId: page.id,
+        pageNumber: page.pageNumber,
+        source: "manual_reprocess",
+        batchId,
+        previousReportStatus: report.status,
+        ...(ocrSelection.ocrMode !== "local" ? { remoteScope: "source" } : {}),
+        ...ocrSelection,
         },
       });
       queuedOcrJobs.push(jobId);

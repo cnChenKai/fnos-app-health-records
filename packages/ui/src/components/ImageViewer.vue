@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   ChevronLeft, ChevronRight, CircleAlert, Crosshair, Download, LoaderCircle, Maximize2,
-  RectangleHorizontal, RectangleVertical, Sparkles, X, ZoomIn, ZoomOut
+  FileText, RectangleHorizontal, RectangleVertical, Sparkles, X, ZoomIn, ZoomOut
 } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
@@ -15,6 +15,9 @@ export type ImageViewerPage = {
   label: string;
   downloadUrl?: string;
   downloadName?: string;
+  /** A source PDF without a local page preview cannot be rendered as an image. */
+  isDocument?: boolean;
+  documentUrl?: string;
 };
 
 const props = defineProps<{
@@ -47,6 +50,7 @@ const viewerImgEl = ref<HTMLImageElement | null>(null);
 const ocrOn = ref(true);
 
 const viewerPage = computed(() => props.pages[viewerIndex.value] || null);
+const viewerIsDocument = computed(() => Boolean(viewerPage.value?.isDocument));
 const viewerUsingPreview = computed(() => Boolean(viewerPage.value?.previewUrl) && !viewerHighRes.value);
 const viewerDisplaySrc = computed(() => {
   const page = viewerPage.value;
@@ -82,9 +86,9 @@ function prepareViewerPage(index: number) {
   const page = viewerPage.value;
   const seq = ++viewerPreloadSeq;
   viewerLoadFailed.value = false;
-  if (!page || !page.previewUrl) {
-    viewerHighRes.value = true;
-    viewerLoading.value = Boolean(page);
+  if (!page || page.isDocument || !page.previewUrl) {
+    viewerHighRes.value = Boolean(page && !page.isDocument);
+    viewerLoading.value = Boolean(page && !page.isDocument);
     viewerHighResLoading.value = false;
     return;
   }
@@ -417,7 +421,7 @@ onBeforeUnmount(() => {
       <div
         ref="viewerCanvasEl"
         class="original-viewer-canvas"
-        :class="{ 'is-preview': viewerUsingPreview, gesturing: viewerGesturing, fit: viewerScale === 1 }"
+        :class="{ 'is-preview': viewerUsingPreview, 'is-document': viewerIsDocument, gesturing: viewerGesturing, fit: viewerScale === 1 }"
         @touchstart="onViewerTouchStart"
         @touchmove.prevent="onViewerTouchMove"
         @touchend="onViewerTouchEnd"
@@ -430,8 +434,18 @@ onBeforeUnmount(() => {
           <button type="button" @click="retryViewerImage">重试</button>
         </div>
         <div v-if="viewerHighResLoading" class="viewer-preview-badge"><LoaderCircle class="spin-icon" :size="13" />正在加载高清图…</div>
+        <div v-if="viewerIsDocument" class="viewer-document-placeholder">
+          <FileText :size="42" />
+          <strong>PDF 原件</strong>
+          <span>当前没有本地页面预览，可直接打开原件查看。</span>
+          <a
+            :href="viewerPage?.documentUrl || viewerPage?.downloadUrl || viewerPage?.fullUrl"
+            target="_blank"
+            rel="noreferrer"
+          >打开原件</a>
+        </div>
         <div
-          v-if="viewerPage && !viewerLoadFailed"
+          v-else-if="viewerPage && !viewerLoadFailed"
           class="viewer-image-frame"
           :style="[viewerFitStyle, { transform: `translate(-50%, -50%) translate3d(${viewerPanX}px, ${viewerPanY}px, 0) scale(${viewerScale}) rotate(${viewerRotation}deg)` }]"
         >

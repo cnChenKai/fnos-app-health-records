@@ -118,7 +118,7 @@ test("report detail keeps page mutation, job refresh, and evidence navigation in
   assert.match(reportDetail, /pageMutationPending: savingPages\.value \|\| pageRefreshAwaitingJobs\.value/);
   assert.match(reportDetail, /resolveClinicalEvidenceNavigation\([\s\S]*?savingPages\.value/);
   assert.match(reportDetail, /:disabled="savingPages" @click="openClinicalEvidence/);
-  assert.match(reportDetail, /pages\/[\s\S]*?method: "DELETE"[\s\S]*?pageRefreshAwaitingJobs\.value = true[\s\S]*?await refreshJobs\(true\)[\s\S]*?savingPages\.value = false/);
-  assert.match(reportDetail, /method: "PUT"[\s\S]*?pageRefreshAwaitingJobs\.value = true[\s\S]*?await refreshJobs\(true\)[\s\S]*?savingPages\.value = false/);
+  assert.match(reportDetail, /pages\/[\s\S]*?method: "DELETE"[\s\S]*?pageRefreshAwaitingJobs\.value = !recognitionMode\.value\.externalProcessing[\s\S]*?await refreshJobs\(true\)[\s\S]*?savingPages\.value = false/);
+  assert.match(reportDetail, /method: "PUT"[\s\S]*?pageRefreshAwaitingJobs\.value = !recognitionMode\.value\.externalProcessing[\s\S]*?await refreshJobs\(true\)[\s\S]*?savingPages\.value = false/);
   assert.match(reportDetail, /processingJobBatchLabel\(currentBatch\)/);
 });

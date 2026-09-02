@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
+import type { OcrRecognitionMode } from "../domain/ocr-recognition";
 import { createId } from "../utils/identifier";
 import { getAppConfig } from "../utils/runtime-config";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
@@ -19,7 +20,13 @@ import {
 } from "./processing-job-batches.service";
 
 const maxFileCount = 24;
-const maxFileBytes = 40 * 1024 * 1024;
+const localMaxFileBytes = 40 * 1024 * 1024;
+/* Keep the upload envelope large enough for the precise MinerU limit.  Agent
+ * (10 MB) and local (40 MB) limits are checked per batch before submission;
+ * Agent/precise over-limit sources are allowed through so the worker can
+ * apply the documented local-fallback policy instead of rejecting them at
+ * the browser boundary. */
+const maxSourceFileBytes = 200 * 1024 * 1024;
 const maxTotalBytes = 200 * 1024 * 1024;
 const pipelineVersion = "upload-v1";
 
@@ -83,7 +90,11 @@ function cleanRotation(value: number | undefined) {
   return rotation;
 }
 
-function validateFiles(files: UploadInputFile[]) {
+function uploadFileLimit(mode: OcrRecognitionMode) {
+  return mode === "local" ? localMaxFileBytes : maxSourceFileBytes;
+}
+
+function validateFiles(files: UploadInputFile[], perFileLimit = maxSourceFileBytes) {
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
   if (files.length > maxFileCount) {
     throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
@@ -91,8 +102,8 @@ function validateFiles(files: UploadInputFile[]) {
   let totalBytes = 0;
   return files.map((file, index) => {
     if (!file.data.byteLength) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
-    if (file.data.byteLength > maxFileBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+    if (file.data.byteLength > perFileLimit) {
+      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${perFileLimit / 1024 / 1024} MB` });
     }
     totalBytes += file.data.byteLength;
     if (totalBytes > maxTotalBytes) {
@@ -122,7 +133,7 @@ function readFileSignature(path: string) {
   }
 }
 
-function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[] {
+function validateLocalFiles(files: LocalUploadInputFile[], perFileLimit = maxSourceFileBytes): ValidatedUploadFile[] {
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
   if (files.length > maxFileCount) {
     throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
@@ -137,8 +148,8 @@ function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[
     }
     if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: `“${cleanOriginalName(file.originalName, index)}”不是普通文件` });
     if (!stats.size) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
-    if (stats.size > maxFileBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+    if (stats.size > perFileLimit) {
+      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${perFileLimit / 1024 / 1024} MB` });
     }
     totalBytes += stats.size;
     if (totalBytes > maxTotalBytes) {
@@ -185,7 +196,7 @@ function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
       const bytesRead = readSync(source, chunk, 0, chunk.byteLength, null);
       if (!bytesRead) break;
       copied += bytesRead;
-      if (copied > maxFileBytes || copied > file.fileSize) {
+      if (copied > maxSourceFileBytes || copied > file.fileSize) {
         throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
       }
       hash.update(chunk.subarray(0, bytesRead));
@@ -265,7 +276,11 @@ function createValidatedUpload(
         page.id, reportId, page.pageNumber, page.originalName, page.storagePath,
         page.mimeType, page.fileSize, page.sha256, page.rotation, page.kind === "pdf" ? 1 : null
       );
-      const jobTypes = page.kind === "pdf" ? ["pdf_extract", "thumbnail"] : ["thumbnail", "ocr"];
+      /* MinerU receives the original source file directly.  Do not queue the
+       * local PDF/thumbnail worker as a prerequisite for a remote OCR batch. */
+      const jobTypes = ocrSelection.ocrMode === "local"
+        ? page.kind === "pdf" ? ["pdf_extract", "thumbnail"] : ["thumbnail", "ocr"]
+        : ["ocr"];
       for (const jobType of jobTypes) {
         const jobId = createId("job");
         insertJob.run(
@@ -278,6 +293,7 @@ function createValidatedUpload(
           pageNumber: page.pageNumber,
           source: "upload",
           batchId: "initial-upload",
+          ...(ocrSelection.ocrMode !== "local" ? { remoteScope: "source" } : {}),
           ...ocrSelection
         }));
       }
@@ -298,7 +314,10 @@ function createValidatedUpload(
       status: "queued" as const,
       title: reportTitle,
       pageCount: prepared.length,
-      jobCount: prepared.length * 2,
+      jobCount: prepared.reduce(
+        (count, page) => count + (ocrSelection.ocrMode === "local" ? 2 : 1),
+        0,
+      ),
       ocrMode: ocrSelection.ocrMode,
       pages: prepared.map(({ id, pageNumber, originalName, mimeType, fileSize, rotation }) => ({
         id, pageNumber, originalName, mimeType, fileSize, rotation
@@ -317,7 +336,14 @@ export function createUpload(
   files: UploadInputFile[],
   selectionInput: OcrBatchSelectionInput = {}
 ) {
-  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload", selectionInput);
+  const selection = validateOcrBatchSelection(selectionInput);
+  return createValidatedUpload(
+    user,
+    memberId,
+    validateFiles(files, uploadFileLimit(selection.ocrMode)),
+    "browser_upload",
+    selection,
+  );
 }
 
 export function createUploadFromLocalFiles(
@@ -326,7 +352,14 @@ export function createUploadFromLocalFiles(
   files: LocalUploadInputFile[],
   selectionInput: OcrBatchSelectionInput = {}
 ) {
-  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", selectionInput);
+  const selection = validateOcrBatchSelection(selectionInput);
+  return createValidatedUpload(
+    user,
+    memberId,
+    validateLocalFiles(files, uploadFileLimit(selection.ocrMode)),
+    "nas_import",
+    selection,
+  );
 }
 
 
