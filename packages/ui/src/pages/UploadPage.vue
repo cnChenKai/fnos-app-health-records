@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import {
   ArrowDown, ArrowUp, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
   Folder, FolderOpen, HardDrive, ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
@@ -8,7 +8,7 @@ import { useAppContext } from "../composables/useAppContext";
 import { request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
 import { getDeploymentCopy } from "../utils/deployment-copy";
-import type { ProcessingJob } from "../types/api";
+import type { OcrRecognitionModeSummary, ProcessingJob } from "../types/api";
 import {
   calculateProcessingJobProgress, groupProcessingJobBatches, isProcessingJobBatchSettled
 } from "../utils/processing-job-batches";
@@ -26,6 +26,7 @@ type UploadResult = {
   status: "queued";
   pageCount: number;
   jobCount: number;
+  ocrMode: OcrRecognitionModeSummary["mode"];
 };
 
 type LocalImportRoot = { id: string; label: string; path: string };
@@ -69,6 +70,16 @@ const localEntries = ref<LocalImportEntry[]>([]);
 const localTruncated = ref(false);
 const localAvailability = ref<LocalBrowserResponse["availability"] | null>(null);
 const selectedLocalFiles = ref<SelectedLocalFile[]>([]);
+const recognitionMode = ref<OcrRecognitionModeSummary>({
+  mode: "local",
+  label: "本地 OCR",
+  description: "报告页面仅在当前设备内识别，不会发送给外部服务。",
+  externalProcessing: false,
+  requiresApiToken: false,
+  requiresRemoteProcessingAcceptance: false,
+  limits: { maxFileBytes: null, maxFileMegabytes: null, maxPages: null }
+});
+const remoteProcessingAccepted = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const totalBytes = computed(() => items.value.reduce((total, item) => total + item.file.size, 0));
 const batchGroups = computed(() => groupProcessingJobBatches(jobs.value));
@@ -94,6 +105,36 @@ const localBreadcrumbs = computed(() => {
   return segments.map((name, index) => ({ name, path: segments.slice(0, index + 1).join("/") }));
 });
 const deploymentCopy = computed(() => getDeploymentCopy(app.session.value?.authMode));
+const remoteSubmissionBlocked = computed(() =>
+  recognitionMode.value.externalProcessing && !remoteProcessingAccepted.value
+);
+
+async function refreshRecognitionMode() {
+  try {
+    const next = await request<OcrRecognitionModeSummary>("ocr/recognition-mode");
+    if (next.mode !== recognitionMode.value.mode) remoteProcessingAccepted.value = false;
+    recognitionMode.value = next;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "无法读取当前 OCR 识别方式";
+  }
+}
+
+function assertRemoteProcessingAccepted(target: "browser" | "local") {
+  if (!remoteSubmissionBlocked.value) return true;
+  const message = "请先确认处理后的完整页面副本将发送至 MinerU";
+  if (target === "local") localError.value = message;
+  else error.value = message;
+  return false;
+}
+
+function handleBatchSubmissionError(cause: unknown, fallback: string) {
+  const message = cause instanceof Error ? cause.message : fallback;
+  if (message.includes("更新 OCR 识别方式") || message.includes("重新确认数据处理方式")) {
+    remoteProcessingAccepted.value = false;
+    void refreshRecognitionMode();
+  }
+  return message;
+}
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -282,6 +323,7 @@ function toggleLocalFile(entry: LocalImportEntry) {
 
 async function submitLocalImport() {
   if (!selectedLocalFiles.value.length || !app.selectedMemberId.value) return;
+  if (!assertRemoteProcessingAccepted("local")) return;
   localImporting.value = true;
   localError.value = "";
   error.value = "";
@@ -291,15 +333,18 @@ async function submitLocalImport() {
       method: "POST",
       body: JSON.stringify({
         memberId: app.selectedMemberId.value,
-        files: selectedLocalFiles.value.map(({ rootId, path }) => ({ rootId, path }))
+        files: selectedLocalFiles.value.map(({ rootId, path }) => ({ rootId, path })),
+        ocrMode: recognitionMode.value.mode,
+        remoteProcessingAccepted: remoteProcessingAccepted.value
       })
     });
     clearQueue();
     selectedLocalFiles.value = [];
+    remoteProcessingAccepted.value = false;
     localBrowserOpen.value = false;
     startPolling();
   } catch (cause) {
-    localError.value = cause instanceof Error ? cause.message : "从 NAS 导入失败";
+    localError.value = handleBatchSubmissionError(cause, "从 NAS 导入失败");
   } finally {
     localImporting.value = false;
   }
@@ -378,19 +423,23 @@ async function submit() {
     error.value = "请先选择报告所属成员";
     return;
   }
+  if (!assertRemoteProcessingAccepted("browser")) return;
   uploading.value = true;
   error.value = "";
   result.value = null;
   try {
     const body = new FormData();
     body.append("memberId", app.selectedMemberId.value);
+    body.append("ocrMode", recognitionMode.value.mode);
+    body.append("remoteProcessingAccepted", String(remoteProcessingAccepted.value));
     body.append("manifest", JSON.stringify({ pages: items.value.map((item) => ({ rotation: item.rotation })) }));
     for (const item of items.value) body.append("files", item.file, item.file.name);
     result.value = await requestUpload<UploadResult>("uploads", body);
     clearQueue();
+    remoteProcessingAccepted.value = false;
     startPolling();
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "上传失败";
+    error.value = handleBatchSubmissionError(cause, "上传失败");
   } finally {
     uploading.value = false;
   }
@@ -400,12 +449,14 @@ onBeforeUnmount(() => {
   clearQueue();
   stopPolling();
 });
+onMounted(() => { void refreshRecognitionMode(); });
 /* 已完成的上传只在当前停留期间保留结果；离开后回到干净的上传工作台。失败任务继续保留以便重试。 */
 onDeactivated(() => {
   if (uploadFinishedSuccessfully.value || cancelledJobs.value) clearFinishedUpload();
 });
 /* 任务未跑完时后台（KeepAlive 失活）也保持轮询，完成后广播数据变更；回到页面时补一次刷新 */
 onActivated(() => {
+  void refreshRecognitionMode();
   if (!result.value) return;
   if (uploadFinishedSuccessfully.value || cancelledJobs.value) {
     clearFinishedUpload();
@@ -421,6 +472,7 @@ onActivated(() => {
       <div><h2>上传健康报告</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案，多张图片会合并为同一份报告</p></div>
       <span v-if="items.length" class="count-label">{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}</span>
     </div>
+    <p class="preview-hint">当前新批次使用：{{ recognitionMode.label }}。管理员修改设置后，已入队任务不会切换方式。</p>
 
     <div
       class="drop-zone"
@@ -445,6 +497,19 @@ onActivated(() => {
         <button v-if="app.session.value?.isAdmin" class="nas-import-button" type="button" @click="openLocalBrowser">
           <HardDrive :size="18" /><span>从 NAS 导入</span>
         </button>
+      </div>
+    </div>
+
+    <div v-if="recognitionMode.externalProcessing" class="runtime-warning">
+      <CircleAlert :size="18" />
+      <div>
+        <strong>本批次将使用 {{ recognitionMode.label }}</strong>
+        <span>处理后的完整页面副本将发送至 MinerU，页面可能包含健康信息；原始文件名和本地路径不会发送。PDF 拆页、旋转和缩略图仍在本地完成。</span>
+        <small v-if="recognitionMode.limits.maxFileMegabytes">官方单源文件限额 {{ recognitionMode.limits.maxFileMegabytes }} MB / {{ recognitionMode.limits.maxPages }} 页，超限源文件会改用本地 OCR。</small>
+        <label class="checkbox-row">
+          <input v-model="remoteProcessingAccepted" type="checkbox" />
+          <span>我确认本批次的完整页面副本可以发送至 MinerU 处理</span>
+        </label>
       </div>
     </div>
 
@@ -504,7 +569,7 @@ onActivated(() => {
       </article>
       <div class="upload-submit">
         <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}，提交后离开页面仍会继续处理</span>
-        <button class="primary-button" type="button" :disabled="uploading" @click="submit">
+        <button class="primary-button" type="button" :disabled="uploading || remoteSubmissionBlocked" @click="submit">
           <LoaderCircle v-if="uploading" class="spin-icon" :size="18" />
           <UploadCloud v-else :size="18" />
           {{ uploading ? "正在保存" : "保存并开始识别" }}
@@ -565,9 +630,20 @@ onActivated(() => {
           </div>
 
           <p v-if="(localError || localAvailability?.message) && localRoots.length" class="local-file-error">{{ localError || localAvailability?.message }}</p>
+          <div v-if="recognitionMode.externalProcessing" class="runtime-warning compact">
+            <CircleAlert :size="18" />
+            <div>
+              <strong>{{ recognitionMode.label }} 外部处理确认</strong>
+              <span>导入后，处理出的完整页面副本将发送至 MinerU，页面可能包含健康信息。</span>
+              <label class="checkbox-row">
+                <input v-model="remoteProcessingAccepted" type="checkbox" />
+                <span>我确认本批次可以发送至 MinerU</span>
+              </label>
+            </div>
+          </div>
           <footer class="local-file-footer">
             <span>已选 {{ selectedLocalFiles.length }} 个文件<template v-if="selectedLocalFiles.length"> · {{ formatBytes(localSelectionBytes) }}</template></span>
-            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting" @click="submitLocalImport">
+            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting || remoteSubmissionBlocked" @click="submitLocalImport">
               <LoaderCircle v-if="localImporting" class="spin-icon" :size="18" />
               <HardDrive v-else :size="18" />
               {{ localImporting ? "正在导入" : "导入并开始识别" }}

@@ -75,6 +75,10 @@ import {
 } from "./job-runner.service";
 import { enqueueFileGarbage } from "./file-gc.service";
 import {
+  validateOcrBatchSelection,
+  type OcrBatchSelectionInput,
+} from "./ocr-recognition-settings.service";
+import {
   captureRestoringAdministratorCredential,
   rebindRestoredAdministrator,
 } from "./restore-identity.service";
@@ -180,7 +184,7 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
 function storagePath(relativePath: string) {
   const root = resolve(getAppConfig().storageDir);
   const target = resolve(root, relativePath);
-  if (target !== root && !target.startsWith(`${root}/`)) {
+  if (target !== root && !target.startsWith(`${root}${sep}`)) {
     throw createError({ statusCode: 400, statusMessage: "文件路径无效" });
   }
   return target;
@@ -2623,7 +2627,8 @@ export async function getReportPageOcrDetail(
     typeof row.coordHeight === "number" && row.coordHeight > 0
       ? row.coordHeight
       : null;
-  if ((!coordWidth || !coordHeight) && rawLines.length) {
+  const isMineruResult = row.engine?.startsWith("mineru-") === true;
+  if (!isMineruResult && (!coordWidth || !coordHeight) && rawLines.length) {
     const healed = await healLegacyOcrCoordSpace(
       reportId,
       row,
@@ -4236,6 +4241,7 @@ function queuePageRefreshJobs(
   batchId: string,
   previousReportStatus: string,
   source: "manual_page_edit" | "manual_page_delete",
+  ocrSelection: ReturnType<typeof validateOcrBatchSelection>,
 ) {
   for (const jobType of ["thumbnail", "ocr"]) {
     const jobId = createId("job");
@@ -4266,6 +4272,7 @@ function queuePageRefreshJobs(
         source,
         batchId,
         previousReportStatus,
+        ...ocrSelection,
       }),
     );
   }
@@ -4284,6 +4291,7 @@ export function updateReportPages(
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  const ocrSelection = validateOcrBatchSelection(input);
   const pages = Array.isArray(input.pages)
     ? (input.pages as Array<Record<string, unknown>>)
     : [];
@@ -4332,6 +4340,7 @@ export function updateReportPages(
         batchId,
         report.status,
         "manual_page_edit",
+        ocrSelection,
       );
     }
     remapReportEvidencePageNumbers(db, reportId, pageNumberMapping);
@@ -4364,6 +4373,7 @@ export function deleteReportPage(
   user: RequestUser,
   reportId: string,
   pageId: string,
+  selectionInput: OcrBatchSelectionInput = {},
 ) {
   const report = getDatabase()
     .prepare(
@@ -4373,6 +4383,7 @@ export function deleteReportPage(
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  const ocrSelection = validateOcrBatchSelection(selectionInput);
   const pages = reportPageRows(reportId);
   if (pages.length <= 1)
     throw createError({
@@ -4411,6 +4422,7 @@ export function deleteReportPage(
         batchId,
         report.status,
         "manual_page_delete",
+        ocrSelection,
       );
     });
     remapReportEvidencePageNumbers(db, reportId, pageNumberMapping);
@@ -7243,7 +7255,7 @@ function createBackupArchiveFilename(appName: string, date: Date, id: string) {
 function safeStorageTarget(relativePath: string) {
   const storageRoot = resolve(getAppConfig().storageDir);
   const target = resolve(storageRoot, relativePath);
-  if (target !== storageRoot && !target.startsWith(`${storageRoot}/`)) {
+  if (target !== storageRoot && !target.startsWith(`${storageRoot}${sep}`)) {
     throw createError({ statusCode: 400, statusMessage: "备份路径无效" });
   }
   return target;

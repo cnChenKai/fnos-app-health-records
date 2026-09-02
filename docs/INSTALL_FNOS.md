@@ -33,6 +33,10 @@ appcenter-cli install-fpk fnos-app-health-records-<version>.fpk
 
 安装失败时，先查看同一页面的 OCR 安装诊断和日志，再参考[常见问题排查](./TROUBLESHOOTING.md)。报告原件会先保存，OCR 环境恢复后可以在报告详情中重试。
 
+管理员也可以在同一页面为之后的新批次选择 MinerU Agent 轻量解析或 MinerU 精准解析。升级后默认仍为本地 OCR；远程模式会把处理后的完整页面副本发送至 MinerU，并在每次上传、NAS 导入、重新识别或页面调整前要求用户确认。Agent 不需要密钥，精准解析 Token 由应用加密保存在私有数据目录，不能通过 fnOS 授权目录读取，也不会与 fnOS 网关账号绑定。
+
+无论选择哪种方式，PDF 拆页、旋转、缩略图和 MinerU 页面预处理仍由本地 Worker 完成，因此远程模式也需要安装本地 OCR 环境。fnOS 设备还需允许应用通过 HTTPS 访问固定的 `https://mineru.net` 及其官方签名存储域名。官方限额、失败策略和隐私边界见 [OCR 与 AI 使用说明](./AI_OCR_GUIDE.md)。
+
 ## 升级与卸载
 
 - 正式版本优先在飞牛应用中心点击“更新”，不要用旧 `.fpk` 覆盖安装。

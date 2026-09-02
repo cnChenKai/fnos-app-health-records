@@ -8,7 +8,9 @@ DIST_DIR="${ROOT_DIR}/dist"
 FNPACK_BIN="${ROOT_DIR}/tools/fnpack"
 
 if [ ! -x "${FNPACK_BIN}" ]; then
-  if command -v fnpack >/dev/null 2>&1; then
+  if [ -x "${ROOT_DIR}/tools/fnpack.exe" ]; then
+    FNPACK_BIN="${ROOT_DIR}/tools/fnpack.exe"
+  elif command -v fnpack >/dev/null 2>&1; then
     FNPACK_BIN="$(command -v fnpack)"
   else
     echo "fnpack is not installed."

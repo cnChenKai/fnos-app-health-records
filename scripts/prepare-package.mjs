@@ -11,8 +11,9 @@ import {
   writeFileSync
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const rootDir = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageDir = join(rootDir, ".fnos-build", "package");
 const distDir = join(rootDir, "dist");
 const outputDir = join(rootDir, ".server-dist");

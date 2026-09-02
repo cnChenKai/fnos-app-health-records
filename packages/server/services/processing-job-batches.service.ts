@@ -1,4 +1,5 @@
 import { getDatabase } from "../database/client";
+import { normalizeOcrRecognitionMode, type OcrRecognitionMode } from "../domain/ocr-recognition";
 
 export type ProcessingJobBatchKind = "initial_upload" | "manual_reprocess" | "manual_ai";
 
@@ -16,6 +17,8 @@ export type ProcessingJobQueuedDetail = {
   batchId: string | null;
   source: string | null;
   previousReportStatus: string | null;
+  ocrMode: OcrRecognitionMode;
+  remoteProcessingAccepted: boolean;
 };
 
 export type ProcessingJobBatchAssignment = {
@@ -31,14 +34,24 @@ export function parseProcessingJobQueuedDetail(value: string | undefined): Proce
       batchId?: unknown;
       source?: unknown;
       previousReportStatus?: unknown;
+      ocrMode?: unknown;
+      remoteProcessingAccepted?: unknown;
     };
     return {
       batchId: typeof detail.batchId === "string" && detail.batchId.trim() ? detail.batchId.trim() : null,
       source: typeof detail.source === "string" ? detail.source : null,
-      previousReportStatus: typeof detail.previousReportStatus === "string" ? detail.previousReportStatus : null
+      previousReportStatus: typeof detail.previousReportStatus === "string" ? detail.previousReportStatus : null,
+      ocrMode: normalizeOcrRecognitionMode(detail.ocrMode),
+      remoteProcessingAccepted: detail.remoteProcessingAccepted === true
     };
   } catch {
-    return { batchId: null, source: null, previousReportStatus: null };
+    return {
+      batchId: null,
+      source: null,
+      previousReportStatus: null,
+      ocrMode: "local",
+      remoteProcessingAccepted: false
+    };
   }
 }
 
@@ -62,7 +75,9 @@ export function deriveProcessingJobBatches(
     const detail = queuedEventDetails.get(job.id) || {
       batchId: null,
       source: null,
-      previousReportStatus: null
+      previousReportStatus: null,
+      ocrMode: "local" as const,
+      remoteProcessingAccepted: false
     };
     if (detail.source === "manual" || job.deduplicationKey.includes(":ai_extract:manual:")) {
       assignments.set(job.id, {

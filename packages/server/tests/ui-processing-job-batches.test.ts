@@ -30,6 +30,8 @@ function job(overrides: Partial<ProcessingJob> & Pick<ProcessingJob, "id" | "bat
     ocrElapsedMs: null,
     ocrTextLength: 10,
     ocrQualityLevel: "good",
+    ocrMode: "local",
+    remoteProcessingAccepted: false,
     aiProvider: null,
     aiModel: null,
     aiElapsedMs: null,
@@ -157,7 +159,8 @@ test("report detail derives actions and loading state from the current batch onl
 });
 
 test("report detail folds history and does not expose direct retry actions there", () => {
-  const reportDetail = readFileSync(join(process.cwd(), "packages/ui/src/components/ReportDetail.vue"), "utf8");
+  const reportDetail = readFileSync(join(process.cwd(), "packages/ui/src/components/ReportDetail.vue"), "utf8")
+    .replace(/\r\n/g, "\n");
   const historyStart = reportDetail.indexOf('<details v-if="historicalBatches.length"');
   const historyEnd = reportDetail.indexOf('</details>\n      </div>\n    </article>', historyStart);
   assert.ok(historyStart > 0 && historyEnd > historyStart);

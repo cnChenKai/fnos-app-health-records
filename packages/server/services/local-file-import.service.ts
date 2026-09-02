@@ -5,6 +5,7 @@ import { createError } from "h3";
 import type { RequestUser } from "../domain/request-user";
 import { getAppConfig } from "../utils/runtime-config";
 import { createUploadFromLocalFiles } from "./upload.service";
+import type { OcrBatchSelectionInput } from "./ocr-recognition-settings.service";
 
 const supportedName = /\.(?:heic|heif|jpe?g|png|webp|pdf)$/i;
 const maxDirectoryEntries = 500;
@@ -222,7 +223,8 @@ export function listLocalImportDirectory(rootIdValue?: unknown, pathValue?: unkn
 export function importLocalFiles(
   user: RequestUser,
   memberId: string,
-  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>,
+  selectionInput: OcrBatchSelectionInput = {}
 ) {
   if (!Array.isArray(files)) throw createError({ statusCode: 400, statusMessage: "请选择要导入的文件" });
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
@@ -249,5 +251,5 @@ export function importLocalFiles(
       rotation: Number(file.rotation || 0)
     };
   });
-  return createUploadFromLocalFiles(user, memberId, resolved);
+  return createUploadFromLocalFiles(user, memberId, resolved, selectionInput);
 }

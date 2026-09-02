@@ -2,13 +2,19 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
+import {
+  ocrRecognitionModeCatalog,
+  type OcrRecognitionMode,
+} from "../domain/ocr-recognition";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
@@ -32,8 +38,20 @@ import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service"
 import {
   loadProcessingBatchForJob,
   loadReportProcessingBatchContext,
+  parseProcessingJobQueuedDetail,
+  type ProcessingJobQueuedDetail,
 } from "./processing-job-batches.service";
 import { buildProcessingJobDiagnostics } from "./processing-job-diagnostics.service";
+import {
+  getOcrRecognitionSettings,
+  validateOcrBatchSelection,
+  type OcrBatchSelectionInput,
+} from "./ocr-recognition-settings.service";
+import {
+  recognizePageWithMinerU,
+  type MinerURecognitionExecutor,
+  type MinerURemoteReference,
+} from "./mineru-client.service";
 
 type JobRow = {
   id: string;
@@ -47,6 +65,7 @@ type JobRow = {
   mimeType: string | null;
   pageNumber: number | null;
   sourcePageNumber: number | null;
+  sourcePageCount: number | null;
   rotation: number | null;
 };
 
@@ -352,7 +371,8 @@ export function claimNextJob() {
       SELECT j.id, j.report_id AS reportId, j.page_id AS pageId, j.job_type AS jobType,
         j.attempts, p.storage_path AS storagePath, p.file_size AS fileSize,
         p.thumbnail_path AS thumbnailPath, p.mime_type AS mimeType,
-        p.page_number AS pageNumber, p.source_page_number AS sourcePageNumber, p.rotation
+        p.page_number AS pageNumber, p.source_page_number AS sourcePageNumber,
+        p.source_page_count AS sourcePageCount, p.rotation
       FROM processing_jobs j LEFT JOIN report_pages p ON p.id = j.page_id WHERE j.id = ?
     `,
       )
@@ -417,6 +437,7 @@ function queueJob(
   reportId: string,
   pageId: string,
   jobType: "thumbnail" | "ocr",
+  inheritedDetail?: ProcessingJobQueuedDetail,
 ) {
   const jobId = createId("job");
   const result = getDatabase()
@@ -440,9 +461,34 @@ function queueJob(
       reportId,
       eventType: "queued",
       status: "queued",
-      detail: { jobType, pageId, source: "worker" },
+      detail: {
+        jobType,
+        pageId,
+        source: "worker",
+        ...(inheritedDetail?.batchId ? { batchId: inheritedDetail.batchId } : {}),
+        ...(inheritedDetail?.previousReportStatus
+          ? { previousReportStatus: inheritedDetail.previousReportStatus }
+          : {}),
+        ocrMode: inheritedDetail?.ocrMode || "local",
+        remoteProcessingAccepted: inheritedDetail?.remoteProcessingAccepted === true,
+      },
     });
   }
+}
+
+function readQueuedJobDetail(jobId: string): ProcessingJobQueuedDetail {
+  const event = getDatabase()
+    .prepare(
+      `
+    SELECT detail_json AS detailJson
+    FROM processing_job_events
+    WHERE job_id = ? AND event_type = 'queued'
+    ORDER BY created_at, rowid
+    LIMIT 1
+  `,
+    )
+    .get(jobId) as { detailJson: string } | undefined;
+  return parseProcessingJobQueuedDetail(event?.detailJson);
 }
 
 function reportOcrTextLength(reportId: string) {
@@ -488,26 +534,8 @@ function isLastActiveOcrJobForReport(job: JobRow) {
 
 function readQueuedJobBatchId(reportId: string, jobId?: string) {
   if (!jobId) return null;
-  const event = getDatabase()
-    .prepare(
-      `
-    SELECT detail_json AS detailJson
-    FROM processing_job_events
-    WHERE report_id = ? AND job_id = ? AND event_type = 'queued'
-    ORDER BY created_at, id
-    LIMIT 1
-  `,
-    )
-    .get(reportId, jobId) as { detailJson: string } | undefined;
-  if (!event) return null;
-  try {
-    const detail = JSON.parse(event.detailJson) as { batchId?: unknown };
-    return typeof detail.batchId === "string" && detail.batchId.trim()
-      ? detail.batchId.trim()
-      : null;
-  } catch {
-    return null;
-  }
+  const detail = readQueuedJobDetail(jobId);
+  return detail.batchId;
 }
 
 function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
@@ -516,6 +544,7 @@ function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
   const batchContext = sourceJobId
     ? loadProcessingBatchForJob(reportId, sourceJobId)
     : null;
+  const sourceQueuedDetail = sourceJobId ? batchContext?.queuedDetails.get(sourceJobId) : undefined;
   const batchJobs = batchContext?.batchJobs || [];
   const activeLocal = batchJobs.filter(
     (job) =>
@@ -595,6 +624,8 @@ function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
         ...(batchContext?.previousReportStatus
           ? { previousReportStatus: batchContext.previousReportStatus }
           : {}),
+        ocrMode: sourceQueuedDetail?.ocrMode || "local",
+        remoteProcessingAccepted: sourceQueuedDetail?.remoteProcessingAccepted === true,
       },
     });
   }
@@ -627,6 +658,7 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
     );
   }
   const db = getDatabase();
+  const inheritedDetail = readQueuedJobDetail(job.id);
   const source = db
     .prepare(
       `
@@ -696,10 +728,10 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
           sourcePage,
           pageCount,
         );
-        queueJob(job.reportId, pageId, "thumbnail");
-        queueJob(job.reportId, pageId, "ocr");
+        queueJob(job.reportId, pageId, "thumbnail", inheritedDetail);
+        queueJob(job.reportId, pageId, "ocr", inheritedDetail);
       }
-      queueJob(job.reportId, job.pageId, "ocr");
+      queueJob(job.reportId, job.pageId, "ocr", inheritedDetail);
     }
     const expandedPages = db
       .prepare(
@@ -881,6 +913,19 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       height: response.height,
       engine: response.engine,
       modelVersion: response.modelVersion,
+      requestedOcrMode:
+        typeof ocrMeta.requestedMode === "string"
+          ? ocrMeta.requestedMode
+          : undefined,
+      actualOcrEngine: response.engine,
+      limitFallbackReason:
+        typeof ocrMeta.limitFallbackReason === "string"
+          ? ocrMeta.limitFallbackReason
+          : undefined,
+      coordinateAvailable:
+        typeof ocrMeta.coordinateAvailable === "boolean"
+          ? ocrMeta.coordinateAvailable
+          : undefined,
       ocrSource:
         typeof ocrMeta.source === "string" ? ocrMeta.source : undefined,
       renderScale:
@@ -1183,9 +1228,286 @@ function failJob(job: JobRow, error: unknown) {
   });
 }
 
+function mineruTemporaryDirectory() {
+  return safeStoragePath(join("tmp", "mineru"));
+}
+
+export function cleanupStaleMineruTemporaryFiles(maxAgeMs = 24 * 60 * 60_000) {
+  const directory = mineruTemporaryDirectory();
+  if (!existsSync(directory)) return 0;
+  const cutoff = Date.now() - Math.max(0, maxAgeMs);
+  let removed = 0;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[A-Za-z0-9_-]+\.jpg$/.test(entry.name)) continue;
+    const path = join(directory, entry.name);
+    try {
+      if (statSync(path).mtimeMs > cutoff) continue;
+      rmSync(path, { force: true });
+      removed += 1;
+    } catch {
+      // A concurrent job or temporary storage outage can leave cleanup for the next startup.
+    }
+  }
+  return removed;
+}
+
+function readMineruResumeReference(jobId: string, mode: OcrRecognitionMode) {
+  const expectedKind = mode === "mineru_agent" ? "task" : "batch";
+  const rows = getDatabase()
+    .prepare(
+      `
+    SELECT event_type AS eventType, detail_json AS detailJson, created_at AS createdAt
+    FROM processing_job_events
+    WHERE job_id = ?
+    ORDER BY created_at, rowid
+  `,
+    )
+    .all(jobId) as Array<{ eventType: string; detailJson: string; createdAt: string }>;
+  let reference: MinerURemoteReference | null = null;
+  let remoteStartedAtMs: number | null = null;
+  for (const row of rows) {
+    if (row.eventType === "manual_retry") {
+      // A user retry starts a fresh wait window but still reuses an uploaded task when possible.
+      remoteStartedAtMs = null;
+      continue;
+    }
+    try {
+      const detail = JSON.parse(row.detailJson) as {
+        stage?: unknown;
+        remoteKind?: unknown;
+        remoteTaskId?: unknown;
+        remoteState?: unknown;
+        remoteStartedAtMs?: unknown;
+      };
+      if (
+        detail.stage === "mineru_submitted"
+        && detail.remoteKind === expectedKind
+        && typeof detail.remoteTaskId === "string"
+        && detail.remoteTaskId.length <= 200
+        && /^[A-Za-z0-9_-]+$/.test(detail.remoteTaskId)
+      ) {
+        reference = { kind: expectedKind, id: detail.remoteTaskId };
+        const explicitStartedAt = Number(detail.remoteStartedAtMs);
+        const historicalStartedAt = Date.parse(`${row.createdAt.replace(" ", "T")}Z`);
+        remoteStartedAtMs = Number.isFinite(explicitStartedAt) && explicitStartedAt > 0
+          ? explicitStartedAt
+          : Number.isFinite(historicalStartedAt)
+            ? historicalStartedAt
+            : null;
+      }
+      if (
+        reference
+        && detail.stage === "mineru_status"
+        && detail.remoteTaskId === reference.id
+        && detail.remoteState === "failed"
+      ) {
+        reference = null;
+        remoteStartedAtMs = null;
+      }
+    } catch {
+      // Ignore malformed historical events; they must never trigger external processing.
+    }
+  }
+  return { reference, remoteStartedAtMs };
+}
+
+function appendMineruSubmittedEvent(
+  job: JobRow,
+  mode: Exclude<OcrRecognitionMode, "local">,
+  reference: MinerURemoteReference,
+) {
+  appendJobEvent({
+    jobId: job.id,
+    reportId: job.reportId,
+    eventType: "started",
+    status: "processing",
+    attempt: job.attempts,
+    message: "MinerU 页面已上传，等待远程解析",
+    detail: {
+      jobType: "ocr",
+      stage: "mineru_submitted",
+      ocrMode: mode,
+      remoteKind: reference.kind,
+      remoteTaskId: reference.id,
+      remoteStartedAtMs: Date.now(),
+    },
+  });
+}
+
+function appendMineruStateEvent(
+  job: JobRow,
+  mode: Exclude<OcrRecognitionMode, "local">,
+  reference: MinerURemoteReference,
+  state: string,
+) {
+  appendJobEvent({
+    jobId: job.id,
+    reportId: job.reportId,
+    eventType: "started",
+    status: "processing",
+    attempt: job.attempts,
+    message: `MinerU 状态：${state}`,
+    detail: {
+      jobType: "ocr",
+      stage: "mineru_status",
+      ocrMode: mode,
+      remoteKind: reference.kind,
+      remoteTaskId: reference.id,
+      remoteState: state,
+    },
+  });
+}
+
+function sourceLimitFallback(job: JobRow, mode: Exclude<OcrRecognitionMode, "local">) {
+  const limits = ocrRecognitionModeCatalog[mode].limits;
+  const sourcePages = Math.max(1, Number(job.sourcePageCount || 1));
+  if (limits.maxFileBytes !== null && Number(job.fileSize || 0) > limits.maxFileBytes) {
+    return {
+      reason: "source_file_size",
+      sourceBytes: Number(job.fileSize || 0),
+      sourcePages,
+      officialMaxBytes: limits.maxFileBytes,
+      officialMaxPages: limits.maxPages,
+    };
+  }
+  if (limits.maxPages !== null && sourcePages > limits.maxPages) {
+    return {
+      reason: "source_page_count",
+      sourceBytes: Number(job.fileSize || 0),
+      sourcePages,
+      officialMaxBytes: limits.maxFileBytes,
+      officialMaxPages: limits.maxPages,
+    };
+  }
+  return null;
+}
+
+function appendMineruLimitFallbackEvent(
+  job: JobRow,
+  mode: Exclude<OcrRecognitionMode, "local">,
+  detail: Record<string, unknown>,
+) {
+  appendJobEvent({
+    jobId: job.id,
+    reportId: job.reportId,
+    eventType: "started",
+    status: "processing",
+    attempt: job.attempts,
+    message: "源文件超过 MinerU 官方限额，本页改用本地 OCR",
+    detail: {
+      jobType: "ocr",
+      stage: "mineru_limit_fallback",
+      requestedOcrMode: mode,
+      actualOcrMode: "local",
+      ...detail,
+    },
+  });
+}
+
+function annotateOcrResponse(
+  response: WorkerResponse,
+  requestedMode: OcrRecognitionMode,
+  limitFallbackReason?: string,
+) {
+  const current = typeof response.engineElapsed === "object" && response.engineElapsed !== null
+    ? response.engineElapsed as Record<string, unknown>
+    : {};
+  response.engineElapsed = {
+    ...current,
+    requestedMode,
+    actualMode: response.engine?.startsWith("mineru-") ? requestedMode : "local",
+    ...(limitFallbackReason ? { limitFallbackReason } : {}),
+    coordinateAvailable: response.engine?.startsWith("mineru-") ? false : true,
+  };
+  return response;
+}
+
+async function executeMineruOcr(
+  job: JobRow,
+  request: WorkerRequest,
+  mode: Exclude<OcrRecognitionMode, "local">,
+  executor: WorkerExecutor,
+  mineruExecutor: MinerURecognitionExecutor,
+) {
+  mkdirSync(mineruTemporaryDirectory(), { recursive: true });
+  const safeJobName = job.id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160);
+  const temporaryPath = safeStoragePath(join("tmp", "mineru", `${safeJobName}.jpg`));
+  try {
+    const preparation = await executor({
+      ...request,
+      action: "thumbnail",
+      outputPath: temporaryPath,
+      maxSize: 2400,
+      quality: 95,
+      renderScale: 3,
+      recycleAfterResponse: isLastActiveOcrJobForReport(job),
+    });
+    if (!preparation.ok) {
+      throw Object.assign(
+        new Error(preparation.errorMessage || "MinerU 页面预处理失败"),
+        { code: preparation.errorCode || "MINERU_PAGE_PREPARATION_FAILED" },
+      );
+    }
+    if (!isJobStillProcessable(job)) {
+      throw Object.assign(new Error("MinerU 任务已取消"), { code: "MINERU_CANCELLED" });
+    }
+    const resume = readMineruResumeReference(job.id, mode);
+    const settings = getOcrRecognitionSettings(true);
+    return await mineruExecutor({
+      mode,
+      imagePath: temporaryPath,
+      remoteFileName: `page-${safeJobName}.jpg`,
+      apiToken: mode === "mineru_precise" ? settings.apiToken : undefined,
+      resume: resume.reference,
+      remoteStartedAtMs: resume.remoteStartedAtMs,
+      shouldContinue: () => isJobStillProcessable(job),
+      onSubmitted: (reference) => appendMineruSubmittedEvent(job, mode, reference),
+      onState: (reference, state) => appendMineruStateEvent(job, mode, reference, state),
+    });
+  } finally {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {
+      // Startup orphan cleanup is the fallback when temporary storage is unavailable.
+    }
+  }
+}
+
+async function executeOcrJob(
+  job: JobRow,
+  request: WorkerRequest,
+  executor: WorkerExecutor,
+  mineruExecutor: MinerURecognitionExecutor,
+) {
+  const queuedDetail = readQueuedJobDetail(job.id);
+  const mode = queuedDetail.ocrMode;
+  if (mode === "local") return annotateOcrResponse(await executor(request), mode);
+  if (!queuedDetail.remoteProcessingAccepted) {
+    throw Object.assign(new Error("远程 OCR 任务缺少用户外发确认"), {
+      code: "MINERU_CONSENT_MISSING",
+    });
+  }
+  const preflightFallback = sourceLimitFallback(job, mode);
+  if (preflightFallback) {
+    appendMineruLimitFallbackEvent(job, mode, preflightFallback);
+    return annotateOcrResponse(await executor(request), mode, preflightFallback.reason);
+  }
+  try {
+    return annotateOcrResponse(
+      await executeMineruOcr(job, request, mode, executor, mineruExecutor),
+      mode,
+    );
+  } catch (error) {
+    if ((error as { code?: string })?.code !== "MINERU_LIMIT_EXCEEDED") throw error;
+    appendMineruLimitFallbackEvent(job, mode, { reason: "upstream_document_limit" });
+    return annotateOcrResponse(await executor(request), mode, "upstream_document_limit");
+  }
+}
+
 export async function processNextJob(
   executor: WorkerExecutor = requestWorker,
   aiExecutor: AiExecutor = requestAiExtraction,
+  mineruExecutor: MinerURecognitionExecutor = recognizePageWithMinerU,
 ) {
   const job = claimNextJob();
   if (!job) return false;
@@ -1330,7 +1652,9 @@ export async function processNextJob(
         thumbnailOutputPath = outputPath;
         request.outputPath = outputPath;
       }
-      const response = await executor(request);
+      const response = job.jobType === "ocr"
+        ? await executeOcrJob(job, request, executor, mineruExecutor)
+        : await executor(request);
       if (!isJobStillProcessable(job)) {
         cleanupPendingThumbnail();
         return true;
@@ -1384,6 +1708,7 @@ async function tick() {
 
 export function startJobRunner() {
   if (started || process.env.DISABLE_JOB_RUNNER === "true") return;
+  cleanupStaleMineruTemporaryFiles();
   started = true;
   timer = setInterval(() => {
     void tick();
@@ -1564,7 +1889,11 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
   return { id: jobId, status: "queued" };
 }
 
-export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
+export function reprocessReportOcrAndAi(
+  user: RequestUser,
+  reportId: string,
+  selectionInput: OcrBatchSelectionInput = {},
+) {
   const db = getDatabase();
   const report = db
     .prepare(
@@ -1578,6 +1907,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  const ocrSelection = validateOcrBatchSelection(selectionInput);
   const pages = db
     .prepare(
       `
@@ -1686,6 +2016,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
           source: "manual_reprocess",
           batchId,
           previousReportStatus: report.status,
+          ...ocrSelection,
         },
       });
       queuedOcrJobs.push(jobId);
@@ -1722,6 +2053,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
     batchId,
     queuedOcr: queuedOcrJobs.length,
     aiWillRun: isAiExtractionConfigured(),
+    ocrMode: ocrSelection.ocrMode,
   };
 }
 

@@ -12,10 +12,15 @@ export default defineEventHandler(async (event) => {
   const body = (await readBody(event)) as {
     memberId?: unknown;
     files?: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>;
+    ocrMode?: unknown;
+    remoteProcessingAccepted?: unknown;
   } | null;
   const memberId = String(body?.memberId || "").trim();
   if (!memberId) throw createError({ statusCode: 400, statusMessage: "请选择报告所属成员" });
-  const result = importLocalFiles(user, memberId, body?.files || []);
+  const result = importLocalFiles(user, memberId, body?.files || [], {
+    ocrMode: body?.ocrMode,
+    remoteProcessingAccepted: body?.remoteProcessingAccepted
+  });
   setResponseStatus(event, 201);
   return ok(result);
 });

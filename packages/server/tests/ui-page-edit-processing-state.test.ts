@@ -48,6 +48,8 @@ function processingJob(overrides: Partial<ProcessingJob> = {}): ProcessingJob {
     ocrElapsedMs: null,
     ocrTextLength: null,
     ocrQualityLevel: null,
+    ocrMode: "local",
+    remoteProcessingAccepted: false,
     aiProvider: null,
     aiModel: null,
     aiElapsedMs: null,

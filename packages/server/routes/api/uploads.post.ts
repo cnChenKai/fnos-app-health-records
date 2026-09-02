@@ -48,7 +48,10 @@ export default defineEventHandler(async (event) => {
     data: part.data,
     rotation: rotations[index] || 0
   }));
-  const result = createUpload(getRequestUser(event), memberId, files);
+  const result = createUpload(getRequestUser(event), memberId, files, {
+    ocrMode: textPart(parts, "ocrMode"),
+    remoteProcessingAccepted: textPart(parts, "remoteProcessingAccepted")
+  });
   setResponseStatus(event, 201);
   return ok(result);
 });

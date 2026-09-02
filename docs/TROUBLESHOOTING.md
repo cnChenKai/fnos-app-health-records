@@ -35,6 +35,12 @@ docker compose exec health-records sh -c 'ls -la /reports | head'
 
 **PDF 清晰但指标缺失**：部分 PDF 只有不完整的文字层。应用会按页补充高清 OCR；可在报告处理详细日志中确认页面是否执行文字层与 OCR 合并，之后重试 OCR+AI。
 
+**MinerU 提示认证失败**：只有精准解析使用 Token。由管理员在“我的 -> 运行与识别”重新保存有效 Token，再手动重试失败任务。不要把 Token、Authorization 头、签名上传地址或任务结果正文复制到反馈日志。
+
+**MinerU 提示请求受限、网络错误或超时**：确认设备/容器可以通过 HTTPS 访问 `mineru.net` 及 MinerU 返回的官方签名存储域名，并稍后重试。429、网络、30 分钟超时、服务异常和结果损坏不会静默切换到本地 OCR；只有源文件超过 Agent 10 MB/20 页、精准解析 200 MB/200 页，或上游明确返回相同文档限额时才会自动使用本地 OCR。处理详情会显示请求方式、实际引擎和限额降级事件。
+
+**MinerU 文字可以校对但原图没有高亮**：MinerU Markdown 没有应用可用的行坐标。文字校对、全文搜索、AI 整理和证据引用仍然可用，应用不会为原图文字叠加伪造位置。
+
 **Ollama 无法连接**：Docker 不要填写 `127.0.0.1`，应使用 `host.docker.internal` 或 Ollama 所在机器的局域网 IP。确认 Ollama 监听地址、防火墙和模型名称正确。
 
 ## 指标和趋势

@@ -2,8 +2,9 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const rootDir = resolve(dirname(new URL(import.meta.url).pathname), "..");
+const rootDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const toolsDir = join(rootDir, "tools");
 const version = process.env.FNPACK_VERSION || "1.2.3";
 const force = process.env.FNPACK_FORCE === "1";

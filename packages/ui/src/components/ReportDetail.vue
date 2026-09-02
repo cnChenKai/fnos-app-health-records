@@ -27,7 +27,8 @@ import {
   processingJobBatchLabel, type ProcessingJobBatch
 } from "../utils/processing-job-batches";
 import type {
-  AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageDetail, OcrPageText, ProcessingJob, ProcessingJobEvent,
+  AiExtractionUnitProgress, ClinicalEvidence, ClinicalFactType, OcrPageDetail, OcrPageText,
+  OcrRecognitionMode, OcrRecognitionModeSummary, ProcessingJob, ProcessingJobEvent,
   ProcessingDiagnosticReviewItem, ProcessingJobEventDetail,
   IndicatorCatalogOption, ReportDetail, ReportPage, ReportSummary
 } from "../types/api";
@@ -63,6 +64,15 @@ const jobsError = ref("");
 const jobsPollingStopped = ref(false);
 const processingExpanded = ref(false);
 const runtimeAvailable = ref(true);
+const recognitionMode = ref<OcrRecognitionModeSummary>({
+  mode: "local",
+  label: "本地 OCR",
+  description: "报告页面仅在当前设备内识别，不会发送给外部服务。",
+  externalProcessing: false,
+  requiresApiToken: false,
+  requiresRemoteProcessingAcceptance: false,
+  limits: { maxFileBytes: null, maxFileMegabytes: null, maxPages: null }
+});
 const eventSheetOpen = ref(false);
 const eventLoading = ref(false);
 const eventPolling = ref(false);
@@ -293,6 +303,17 @@ const observationEvidenceLineIds = computed(() => {
   if (!observation || !page || observation.evidence?.pageId !== page.id) return [];
   return observation.evidence.lineIds;
 });
+const ocrDetailCoordinateUnavailable = computed(() => {
+  const page = ocrDetailPage.value;
+  return Boolean(
+    page?.engine?.startsWith("mineru-")
+    && (!page.coordWidth || !page.coordHeight || !page.lines.some((line) => Array.isArray(line.box) && line.box.length >= 4))
+  );
+});
+
+function isMineruEngine(engine: string | null | undefined) {
+  return Boolean(engine?.startsWith("mineru-"));
+}
 const prioritizedSecondaryObservations = computed(() => [
   ...medicalCandidateObservations.value,
   ...qualitativeObservations.value,
@@ -388,12 +409,23 @@ function jobLabel(jobType: ProcessingJob["jobType"]) {
   return { pdf_extract: "PDF 拆页", thumbnail: "生成缩略图", ocr: "文字识别", ai_extract: "AI 整理" }[jobType];
 }
 
+function ocrModeLabel(mode: OcrRecognitionMode) {
+  return {
+    local: "本地 OCR",
+    mineru_agent: "MinerU Agent 轻量解析",
+    mineru_precise: "MinerU 精准解析"
+  }[mode];
+}
+
 function batchSummary(batch: ProcessingJobBatch) {
   const completed = batch.jobs.filter((job) => job.status === "completed").length;
   const failed = batch.jobs.filter((job) => job.status === "failed").length;
   const cancelled = batch.jobs.filter((job) => job.status === "cancelled").length;
   return [
     `${batch.jobs.length} 个任务`,
+    batch.jobs.some((job) => job.jobType === "ocr")
+      ? `请求 ${ocrModeLabel(batch.jobs.find((job) => job.jobType === "ocr")?.ocrMode || "local")}`
+      : "",
     completed ? `完成 ${completed}` : "",
     failed ? `失败 ${failed}` : "",
     cancelled ? `取消 ${cancelled}` : ""
@@ -423,7 +455,12 @@ function jobMeta(job: ProcessingJob) {
 function jobDetail(job: ProcessingJob) {
   if (job.errorMessage) return job.errorMessage;
   if (job.jobType === "ocr" && job.ocrEngine) {
-    return [job.ocrEngine, job.ocrModelVersion, formatMs(job.ocrElapsedMs)].filter(Boolean).join(" · ");
+    return [
+      `请求 ${ocrModeLabel(job.ocrMode)}`,
+      `实际 ${job.ocrEngine}`,
+      job.ocrModelVersion,
+      formatMs(job.ocrElapsedMs)
+    ].filter(Boolean).join(" · ");
   }
   if (
     job.jobType === "ai_extract"
@@ -467,6 +504,13 @@ function eventDetail(event: ProcessingJobEvent) {
     typeof payload.retryDelaySeconds === "number" ? `${payload.retryDelaySeconds} 秒后自动重试` : "",
     typeof payload.model === "string" ? String(payload.model) : "",
     typeof payload.engine === "string" ? `OCR ${payload.engine}` : "",
+    typeof payload.requestedOcrMode === "string"
+      ? `请求 ${ocrModeLabel(payload.requestedOcrMode as OcrRecognitionMode)}`
+      : typeof payload.ocrMode === "string"
+        ? `请求 ${ocrModeLabel(payload.ocrMode as OcrRecognitionMode)}`
+        : "",
+    typeof payload.actualOcrEngine === "string" ? `实际 ${payload.actualOcrEngine}` : "",
+    payload.stage === "mineru_limit_fallback" ? "官方限额降级为本地 OCR" : "",
     typeof payload.modelVersion === "string" ? String(payload.modelVersion) : "",
     ocrSourceText,
     typeof payload.renderScale === "number" ? `${payload.renderScale}x 渲染` : "",
@@ -510,6 +554,33 @@ function aiJobStatusLabel(status: string) {
     failed: "任务失败",
     cancelled: "已取消"
   }[status] || status;
+}
+
+async function refreshRecognitionMode() {
+  try {
+    recognitionMode.value = await request<OcrRecognitionModeSummary>("ocr/recognition-mode");
+  } catch {
+    // Mutating APIs still compare the observed mode and return 409 before any external processing.
+  }
+}
+
+function ocrBatchSelection() {
+  return {
+    ocrMode: recognitionMode.value.mode,
+    remoteProcessingAccepted: recognitionMode.value.externalProcessing
+  };
+}
+
+function remoteProcessingConfirmationText() {
+  if (!recognitionMode.value.externalProcessing) return "";
+  return `\n\n本批次将使用${recognitionMode.value.label}。处理后的完整页面副本会发送至 MinerU，页面可能包含健康信息；原始文件名和本地路径不会发送。`;
+}
+
+function handleRecognitionModeConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : "";
+  if (message.includes("更新 OCR 识别方式") || message.includes("重新确认数据处理方式")) {
+    void refreshRecognitionMode();
+  }
 }
 
 function diagnosticStageLabel(stage: ProcessingJobEventDetail["diagnostics"]["stage"]) {
@@ -1048,23 +1119,40 @@ async function saveReportFields() {
   }
 }
 
-async function savePageLayout(pages: ReportPage[]) {
+async function performSavePageLayout(pages: ReportPage[]) {
   savingPages.value = true;
   detailError.value = "";
   try {
     detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages`, {
       method: "PUT",
-      body: JSON.stringify({ pages: pages.map((page) => ({ id: page.id, rotation: page.rotation })) })
+      body: JSON.stringify({
+        pages: pages.map((page) => ({ id: page.id, rotation: page.rotation })),
+        ...ocrBatchSelection()
+      })
     });
     pageRefreshAwaitingJobs.value = true;
     await refreshJobs(true);
     emit("updated");
     toast.show("页面调整已保存，正在重新生成缩略图/OCR");
   } catch (cause) {
+    handleRecognitionModeConflict(cause);
     detailError.value = cause instanceof Error ? cause.message : "页面调整失败";
   } finally {
     savingPages.value = false;
   }
+}
+
+async function savePageLayout(pages: ReportPage[]) {
+  if (!recognitionMode.value.externalProcessing) {
+    await performSavePageLayout(pages);
+    return;
+  }
+  confirmDialog.ask({
+    title: "调整页面并重新识别",
+    message: `保存页面调整后会重新生成缩略图和 OCR。${remoteProcessingConfirmationText()}`,
+    confirmText: "确认并重新识别",
+    run: () => performSavePageLayout(pages)
+  });
 }
 
 async function rotateSavedPage(page: ReportPage) {
@@ -1085,18 +1173,22 @@ async function moveSavedPage(page: ReportPage, direction: -1 | 1) {
 async function deleteSavedPage(page: ReportPage) {
   confirmDialog.ask({
     title: "删除单页",
-    message: `确认删除第 ${page.pageNumber} 页？原文件不会立即物理清理。`,
+    message: `确认删除第 ${page.pageNumber} 页？原文件不会立即物理清理。${remoteProcessingConfirmationText()}`,
     confirmText: "删除",
     danger: true,
     run: async () => {
       savingPages.value = true;
       try {
-        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" });
+        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, {
+          method: "DELETE",
+          body: JSON.stringify(ocrBatchSelection())
+        });
         pageRefreshAwaitingJobs.value = true;
         await refreshJobs(true);
         emit("updated");
         toast.show("页面已删除，正在重新生成缩略图/OCR");
       } catch (cause) {
+        handleRecognitionModeConflict(cause);
         detailError.value = cause instanceof Error ? cause.message : "页面删除失败";
       } finally {
         savingPages.value = false;
@@ -1357,7 +1449,7 @@ function requestReportReprocess(closeDiagnosticReview = false) {
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "重新识别",
-    message: `确认重新识别「${title}」？\n\n系统会基于原件重新生成 OCR、AI 整理结果和指标。在新结果完整成功前，当前已保存的报告数据和趋势会继续显示；本次失败也不会覆盖旧结果。已人工校对的字段会保留且不会被 AI 自动覆盖。`,
+    message: `确认重新识别「${title}」？\n\n系统会基于原件重新生成 OCR、AI 整理结果和指标。在新结果完整成功前，当前已保存的报告数据和趋势会继续显示；本次失败也不会覆盖旧结果。已人工校对的字段会保留且不会被 AI 自动覆盖。${remoteProcessingConfirmationText()}`,
     confirmText: "重新识别",
     run: async () => {
       reprocessingReport.value = true;
@@ -1365,7 +1457,7 @@ function requestReportReprocess(closeDiagnosticReview = false) {
       try {
         const result = await request<{ queuedOcr: number; aiWillRun: boolean }>(
           `reports/${encodeURIComponent(props.reportId)}/reprocess`,
-          { method: "POST" }
+          { method: "POST", body: JSON.stringify(ocrBatchSelection()) }
         );
         await refreshJobs();
         await loadDetail(props.reportId, true);
@@ -1375,6 +1467,7 @@ function requestReportReprocess(closeDiagnosticReview = false) {
           ? `已重新排队 OCR ${result.queuedOcr} 页，完成后会自动 AI 整理`
           : `已重新排队 OCR ${result.queuedOcr} 页，AI 未配置时需稍后手动整理`);
       } catch (cause) {
+        handleRecognitionModeConflict(cause);
         failJobsAction(cause, "重新识别失败");
       } finally {
         reprocessingReport.value = false;
@@ -1608,6 +1701,7 @@ watch(() => props.reportId, (reportId) => {
   lastDetailSyncAt = Date.now();
   void loadDetail(reportId);
   void refreshJobs();
+  void refreshRecognitionMode();
 }, { immediate: true });
 
 onMounted(() => {
@@ -1626,6 +1720,7 @@ onDeactivated(() => {
   stopEventPolling();
 });
 onActivated(() => {
+  void refreshRecognitionMode();
   if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
     void refreshJobs(true);
   }
@@ -2231,7 +2326,7 @@ onActivated(() => {
                     @load="onObservationOriginalImageLoad(observationSourcePage.id)"
                   />
                   <OcrTextOverlay
-                    v-if="ocrDetailPage?.pageId === observationSourcePage.id && loadedObservationOriginalPageId === observationSourcePage.id && observationEvidenceLineIds.length"
+                    v-if="ocrDetailPage?.pageId === observationSourcePage.id && loadedObservationOriginalPageId === observationSourcePage.id && observationEvidenceLineIds.length && !ocrDetailCoordinateUnavailable"
                     :image="observationOriginalImage"
                     :lines="ocrDetailPage.lines"
                     :coord-width="ocrDetailPage.coordWidth"
@@ -2243,6 +2338,7 @@ onActivated(() => {
                 <span>第 {{ observationSourcePage.pageNumber }} 页</span>
                 <small v-if="selectedObservation && !selectedObservation.evidence" class="observation-source-hint">这条指标暂无可定位的原件证据</small>
                 <small v-else-if="ocrDetailLoading" class="observation-source-hint">正在读取证据位置...</small>
+                <small v-else-if="ocrDetailCoordinateUnavailable" class="observation-source-hint">当前 MinerU 结果无可用定位坐标，可按页查看和校对文字</small>
                 <small v-else-if="selectedObservation && !observationEvidenceLineIds.length" class="observation-source-hint">已定位页面，但暂无可高亮的 OCR 行</small>
               </div>
               <p v-else class="preview-hint">暂无可用原件。</p>
@@ -2328,9 +2424,9 @@ onActivated(() => {
         <div class="edit-workspace-body">
           <section class="edit-col edit-col-originals">
             <div class="section-title-row">
-              <div><h4>报告原件</h4><p>OCR 文字可叠加在原图上选择复制</p></div>
+              <div><h4>报告原件</h4><p>{{ ocrDetailCoordinateUnavailable ? "当前结果无可用定位坐标，可在右侧按行校对" : "OCR 文字可叠加在原图上选择复制" }}</p></div>
               <div class="edit-original-actions">
-                <button v-if="currentOriginalPage" type="button" class="soft-action-button" :disabled="ocrDetailLoading" @click="showOcrOverlay = !showOcrOverlay">
+                <button v-if="currentOriginalPage" type="button" class="soft-action-button" :disabled="ocrDetailLoading || ocrDetailCoordinateUnavailable" @click="showOcrOverlay = !showOcrOverlay">
                   <Sparkles :size="14" />
                   <template v-if="showOcrOverlay">隐藏</template>
                   <template v-else>显示</template>
@@ -2372,7 +2468,7 @@ onActivated(() => {
                         decoding="async"
                         @load="onOriginalImageLoad(currentOriginalPage.id)"
                       />
-                      <OcrTextOverlay v-if="showOcrOverlay && ocrDetailPage?.pageId === currentOriginalPage.id && loadedOriginalImagePageId === currentOriginalPage.id" :image="editOriginalImage" :lines="ocrDetailPage.lines" :coord-width="ocrDetailPage.coordWidth" :coord-height="ocrDetailPage.coordHeight" />
+                      <OcrTextOverlay v-if="showOcrOverlay && ocrDetailPage?.pageId === currentOriginalPage.id && loadedOriginalImagePageId === currentOriginalPage.id && !ocrDetailCoordinateUnavailable" :image="editOriginalImage" :lines="ocrDetailPage.lines" :coord-width="ocrDetailPage.coordWidth" :coord-height="ocrDetailPage.coordHeight" />
                     </div>
                     <span>第 {{ currentOriginalPage.pageNumber }} 页</span>
                   </div>
@@ -2524,13 +2620,14 @@ onActivated(() => {
                   {{ ocrComparePageNumber === page.pageNumber ? "收起对照" : "原件对照" }}
                 </button>
               </header>
+              <p v-if="isMineruEngine(page.engine)" class="preview-hint">当前 MinerU 结果无可用定位坐标；文字校对和证据引用仍可使用，原图上不会伪造叠加位置。</p>
               <p v-if="page.qualityLevel && page.qualityLevel !== 'good'" class="preview-hint">{{ page.qualityReason || "OCR 文本质量不足，AI 整理可能不完整，可尝试重新 OCR 或启用视觉模型兜底。" }}</p>
               <div v-if="ocrComparePageNumber === page.pageNumber" class="ocr-page-compare">
                 <div class="ocr-page-compare__original">
                   <div v-if="reviewOriginalUrl(page.pageNumber)" class="ocr-page-compare__image">
                     <img :ref="setOcrCompareImage" :src="reviewOriginalUrl(page.pageNumber)" :alt="`第 ${page.pageNumber} 页原件`" decoding="async" @load="onOcrCompareImageLoad(page.pageId)" />
                     <OcrTextOverlay
-                      v-if="ocrDetailPage?.pageId === page.pageId && loadedOcrCompareImagePageId === page.pageId"
+                      v-if="ocrDetailPage?.pageId === page.pageId && loadedOcrCompareImagePageId === page.pageId && !ocrDetailCoordinateUnavailable"
                       :image="ocrCompareImage"
                       :lines="ocrDetailPage.lines"
                       :coord-width="ocrDetailPage.coordWidth"
@@ -2538,7 +2635,8 @@ onActivated(() => {
                       :highlight-line-ids="diagnosticSourceLineIds"
                     />
                   </div>
-                  <p v-else class="preview-hint">未找到这一页的原件预览。</p>
+                  <p v-if="ocrDetailPage?.pageId === page.pageId && ocrDetailCoordinateUnavailable" class="preview-hint">当前结果无可用定位坐标，原图仅作页面参考。</p>
+                  <p v-if="!reviewOriginalUrl(page.pageNumber)" class="preview-hint">未找到这一页的原件预览。</p>
                 </div>
                 <div class="ocr-page-compare__text">
                   <div v-if="ocrDetailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取页级 OCR</div>

@@ -140,6 +140,10 @@ services:
 
 首次安装需要访问 Python 包源，耗时和空间占用取决于设备架构与网络。若安装失败，在同一页面查看 OCR 安装诊断和日志。镜像已经包含 Python 3.11、`venv` 以及 OCR Worker 所需系统基础环境。ARM64 容器会自动安装并使用 ONNXRuntime；升级前已安装的 ARM64 OpenVINO 环境会被识别为不兼容，需要在“运行与识别”中重新安装一次。
 
+同一页面还可为之后的新批次选择本地 OCR、MinerU Agent 轻量解析或 MinerU 精准解析。远程模式不会绕过容器内 Worker：PDF 拆页、旋转、缩略图和最长边 2400px 的临时 JPEG 仍在 `/data` 对应的应用私有目录内生成并及时删除。Agent 无需密钥；精准解析 Token 在 `/data` 内加密保存，不需要也不建议写入 `.env` 或 `docker-compose.yml`。
+
+选择 MinerU 后，容器必须能够通过 HTTPS 访问固定的 `https://mineru.net` 以及 MinerU 返回的官方签名上传和结果下载域名。每个上传、NAS 导入、重新识别或页面调整批次都会提示确认完整页面副本外发；Docker 本地账号只负责应用权限，不会与 MinerU 账号或 fnOS 网关账号耦合。源文件超过官方限额时使用本地 OCR，认证、网络、429、超时和服务错误则保留为可诊断的失败并按任务策略重试。详细边界见 [OCR 与 AI 使用说明](./AI_OCR_GUIDE.md)。
+
 ## AI 与 Ollama 地址
 
 容器访问宿主机上的服务时不能使用 `127.0.0.1`。Compose 已配置 `host.docker.internal`，宿主机 Ollama 的 OpenAI-compatible 地址应使用：

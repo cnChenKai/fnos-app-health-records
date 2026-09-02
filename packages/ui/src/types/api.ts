@@ -291,6 +291,28 @@ export type ReportPage = {
   hasThumbnail: boolean | number;
 };
 
+export type OcrRecognitionMode = "local" | "mineru_agent" | "mineru_precise";
+
+export type OcrRecognitionModeSummary = {
+  mode: OcrRecognitionMode;
+  label: string;
+  description: string;
+  externalProcessing: boolean;
+  requiresApiToken: boolean;
+  requiresRemoteProcessingAcceptance: boolean;
+  limits: {
+    maxFileBytes: number | null;
+    maxFileMegabytes: number | null;
+    maxPages: number | null;
+  };
+};
+
+export type OcrRecognitionSettings = OcrRecognitionModeSummary & {
+  apiTokenConfigured: boolean;
+  apiTokenMasked: string;
+  modes: OcrRecognitionModeSummary[];
+};
+
 export type ProcessingJob = {
   id: string;
   pageId: string | null;
@@ -302,6 +324,8 @@ export type ProcessingJob = {
   batchKind: "initial_upload" | "manual_reprocess" | "manual_ai";
   batchStartedAt: string;
   batchSequence: number;
+  ocrMode: OcrRecognitionMode;
+  remoteProcessingAccepted: boolean;
   status: "queued" | "processing" | "completed" | "failed" | "cancelled";
   attempts: number;
   errorCode: string | null;

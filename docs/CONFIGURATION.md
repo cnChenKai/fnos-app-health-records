@@ -45,7 +45,11 @@ http://host.docker.internal:11434/v1
 
 ## OCR
 
-OCR 环境由应用在首次安装时创建并保存到数据目录。PDF 默认按页面处理，必要时会将 PDF 文字层与高清渲染 OCR 合并。
+OCR 环境由应用在首次安装时创建并保存到数据目录。管理员在“我的 -> 运行与识别”中选择新批次使用本地 OCR、MinerU Agent 轻量解析或 MinerU 精准解析。默认是本地 OCR；设置保存在现有 `app_settings` 中，不依赖环境变量，也不会改变数据库 schema。
+
+精准解析需要在界面输入 MinerU API Token。Token 使用 AES-256-GCM 加密，密钥文件保存在数据目录的 `secrets/ocr-recognition.key`，应用接口不返回明文；应用内完整备份会同时包含数据库和 `secrets`，恢复时应把两者作为同一个敏感备份保护。MinerU 固定访问 `https://mineru.net` 及其返回的官方签名上传/结果地址，不提供自定义 API 地址。
+
+远程模式仍依赖本地 Worker 完成 PDF 拆页、旋转、缩略图和 2400px 页面 JPEG 预处理。部署网络需要能够访问 MinerU 控制接口及其 HTTPS 签名存储地址；无需配置 MinerU 网关账号，也不要把 Token 写入 Compose、fnOS 授权目录或应用日志。PDF 使用本地模式时默认按页面处理，必要时会将 PDF 文字层与高清渲染 OCR 合并。
 
 | 参数 | 作用 |
 | --- | --- |

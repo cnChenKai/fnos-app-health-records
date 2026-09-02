@@ -10,6 +10,10 @@ import { createId } from "../utils/identifier";
 import { getAppConfig } from "../utils/runtime-config";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import {
+  validateOcrBatchSelection,
+  type OcrBatchSelectionInput
+} from "./ocr-recognition-settings.service";
+import {
   deriveProcessingJobBatches, parseProcessingJobQueuedDetail,
   type ProcessingJobBatchSource, type ProcessingJobQueuedDetail
 } from "./processing-job-batches.service";
@@ -205,9 +209,11 @@ function createValidatedUpload(
   user: RequestUser,
   memberId: string,
   validated: ValidatedUploadFile[],
-  source: "browser_upload" | "nas_import"
+  source: "browser_upload" | "nas_import",
+  selectionInput: OcrBatchSelectionInput = {}
 ) {
   assertMemberManage(user, memberId);
+  const ocrSelection = validateOcrBatchSelection(selectionInput);
   const reportTitle = "待识别报告";
   const reportId = createId("report");
   const relativeDirectory = join("reports", memberId, reportId);
@@ -270,7 +276,9 @@ function createValidatedUpload(
           jobType,
           pageId: page.id,
           pageNumber: page.pageNumber,
-          source: "upload"
+          source: "upload",
+          batchId: "initial-upload",
+          ...ocrSelection
         }));
       }
     }
@@ -291,6 +299,7 @@ function createValidatedUpload(
       title: reportTitle,
       pageCount: prepared.length,
       jobCount: prepared.length * 2,
+      ocrMode: ocrSelection.ocrMode,
       pages: prepared.map(({ id, pageNumber, originalName, mimeType, fileSize, rotation }) => ({
         id, pageNumber, originalName, mimeType, fileSize, rotation
       }))
@@ -302,12 +311,22 @@ function createValidatedUpload(
   }
 }
 
-export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[]) {
-  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload");
+export function createUpload(
+  user: RequestUser,
+  memberId: string,
+  files: UploadInputFile[],
+  selectionInput: OcrBatchSelectionInput = {}
+) {
+  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload", selectionInput);
 }
 
-export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[]) {
-  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import");
+export function createUploadFromLocalFiles(
+  user: RequestUser,
+  memberId: string,
+  files: LocalUploadInputFile[],
+  selectionInput: OcrBatchSelectionInput = {}
+) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", selectionInput);
 }
 
 
@@ -392,8 +411,13 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
   }
   return jobs.map((job) => {
     const batch = jobBatches.get(job.id)!;
+    const queuedDetail = queuedEventDetails.get(job.id);
     const { deduplicationKey: _deduplicationKey, jobSequence: _jobSequence, ...visibleJob } = job;
-    if (job.jobType !== "ai_extract") return { ...visibleJob, ...batch };
+    const recognition = {
+      ocrMode: queuedDetail?.ocrMode || "local",
+      remoteProcessingAccepted: queuedDetail?.remoteProcessingAccepted === true
+    };
+    if (job.jobType !== "ai_extract") return { ...visibleJob, ...batch, ...recognition };
     const jobUnits = byJob.get(job.id) || [];
     const jobAttempts = attemptsByJob.get(job.id) || [];
     const pageNumbers = (unit: typeof jobUnits[number]) => {
@@ -413,6 +437,7 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
     return {
       ...visibleJob,
       ...batch,
+      ...recognition,
       aiModel: jobAttempts.at(-1)?.model || job.aiModel || null,
       aiElapsedMs: jobAttempts.length
         ? jobAttempts.reduce((sum, attempt) => sum + (attempt.elapsedMs || 0), 0)

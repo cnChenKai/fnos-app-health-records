@@ -3,8 +3,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const rootDir = resolve(new URL("..", import.meta.url).pathname);
+const rootDir = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageDir = join(rootDir, ".fnos-build", "package");
 const template = JSON.parse(readFileSync(join(rootDir, "template.config.json"), "utf8"));
 const packageJson = JSON.parse(readFileSync(join(rootDir, "package.json"), "utf8"));
